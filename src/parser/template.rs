@@ -805,7 +805,7 @@ mod tests {
 
     #[test]
     fn test_parse_text() {
-        let result = parse_fragment("hello world", "hello world").unwrap();
+        let result = parse_fragment("hello world").unwrap();
         assert_eq!(result.nodes.len(), 1);
         match &result.nodes[0] {
             TemplateNode::Text(t) => assert_eq!(t.data, "hello world"),
@@ -816,7 +816,7 @@ mod tests {
     #[test]
     fn test_parse_element() {
         let source = "<div>hello</div>";
-        let result = parse_fragment(source, source).unwrap();
+        let result = parse_fragment(source).unwrap();
         assert_eq!(result.nodes.len(), 1);
         match &result.nodes[0] {
             TemplateNode::Element(el) => {
@@ -830,7 +830,7 @@ mod tests {
     #[test]
     fn test_parse_self_closing() {
         let source = "<br/>";
-        let result = parse_fragment(source, source).unwrap();
+        let result = parse_fragment(source).unwrap();
         match &result.nodes[0] {
             TemplateNode::Element(el) => {
                 assert_eq!(el.name, "br");
@@ -843,7 +843,7 @@ mod tests {
     #[test]
     fn test_parse_mustache() {
         let source = "{count}";
-        let result = parse_fragment(source, source).unwrap();
+        let result = parse_fragment(source).unwrap();
         match &result.nodes[0] {
             TemplateNode::MustacheTag(m) => assert_eq!(m.expression, "count"),
             _ => panic!("expected MustacheTag"),
@@ -853,7 +853,7 @@ mod tests {
     #[test]
     fn test_parse_if_block() {
         let source = "{#if visible}<p>hello</p>{/if}";
-        let result = parse_fragment(source, source).unwrap();
+        let result = parse_fragment(source).unwrap();
         match &result.nodes[0] {
             TemplateNode::IfBlock(block) => {
                 assert_eq!(block.test, "visible");
@@ -866,7 +866,7 @@ mod tests {
     #[test]
     fn test_parse_each_block() {
         let source = "{#each items as item, i (item.id)}<p>{item.name}</p>{/each}";
-        let result = parse_fragment(source, source).unwrap();
+        let result = parse_fragment(source).unwrap();
         match &result.nodes[0] {
             TemplateNode::EachBlock(block) => {
                 assert_eq!(block.expression, "items");
@@ -881,7 +881,7 @@ mod tests {
     #[test]
     fn test_parse_comment() {
         let source = "<!-- a comment -->";
-        let result = parse_fragment(source, source).unwrap();
+        let result = parse_fragment(source).unwrap();
         match &result.nodes[0] {
             TemplateNode::Comment(c) => assert_eq!(c.data, " a comment "),
             _ => panic!("expected Comment"),
@@ -891,7 +891,7 @@ mod tests {
     #[test]
     fn test_parse_snippet_block() {
         let source = "{#snippet greeting(name)}<p>Hello {name}</p>{/snippet}";
-        let result = parse_fragment(source, source).unwrap();
+        let result = parse_fragment(source).unwrap();
         match &result.nodes[0] {
             TemplateNode::SnippetBlock(s) => {
                 assert_eq!(s.name, "greeting");
@@ -904,7 +904,7 @@ mod tests {
     #[test]
     fn test_parse_render_tag() {
         let source = "{@render greeting('world')}";
-        let result = parse_fragment(source, source).unwrap();
+        let result = parse_fragment(source).unwrap();
         match &result.nodes[0] {
             TemplateNode::RenderTag(r) => assert_eq!(r.expression, "greeting('world')"),
             _ => panic!("expected RenderTag"),
@@ -914,7 +914,7 @@ mod tests {
     #[test]
     fn test_parse_directive() {
         let source = r#"<button on:click|preventDefault={handler}>Click</button>"#;
-        let result = parse_fragment(source, source).unwrap();
+        let result = parse_fragment(source).unwrap();
         match &result.nodes[0] {
             TemplateNode::Element(el) => {
                 assert_eq!(el.attributes.len(), 1);
