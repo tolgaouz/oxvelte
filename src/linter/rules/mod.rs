@@ -41,6 +41,19 @@ mod no_reactive_reassign;
 mod no_store_async;
 mod prefer_class_directive;
 mod no_export_load_in_svelte_module_in_kit_pages;
+mod infinite_reactive_loop;
+mod no_unnecessary_state_wrap;
+mod no_unused_props;
+mod prefer_writable_derived;
+mod require_stores_init;
+mod no_add_event_listener;
+mod block_lang;
+mod max_lines_per_block;
+mod require_optimized_style_attribute;
+mod prefer_style_directive;
+mod no_spaces_around_equal_signs_in_attribute;
+mod no_restricted_html_elements;
+mod no_extra_reactive_curlies;
 
 use super::Rule;
 

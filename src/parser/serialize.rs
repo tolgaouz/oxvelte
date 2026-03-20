@@ -1438,33 +1438,117 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
                 "end": block.span.end,
                 "expression": expression_to_estree(source, block.expression.trim(), expr_start)
             });
-            if let Some(pending) = &block.pending {
-                let (children, _) = serialize_filtered_children(&pending.nodes, source, pending.span.end);
-                obj["pending"] = json!({
-                    "type": "PendingBlock",
-                    "children": children
-                });
-            }
-            if let Some(then) = &block.then {
-                let (children, _) = serialize_filtered_children(&then.nodes, source, then.span.end);
-                obj["then"] = json!({
-                    "type": "ThenBlock",
-                    "children": children
-                });
-                if let Some(binding) = &block.then_binding {
+
+            // value (then binding) — serialize as Identifier or null
+            if let Some(binding) = &block.then_binding {
+                // Find binding position in source
+                let src_text = &source[block.span.start as usize..block.span.end as usize];
+                if let Some(then_pos) = src_text.find(":then") {
+                    let after_then = &src_text[then_pos + 5..];
+                    let trimmed = after_then.trim_start();
+                    let binding_start = block.span.start + then_pos as u32 + 5
+                        + (after_then.len() - trimmed.len()) as u32;
+                    let binding_end = binding_start + binding.len() as u32;
+                    obj["value"] = json!({
+                        "type": "Identifier",
+                        "name": binding,
+                        "start": binding_start,
+                        "end": binding_end,
+                        "loc": loc_json_with_char(source, binding_start, binding_end)
+                    });
+                } else {
                     obj["value"] = json!(binding);
                 }
+            } else {
+                obj["value"] = Value::Null;
             }
-            if let Some(catch) = &block.catch {
-                let (children, _) = serialize_filtered_children(&catch.nodes, source, catch.span.end);
-                obj["catch"] = json!({
-                    "type": "CatchBlock",
-                    "children": children
-                });
-                if let Some(binding) = &block.catch_binding {
+
+            // error (catch binding)
+            if let Some(binding) = &block.catch_binding {
+                let src_text = &source[block.span.start as usize..block.span.end as usize];
+                if let Some(catch_pos) = src_text.find(":catch") {
+                    let after_catch = &src_text[catch_pos + 6..];
+                    let trimmed = after_catch.trim_start();
+                    let binding_start = block.span.start + catch_pos as u32 + 6
+                        + (after_catch.len() - trimmed.len()) as u32;
+                    let binding_end = binding_start + binding.len() as u32;
+                    obj["error"] = json!({
+                        "type": "Identifier",
+                        "name": binding,
+                        "start": binding_start,
+                        "end": binding_end,
+                        "loc": loc_json_with_char(source, binding_start, binding_end)
+                    });
+                } else {
                     obj["error"] = json!(binding);
                 }
+            } else {
+                obj["error"] = Value::Null;
             }
+
+            // Pending block — always present
+            if let Some(pending) = &block.pending {
+                let children: Vec<Value> = pending.nodes.iter()
+                    .map(|n| serialize_node_legacy(n, source)).collect();
+                obj["pending"] = json!({
+                    "type": "PendingBlock",
+                    "start": pending.span.start,
+                    "end": pending.span.end,
+                    "children": children,
+                    "skip": false
+                });
+            } else {
+                obj["pending"] = json!({
+                    "type": "PendingBlock",
+                    "start": null,
+                    "end": null,
+                    "children": [],
+                    "skip": true
+                });
+            }
+
+            // Then block
+            if let Some(then) = &block.then {
+                let children: Vec<Value> = then.nodes.iter()
+                    .map(|n| serialize_node_legacy(n, source)).collect();
+                obj["then"] = json!({
+                    "type": "ThenBlock",
+                    "start": then.span.start,
+                    "end": then.span.end,
+                    "children": children,
+                    "skip": false
+                });
+            } else {
+                obj["then"] = json!({
+                    "type": "ThenBlock",
+                    "start": null,
+                    "end": null,
+                    "children": [],
+                    "skip": true
+                });
+            }
+
+            // Catch block
+            if let Some(catch) = &block.catch {
+                let children: Vec<Value> = catch.nodes.iter()
+                    .map(|n| serialize_node_legacy(n, source)).collect();
+                obj["catch"] = json!({
+                    "type": "CatchBlock",
+                    "start": catch.span.start,
+                    "end": catch.span.end,
+                    "children": children,
+                    "skip": false
+                });
+            } else {
+                obj["catch"] = json!({
+                    "type": "CatchBlock",
+                    "start": null,
+                    "end": null,
+                    "children": [],
+                    "skip": true
+                });
+            }
+
             obj
         }
         TemplateNode::KeyBlock(block) => {

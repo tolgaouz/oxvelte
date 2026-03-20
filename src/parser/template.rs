@@ -636,6 +636,7 @@ impl<'a> TemplateParser<'a> {
         let mut catch_binding = None;
 
         if self.looking_at("{:then") {
+            let then_tag_start = self.pos as u32;
             self.eat("{:then")?;
             self.skip_whitespace();
             let binding = self.eat_until("}").trim().to_string();
@@ -643,10 +644,14 @@ impl<'a> TemplateParser<'a> {
                 then_binding = Some(binding);
             }
             self.eat("}")?;
-            then = Some(self.parse_fragment()?);
+            let mut frag = self.parse_fragment()?;
+            // Set the fragment span to start at the {:then} tag
+            frag.span = Span::new(then_tag_start, frag.span.end);
+            then = Some(frag);
         }
 
         if self.looking_at("{:catch") {
+            let catch_tag_start = self.pos as u32;
             self.eat("{:catch")?;
             self.skip_whitespace();
             let binding = self.eat_until("}").trim().to_string();
@@ -654,7 +659,10 @@ impl<'a> TemplateParser<'a> {
                 catch_binding = Some(binding);
             }
             self.eat("}")?;
-            catch = Some(self.parse_fragment()?);
+            let mut frag = self.parse_fragment()?;
+            // Set the fragment span to start at the {:catch} tag
+            frag.span = Span::new(catch_tag_start, frag.span.end);
+            catch = Some(frag);
         }
 
         if self.looking_at("{/await}") {
