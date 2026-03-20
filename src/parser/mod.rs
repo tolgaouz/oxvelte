@@ -3,6 +3,7 @@
 //! content to `oxc::parser`.
 
 pub mod template;
+pub mod serialize;
 
 use oxc_diagnostics::OxcDiagnostic;
 use oxc::span::Span;

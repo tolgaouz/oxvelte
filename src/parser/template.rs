@@ -484,14 +484,18 @@ impl<'a> TemplateParser<'a> {
         let alternate = if self.looking_at("{:else if") {
             Some(Box::new(self.parse_else_if_block()?))
         } else if self.looking_at("{:else}") {
+            let else_start = self.pos as u32;
             self.eat("{:else}")?;
+            let content_start = self.pos as u32;
             let alt = self.parse_fragment()?;
+            let else_end = self.pos as u32;
             // Wrap in a synthetic IfBlock with empty test to represent :else
+            // Use content_start..else_end as the span (after {:else} to before {/if})
             Some(Box::new(TemplateNode::IfBlock(IfBlock {
                 test: String::new(),
                 consequent: alt,
                 alternate: None,
-                span: Span::new(self.pos as u32, self.pos as u32),
+                span: Span::new(content_start, else_end),
             })))
         } else {
             None
@@ -521,13 +525,16 @@ impl<'a> TemplateParser<'a> {
         let alternate = if self.looking_at("{:else if") {
             Some(Box::new(self.parse_else_if_block()?))
         } else if self.looking_at("{:else}") {
+            let else_start = self.pos as u32;
             self.eat("{:else}")?;
+            let content_start = self.pos as u32;
             let alt = self.parse_fragment()?;
+            let else_end = self.pos as u32;
             Some(Box::new(TemplateNode::IfBlock(IfBlock {
                 test: String::new(),
                 consequent: alt,
                 alternate: None,
-                span: Span::new(self.pos as u32, self.pos as u32),
+                span: Span::new(content_start, else_end),
             })))
         } else {
             None

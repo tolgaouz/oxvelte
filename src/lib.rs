@@ -121,3 +121,161 @@ mod tests {
         assert!(json.contains("\"type\":\"MustacheTag\""));
     }
 }
+
+#[cfg(test)]
+mod parser_fixture_tests {
+    use crate::parser;
+    use crate::parser::serialize::to_legacy_json;
+
+    /// Recursively compare two JSON values, ignoring key ordering.
+    /// Returns a list of differences found.
+    fn json_diff(expected: &serde_json::Value, actual: &serde_json::Value, path: &str) -> Vec<String> {
+        use serde_json::Value;
+        let mut diffs = Vec::new();
+
+        match (expected, actual) {
+            (Value::Object(exp_map), Value::Object(act_map)) => {
+                for (key, exp_val) in exp_map {
+                    if let Some(act_val) = act_map.get(key) {
+                        diffs.extend(json_diff(exp_val, act_val, &format!("{}.{}", path, key)));
+                    } else {
+                        diffs.push(format!("{}.{}: missing in actual", path, key));
+                    }
+                }
+                for key in act_map.keys() {
+                    if !exp_map.contains_key(key) {
+                        diffs.push(format!("{}.{}: unexpected in actual", path, key));
+                    }
+                }
+            }
+            (Value::Array(exp_arr), Value::Array(act_arr)) => {
+                if exp_arr.len() != act_arr.len() {
+                    diffs.push(format!("{}: array length {} vs {}", path, exp_arr.len(), act_arr.len()));
+                }
+                for (i, (e, a)) in exp_arr.iter().zip(act_arr.iter()).enumerate() {
+                    diffs.extend(json_diff(e, a, &format!("{}[{}]", path, i)));
+                }
+            }
+            _ => {
+                if expected != actual {
+                    diffs.push(format!("{}: expected {:?}, got {:?}", path, expected, actual));
+                }
+            }
+        }
+        diffs
+    }
+
+    fn run_legacy_fixture(name: &str) {
+        let fixture_dir = format!("fixtures/parser/legacy/{}", name);
+        let input_path = format!("{}/input.svelte", fixture_dir);
+        let output_path = format!("{}/output.json", fixture_dir);
+
+        let input = std::fs::read_to_string(&input_path)
+            .unwrap_or_else(|e| panic!("Cannot read {}: {}", input_path, e));
+        let expected_str = std::fs::read_to_string(&output_path)
+            .unwrap_or_else(|e| panic!("Cannot read {}: {}", output_path, e));
+
+        let expected: serde_json::Value = serde_json::from_str(&expected_str)
+            .unwrap_or_else(|e| panic!("Invalid JSON in {}: {}", output_path, e));
+
+        let result = parser::parse(&input);
+        let actual = to_legacy_json(&result.ast, &input);
+
+        let diffs = json_diff(&expected, &actual, "");
+        assert!(diffs.is_empty(), "Fixture '{}' has {} differences:\n{}", name, diffs.len(), diffs.join("\n"));
+    }
+
+    // Generate a test for each legacy fixture
+    macro_rules! legacy_fixture_test {
+        ($test_name:ident, $fixture:expr) => {
+            #[test]
+            fn $test_name() {
+                run_legacy_fixture($fixture);
+            }
+        };
+    }
+
+    legacy_fixture_test!(legacy_element_with_text, "element-with-text");
+    legacy_fixture_test!(legacy_self_closing_element, "self-closing-element");
+    legacy_fixture_test!(legacy_comment, "comment");
+    legacy_fixture_test!(legacy_elements, "elements");
+    legacy_fixture_test!(legacy_element_with_mustache, "element-with-mustache");
+    legacy_fixture_test!(legacy_element_with_attribute, "element-with-attribute");
+    legacy_fixture_test!(legacy_element_with_attribute_empty_string, "element-with-attribute-empty-string");
+    legacy_fixture_test!(legacy_attribute_static, "attribute-static");
+    legacy_fixture_test!(legacy_attribute_static_boolean, "attribute-static-boolean");
+    legacy_fixture_test!(legacy_attribute_dynamic, "attribute-dynamic");
+    legacy_fixture_test!(legacy_attribute_dynamic_boolean, "attribute-dynamic-boolean");
+    legacy_fixture_test!(legacy_attribute_shorthand, "attribute-shorthand");
+    legacy_fixture_test!(legacy_attribute_multiple, "attribute-multiple");
+    legacy_fixture_test!(legacy_attribute_empty, "attribute-empty");
+    legacy_fixture_test!(legacy_attribute_escaped, "attribute-escaped");
+    legacy_fixture_test!(legacy_attribute_curly_bracket, "attribute-curly-bracket");
+    legacy_fixture_test!(legacy_attribute_unquoted, "attribute-unquoted");
+    legacy_fixture_test!(legacy_attribute_containing_solidus, "attribute-containing-solidus");
+    legacy_fixture_test!(legacy_attribute_with_whitespace, "attribute-with-whitespace");
+    legacy_fixture_test!(legacy_attribute_style, "attribute-style");
+    legacy_fixture_test!(legacy_attribute_class_directive, "attribute-class-directive");
+    legacy_fixture_test!(legacy_attribute_style_directive, "attribute-style-directive");
+    legacy_fixture_test!(legacy_attribute_style_directive_modifiers, "attribute-style-directive-modifiers");
+    legacy_fixture_test!(legacy_attribute_style_directive_shorthand, "attribute-style-directive-shorthand");
+    legacy_fixture_test!(legacy_attribute_style_directive_string, "attribute-style-directive-string");
+    legacy_fixture_test!(legacy_if_block, "if-block");
+    legacy_fixture_test!(legacy_if_block_else, "if-block-else");
+    legacy_fixture_test!(legacy_if_block_elseif, "if-block-elseif");
+    legacy_fixture_test!(legacy_each_block, "each-block");
+    legacy_fixture_test!(legacy_each_block_destructured, "each-block-destructured");
+    legacy_fixture_test!(legacy_each_block_else, "each-block-else");
+    legacy_fixture_test!(legacy_each_block_indexed, "each-block-indexed");
+    legacy_fixture_test!(legacy_each_block_keyed, "each-block-keyed");
+    legacy_fixture_test!(legacy_raw_mustaches, "raw-mustaches");
+    legacy_fixture_test!(legacy_spread, "spread");
+    legacy_fixture_test!(legacy_binding, "binding");
+    legacy_fixture_test!(legacy_binding_shorthand, "binding-shorthand");
+    legacy_fixture_test!(legacy_event_handler, "event-handler");
+    legacy_fixture_test!(legacy_action, "action");
+    legacy_fixture_test!(legacy_action_with_call, "action-with-call");
+    legacy_fixture_test!(legacy_action_with_identifier, "action-with-identifier");
+    legacy_fixture_test!(legacy_action_with_literal, "action-with-literal");
+    legacy_fixture_test!(legacy_action_duplicate, "action-duplicate");
+    legacy_fixture_test!(legacy_animation, "animation");
+    legacy_fixture_test!(legacy_transition_intro, "transition-intro");
+    legacy_fixture_test!(legacy_transition_intro_no_params, "transition-intro-no-params");
+    legacy_fixture_test!(legacy_refs, "refs");
+    legacy_fixture_test!(legacy_await_catch, "await-catch");
+    legacy_fixture_test!(legacy_await_then_catch, "await-then-catch");
+    legacy_fixture_test!(legacy_script, "script");
+    legacy_fixture_test!(legacy_css, "css");
+    legacy_fixture_test!(legacy_component_dynamic, "component-dynamic");
+    legacy_fixture_test!(legacy_dynamic_element_string, "dynamic-element-string");
+    legacy_fixture_test!(legacy_dynamic_element_variable, "dynamic-element-variable");
+    legacy_fixture_test!(legacy_dynamic_import, "dynamic-import");
+    legacy_fixture_test!(legacy_convert_entities, "convert-entities");
+    legacy_fixture_test!(legacy_convert_entities_in_element, "convert-entities-in-element");
+    legacy_fixture_test!(legacy_javascript_comments, "javascript-comments");
+    legacy_fixture_test!(legacy_nbsp, "nbsp");
+    legacy_fixture_test!(legacy_self_reference, "self-reference");
+    legacy_fixture_test!(legacy_slotted_element, "slotted-element");
+    legacy_fixture_test!(legacy_space_between_mustaches, "space-between-mustaches");
+    legacy_fixture_test!(legacy_textarea_children, "textarea-children");
+    legacy_fixture_test!(legacy_textarea_end_tag, "textarea-end-tag");
+    legacy_fixture_test!(legacy_whitespace_leading_trailing, "whitespace-leading-trailing");
+    legacy_fixture_test!(legacy_whitespace_normal, "whitespace-normal");
+    legacy_fixture_test!(legacy_whitespace_after_script_tag, "whitespace-after-script-tag");
+    legacy_fixture_test!(legacy_whitespace_after_style_tag, "whitespace-after-style-tag");
+    legacy_fixture_test!(legacy_implicitly_closed_li, "implicitly-closed-li");
+    legacy_fixture_test!(legacy_implicitly_closed_li_block, "implicitly-closed-li-block");
+    legacy_fixture_test!(legacy_no_error_if_before_closing, "no-error-if-before-closing");
+    legacy_fixture_test!(legacy_unusual_identifier, "unusual-identifier");
+    legacy_fixture_test!(legacy_comment_with_ignores, "comment-with-ignores");
+    legacy_fixture_test!(legacy_script_comment_only, "script-comment-only");
+    legacy_fixture_test!(legacy_script_context_module_unquoted, "script-context-module-unquoted");
+    legacy_fixture_test!(legacy_script_attribute_with_curly_braces, "script-attribute-with-curly-braces");
+    legacy_fixture_test!(legacy_style_inside_head, "style-inside-head");
+    legacy_fixture_test!(legacy_generic_snippets, "generic-snippets");
+    legacy_fixture_test!(legacy_loose_invalid_block, "loose-invalid-block");
+    legacy_fixture_test!(legacy_loose_invalid_expression, "loose-invalid-expression");
+    legacy_fixture_test!(legacy_loose_unclosed_block, "loose-unclosed-block");
+    legacy_fixture_test!(legacy_loose_unclosed_open_tag, "loose-unclosed-open-tag");
+    legacy_fixture_test!(legacy_loose_unclosed_tag, "loose-unclosed-tag");
+}
