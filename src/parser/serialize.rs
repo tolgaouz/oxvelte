@@ -2333,6 +2333,17 @@ fn serialize_statement_legacy(stmt: &oxc::ast::ast::Statement<'_>, source: &str,
                 "attributes": []
             })
         }
+        Statement::ReturnStatement(ret) => {
+            let start = offset + ret.span.start;
+            let end = offset + ret.span.end;
+            json!({
+                "type": "ReturnStatement",
+                "start": start,
+                "end": end,
+                "loc": loc_json(source, start, end),
+                "argument": ret.argument.as_ref().map(|a| estree_expr(a, source, offset))
+            })
+        }
         _ => {
             // Fallback for unhandled statement types
             json!({

@@ -1072,12 +1072,30 @@ fn parse_each_header(header: &str) -> (String, String, Option<String>, Option<St
         return (header.to_string(), String::new(), None, None);
     };
 
-    // Check for (key) at the end
-    let (rest, key) = if let Some(paren_start) = rest.rfind('(') {
-        let key = rest[paren_start + 1..].trim_end_matches(')').trim().to_string();
-        (rest[..paren_start].trim(), Some(key))
-    } else {
-        (rest.trim(), None)
+    // Check for (key) at the end — only match top-level (not inside nested brackets)
+    let (rest, key) = {
+        // Find the last top-level ( that contains the key expression
+        let mut depth = 0i32;
+        let mut last_top_paren = None;
+        for (i, ch) in rest.char_indices() {
+            match ch {
+                '[' | '{' => depth += 1,
+                ']' | '}' => depth -= 1,
+                '(' if depth == 0 => last_top_paren = Some(i),
+                ')' if depth == 0 => { /* matching close */ }
+                _ => {}
+            }
+        }
+        if let Some(paren_start) = last_top_paren {
+            let key = rest[paren_start + 1..].trim_end_matches(')').trim().to_string();
+            if !key.is_empty() {
+                (rest[..paren_start].trim(), Some(key))
+            } else {
+                (rest.trim(), None)
+            }
+        } else {
+            (rest.trim(), None)
+        }
     };
 
     // Check for ", index" — but skip commas inside [] or {}
