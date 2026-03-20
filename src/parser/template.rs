@@ -154,27 +154,39 @@ impl<'a> TemplateParser<'a> {
     /// Parse children of raw text elements (textarea, title).
     /// HTML tags are treated as text, but mustache expressions are parsed.
     fn parse_raw_text_children(&mut self, tag_name: &str) -> Result<Vec<TemplateNode>, OxcDiagnostic> {
-        let close_tag = format!("</{}>", tag_name);
+        let close_prefix = format!("</{}", tag_name);
         let mut nodes = Vec::new();
 
         while self.pos < self.source.len() {
-            if self.looking_at(&close_tag) {
-                // Eat closing tag
-                self.eat_until(">");
-                self.eat(">")?;
-                break;
+            // Check for closing tag — </tagname followed by whitespace or >
+            if self.looking_at(&close_prefix) {
+                let after_prefix = &self.source[self.pos + close_prefix.len()..];
+                let next_ch = after_prefix.chars().next();
+                if next_ch == Some('>') || next_ch.map(|c| c.is_ascii_whitespace()).unwrap_or(true) {
+                    // Valid closing tag — eat to >
+                    self.eat_until(">");
+                    if self.looking_at(">") {
+                        self.eat(">")?;
+                    }
+                    break;
+                }
+                // Not a valid closing tag (e.g., </textaread) — treat as text
             }
 
             if self.looking_at("{") && !self.looking_at("{{") {
                 // Mustache expression
                 nodes.push(self.parse_mustache()?);
             } else {
-                // Raw text until next { or closing tag
+                // Raw text until next { or closing tag prefix
                 let text_start = self.pos as u32;
-                while self.pos < self.source.len()
-                    && !self.looking_at(&close_tag)
-                    && !self.looking_at("{")
-                {
+                while self.pos < self.source.len() && !self.looking_at("{") {
+                    if self.looking_at(&close_prefix) {
+                        let after_prefix = &self.source[self.pos + close_prefix.len()..];
+                        let next_ch = after_prefix.chars().next();
+                        if next_ch == Some('>') || next_ch.map(|c| c.is_ascii_whitespace()).unwrap_or(true) {
+                            break;
+                        }
+                    }
                     self.pos += 1;
                 }
                 let text = &self.source[text_start as usize..self.pos];
