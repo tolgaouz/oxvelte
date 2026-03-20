@@ -740,6 +740,7 @@ fn estree_binding_pat(pat: &oxc::ast::ast::BindingPattern<'_>, source: &str, off
                     "type": "Property",
                     "start": p_start,
                     "end": p_end,
+                    "loc": loc_json(source, p_start, p_end),
                     "method": false,
                     "shorthand": p.shorthand,
                     "computed": p.computed,
