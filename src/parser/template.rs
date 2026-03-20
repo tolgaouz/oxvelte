@@ -523,8 +523,11 @@ impl<'a> TemplateParser<'a> {
                 || self.looking_at("{#")
                 || self.looking_at("{:")
                 || self.looking_at("{/")
-                || self.looking_at("{@")
             {
+                break;
+            }
+            // {@ tags inside attributes: {@ attach is an attribute, others break
+            if self.looking_at("{@") && !self.looking_at("{@attach") {
                 break;
             }
 
@@ -535,6 +538,23 @@ impl<'a> TemplateParser<'a> {
                 self.read_expression()?;
                 self.eat("}")?;
                 attributes.push(Attribute::Spread {
+                    span: Span::new(start, self.pos as u32),
+                });
+                continue;
+            }
+
+            // {@attach expr} attribute
+            if self.looking_at("{@attach") {
+                let start = self.pos as u32;
+                self.eat("{@attach")?;
+                self.skip_whitespace();
+                let expr = self.read_expression()?;
+                self.eat("}")?;
+                // Store as a Spread with a special marker (we'll detect it in serialization)
+                // Using NormalAttribute with name "@attach"
+                attributes.push(Attribute::NormalAttribute {
+                    name: "@attach".to_string(),
+                    value: AttributeValue::Expression(expr),
                     span: Span::new(start, self.pos as u32),
                 });
                 continue;

@@ -1184,7 +1184,28 @@ fn serialize_node_modern(node: &TemplateNode, source: &str) -> Value {
         }
         TemplateNode::Element(el) => {
             let children: Vec<Value> = el.children.iter().map(|n| serialize_node_modern(n, source)).collect();
-            let attributes: Vec<Value> = el.attributes.iter().map(|_a| json!({})).collect();
+            let attributes: Vec<Value> = el.attributes.iter().map(|a| {
+                match a {
+                    Attribute::NormalAttribute { name, value, span } if name == "@attach" => {
+                        // AttachTag
+                        if let AttributeValue::Expression(expr) = value {
+                            let region = &source[span.start as usize..span.end as usize];
+                            let expr_start_rel = region.find(|c: char| c != '{' && c != '@' && c != 'a' && c != 't' && c != 'c' && c != 'h' && c != ' ').unwrap_or(10);
+                            let brace_pos = region.find(expr.chars().next().unwrap_or('(')).unwrap_or(9);
+                            let expr_start = span.start + brace_pos as u32;
+                            json!({
+                                "type": "AttachTag",
+                                "start": span.start,
+                                "end": span.end,
+                                "expression": expression_to_estree(source, expr.trim(), expr_start)
+                            })
+                        } else {
+                            json!({})
+                        }
+                    }
+                    _ => json!({})
+                }
+            }).collect();
             let el_type = if el.name.starts_with(|c: char| c.is_uppercase()) || el.name.contains('.') {
                 "Component"
             } else if el.name.starts_with("svelte:") {
