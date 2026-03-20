@@ -1164,8 +1164,52 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
         }
         TemplateNode::Element(el) => {
             let children: Vec<Value> = el.children.iter().map(|n| serialize_node_legacy(n, source)).collect();
-            let attributes: Vec<Value> = el.attributes.iter().map(|a| serialize_attribute_legacy(a, source)).collect();
-            // Determine element type: InlineComponent for capitalized names, special elements, etc.
+            // For svelte:component, extract the `this` attribute as `expression`
+            let mut extra_fields = serde_json::Map::new();
+            let mut filtered_attrs = el.attributes.clone();
+            if el.name == "svelte:component" || el.name == "svelte:element" {
+                if let Some(idx) = filtered_attrs.iter().position(|a| {
+                    matches!(a, Attribute::NormalAttribute { name, .. } if name == "this")
+                }) {
+                    let this_attr = filtered_attrs.remove(idx);
+                    if let Attribute::NormalAttribute { value, span, .. } = &this_attr {
+                        match value {
+                            AttributeValue::Expression(expr) => {
+                                let region = &source[span.start as usize..span.end as usize];
+                                let brace_pos = region.find('{').map(|p| p + 1).unwrap_or(0);
+                                let expr_start = span.start + brace_pos as u32;
+                                extra_fields.insert("expression".to_string(),
+                                    expression_to_estree(source, expr.trim(), expr_start));
+                            }
+                            AttributeValue::Static(s) => {
+                                let inner = s.trim();
+                                if inner.starts_with('{') && inner.ends_with('}') {
+                                    let expr_str = &inner[1..inner.len()-1];
+                                    let region = &source[span.start as usize..span.end as usize];
+                                    let brace_pos = region.find('{').map(|p| p + 1).unwrap_or(0);
+                                    let expr_start = span.start + brace_pos as u32;
+                                    extra_fields.insert("expression".to_string(),
+                                        expression_to_estree(source, expr_str.trim(), expr_start));
+                                }
+                            }
+                            AttributeValue::Concat(parts) => {
+                                // Single expression in concat: ="{expr}"
+                                if parts.len() == 1 {
+                                    if let AttributeValuePart::Expression(expr) = &parts[0] {
+                                        let region = &source[span.start as usize..span.end as usize];
+                                        let brace_pos = region.find('{').map(|p| p + 1).unwrap_or(0);
+                                        let expr_start = span.start + brace_pos as u32;
+                                        extra_fields.insert("expression".to_string(),
+                                            expression_to_estree(source, expr.trim(), expr_start));
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
             let el_type = if el.name.starts_with(|c: char| c.is_uppercase()) {
                 "InlineComponent"
             } else if el.name.starts_with("svelte:") {
@@ -1186,14 +1230,19 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
             } else {
                 "Element"
             };
-            json!({
+            let attributes: Vec<Value> = filtered_attrs.iter().map(|a| serialize_attribute_legacy(a, source)).collect();
+            let mut obj = json!({
                 "type": el_type,
                 "start": el.span.start,
                 "end": el.span.end,
                 "name": el.name,
                 "attributes": attributes,
                 "children": children
-            })
+            });
+            for (key, val) in extra_fields {
+                obj[key] = val;
+            }
+            obj
         }
         TemplateNode::MustacheTag(m) => {
             let expr_start = m.span.start + 1; // skip '{'
