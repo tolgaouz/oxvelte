@@ -54,6 +54,14 @@ impl<'a> TemplateParser<'a> {
             }
 
             if self.looking_at("</") {
+                // Check if the closing tag matches the parent
+                if let Some(parent_name) = parent {
+                    let close_name = self.peek_close_tag_name();
+                    if !close_name.is_empty() && close_name != parent_name {
+                        // Closing tag doesn't match parent — parent is auto-closed
+                        break;
+                    }
+                }
                 // Closing tag — let the caller handle it
                 break;
             } else if self.looking_at("{/") {
@@ -237,6 +245,16 @@ impl<'a> TemplateParser<'a> {
         }
 
         Ok(nodes)
+    }
+
+    /// Peek at the closing tag name (e.g., "</div>" → "div") without advancing.
+    fn peek_close_tag_name(&self) -> String {
+        let remaining = self.remaining();
+        if !remaining.starts_with("</") { return String::new(); }
+        let after = &remaining[2..];
+        let end = after.find(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_' && c != ':' && c != '.')
+            .unwrap_or(after.len());
+        after[..end].to_string()
     }
 
     /// Peek at the next tag name without advancing the parser position.
