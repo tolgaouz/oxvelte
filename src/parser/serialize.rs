@@ -1931,13 +1931,21 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
 
             // Find the name position in source: after "{#snippet "
             let tag_text = &source[block.span.start as usize..];
-            let name_start_rel = tag_text.find(&block.name).unwrap_or(10);
+
+            // Strip generic type params from name (e.g., "generic<T extends string>" → "generic")
+            let actual_name = if let Some(angle) = block.name.find('<') {
+                &block.name[..angle]
+            } else {
+                &block.name
+            };
+
+            let name_start_rel = tag_text.find(actual_name).unwrap_or(10);
             let name_start = block.span.start + name_start_rel as u32;
-            let name_end = name_start + block.name.len() as u32;
+            let name_end = name_start + actual_name.len() as u32;
 
             let expression = json!({
                 "type": "Identifier",
-                "name": block.name,
+                "name": actual_name,
                 "start": name_start,
                 "end": name_end,
                 "loc": loc_json_with_char(source, name_start, name_end)
@@ -1959,7 +1967,7 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
                 if let Some(stmt) = result.program.body.first() {
                     if let oxc::ast::ast::Statement::FunctionDeclaration(func) = stmt {
                         let params: Vec<Value> = func.params.items.iter().map(|p| {
-                            estree_binding_pattern(p, source, paren_start + 1 - 13) // adjust for "function f(" prefix
+                            estree_binding_pattern(p, source, paren_start + 1 - 11) // adjust for "function f(" prefix (11 chars)
                         }).collect();
                         json!(params)
                     } else {
@@ -1972,14 +1980,31 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
                 json!([])
             };
 
-            json!({
+            let mut obj = json!({
                 "type": "SnippetBlock",
                 "start": block.span.start,
                 "end": block.span.end,
                 "expression": expression,
                 "parameters": parameters,
                 "children": children
-            })
+            });
+
+            // Add typeParams for generic snippets
+            if block.name.contains('<') {
+                // Extract the generic part from the name
+                if let Some(angle_pos) = block.name.find('<') {
+                    let generic_part = &block.name[angle_pos..];
+                    // Strip outer < >
+                    if generic_part.starts_with('<') && generic_part.ends_with('>') {
+                        let inner = &generic_part[1..generic_part.len() - 1];
+                        obj["typeParams"] = json!(inner);
+                    } else {
+                        obj["typeParams"] = json!(generic_part);
+                    }
+                }
+            }
+
+            obj
         }
     }
 }
