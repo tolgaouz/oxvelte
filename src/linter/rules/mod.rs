@@ -30,6 +30,11 @@ mod no_unused_svelte_ignore;
 mod html_self_closing;
 mod no_unknown_style_directive_property;
 mod no_shorthand_style_property_overrides;
+mod shorthand_attribute;
+mod shorthand_directive;
+mod no_reactive_literals;
+mod no_reactive_functions;
+mod no_useless_children_snippet;
 
 use super::Rule;
 
@@ -62,6 +67,11 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(html_self_closing::HtmlSelfClosing),
         Box::new(no_unknown_style_directive_property::NoUnknownStyleDirectiveProperty),
         Box::new(no_shorthand_style_property_overrides::NoShorthandStylePropertyOverrides),
+        Box::new(shorthand_attribute::ShorthandAttribute),
+        Box::new(shorthand_directive::ShorthandDirective),
+        Box::new(no_reactive_literals::NoReactiveLiterals),
+        Box::new(no_reactive_functions::NoReactiveFunctions),
+        Box::new(no_useless_children_snippet::NoUselessChildrenSnippet),
     ]
 }
 
