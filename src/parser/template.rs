@@ -247,6 +247,16 @@ impl<'a> TemplateParser<'a> {
         Ok(nodes)
     }
 
+    /// Check if we're at `{:else` followed by whitespace then `}` (not `{:else if`).
+    fn is_else_closing(&self) -> bool {
+        if !self.looking_at("{:else") { return false; }
+        if self.looking_at("{:else if") { return false; }
+        if self.looking_at("{:else}") { return true; }
+        // Check for {: else followed by whitespace then }
+        let after = &self.source[self.pos + 6..];
+        after.trim_start().starts_with('}')
+    }
+
     /// Peek at the closing tag name (e.g., "</div>" → "div") without advancing.
     fn peek_close_tag_name(&self) -> String {
         let remaining = self.remaining();
@@ -674,9 +684,11 @@ impl<'a> TemplateParser<'a> {
 
         let alternate = if self.looking_at("{:else if") {
             Some(Box::new(self.parse_else_if_block()?))
-        } else if self.looking_at("{:else}") {
+        } else if self.looking_at("{:else}") || self.is_else_closing() {
             let else_start = self.pos as u32;
-            self.eat("{:else}")?;
+            self.eat("{:else")?;
+            self.skip_whitespace();
+            if self.looking_at("}") { self.eat("}")?; }
             let content_start = self.pos as u32;
             let alt = self.parse_fragment()?;
             let else_end = self.pos as u32;
@@ -715,9 +727,11 @@ impl<'a> TemplateParser<'a> {
 
         let alternate = if self.looking_at("{:else if") {
             Some(Box::new(self.parse_else_if_block()?))
-        } else if self.looking_at("{:else}") {
+        } else if self.looking_at("{:else}") || self.is_else_closing() {
             let else_start = self.pos as u32;
-            self.eat("{:else}")?;
+            self.eat("{:else")?;
+            self.skip_whitespace();
+            if self.looking_at("}") { self.eat("}")?; }
             let content_start = self.pos as u32;
             let alt = self.parse_fragment()?;
             let else_end = self.pos as u32;
@@ -752,8 +766,10 @@ impl<'a> TemplateParser<'a> {
 
         let body = self.parse_fragment()?;
 
-        let fallback = if self.looking_at("{:else}") {
-            self.eat("{:else}")?;
+        let fallback = if self.looking_at("{:else}") || self.is_else_closing() {
+            self.eat("{:else")?;
+            self.skip_whitespace();
+            if self.looking_at("}") { self.eat("}")?; }
             Some(self.parse_fragment()?)
         } else {
             None

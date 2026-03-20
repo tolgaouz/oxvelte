@@ -1693,7 +1693,10 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
             if let Some(alt) = &block.alternate {
                 match alt.as_ref() {
                     TemplateNode::IfBlock(alt_block) => {
-                        if alt_block.test.is_empty() {
+                        // Check source to distinguish {:else} from {:else if} with empty expression
+                        let is_plain_else = alt_block.test.is_empty()
+                            && !source[alt_block.span.start as usize..].starts_with("{:else if");
+                        if is_plain_else {
                             // {:else} block - end is at the end of the fragment (before {/if})
                             let (else_children, _) = serialize_filtered_children(
                                 &alt_block.consequent.nodes, source, alt_block.span.end
@@ -1738,8 +1741,10 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
             let ctx_start = block.span.start + as_pos as u32;
             let ctx_end = ctx_start + context_str.len() as u32;
 
-            // Parse context - could be Identifier, ArrayPattern, ObjectPattern
-            let context = if context_str.starts_with('[') || context_str.starts_with('{') {
+            // Parse context - could be Identifier, ArrayPattern, ObjectPattern, or null for empty
+            let context = if context_str.is_empty() {
+                Value::Null
+            } else if context_str.starts_with('[') || context_str.starts_with('{') {
                 // Destructured pattern — parse with oxc
                 // Wrap in a var declaration to parse as a pattern
                 let wrapper = format!("var {} = x", context_str);
