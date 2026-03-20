@@ -120,6 +120,78 @@ mod tests {
         assert!(json.contains("\"type\":\"Element\""));
         assert!(json.contains("\"type\":\"MustacheTag\""));
     }
+
+    #[test]
+    fn test_no_dupe_use_directives() {
+        let s = r#"<input use:autofocus use:autofocus>"#;
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-dupe-use-directives"));
+    }
+
+    #[test]
+    fn test_no_dupe_on_directives() {
+        let s = r#"<button on:click={a} on:click={b}>Click</button>"#;
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-dupe-on-directives"));
+    }
+
+    #[test]
+    fn test_shorthand_attribute() {
+        let s = r#"<input value={value}>"#;
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/shorthand-attribute"));
+    }
+
+    #[test]
+    fn test_shorthand_attribute_ok() {
+        let s = r#"<input {value}>"#;
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/shorthand-attribute"));
+    }
+
+    #[test]
+    fn test_html_self_closing_component() {
+        let s = r#"<Component></Component>"#;
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/html-self-closing"));
+    }
+
+    #[test]
+    fn test_html_self_closing_component_ok() {
+        let s = r#"<Component />"#;
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/html-self-closing"));
+    }
+
+    #[test]
+    fn test_no_unknown_style_directive() {
+        let s = r#"<div style:foobar="red">hi</div>"#;
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-unknown-style-directive-property"));
+    }
+
+    #[test]
+    fn test_known_style_directive_ok() {
+        let s = r#"<div style:color="red">hi</div>"#;
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-unknown-style-directive-property"));
+    }
+
+    #[test]
+    fn test_valid_each_key() {
+        let s = "{#each items as item (item)}\n    <p>{item}</p>\n{/each}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/valid-each-key"));
+    }
 }
 
 #[cfg(test)]

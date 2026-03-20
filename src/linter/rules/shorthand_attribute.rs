@@ -21,10 +21,14 @@ impl Rule for ShorthandAttribute {
                 for attr in &el.attributes {
                     if let Attribute::NormalAttribute { name, value: AttributeValue::Expression(expr), span } = attr {
                         if name == expr.trim() {
-                            ctx.diagnostic(
-                                format!("Use shorthand `{{{}}}` instead of `{}={{{}}}`.", name, name, name),
-                                *span,
-                            );
+                            // Check if source already uses shorthand form {name}
+                            let src = &ctx.source[span.start as usize..span.end as usize];
+                            if !src.starts_with('{') {
+                                ctx.diagnostic(
+                                    format!("Use shorthand `{{{}}}` instead of `{}={{{}}}`.", name, name, name),
+                                    *span,
+                                );
+                            }
                         }
                     }
                 }
