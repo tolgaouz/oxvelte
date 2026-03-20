@@ -737,6 +737,25 @@ fn strip_trailing_whitespace(nodes: &[TemplateNode]) -> Vec<&TemplateNode> {
     result
 }
 
+/// Get the span start of a node.
+fn node_span_start(node: &TemplateNode) -> u32 {
+    match node {
+        TemplateNode::Text(t) => t.span.start,
+        TemplateNode::Element(e) => e.span.start,
+        TemplateNode::Comment(c) => c.span.start,
+        TemplateNode::IfBlock(b) => b.span.start,
+        TemplateNode::EachBlock(b) => b.span.start,
+        TemplateNode::AwaitBlock(b) => b.span.start,
+        TemplateNode::KeyBlock(b) => b.span.start,
+        TemplateNode::SnippetBlock(b) => b.span.start,
+        TemplateNode::MustacheTag(m) => m.span.start,
+        TemplateNode::RawMustacheTag(r) => r.span.start,
+        TemplateNode::DebugTag(d) => d.span.start,
+        TemplateNode::ConstTag(c) => c.span.start,
+        TemplateNode::RenderTag(r) => r.span.start,
+    }
+}
+
 /// Get the span end of a node.
 fn node_span_end(node: &TemplateNode) -> u32 {
     match node {
@@ -764,10 +783,97 @@ fn serialize_filtered_children(nodes: &[TemplateNode], source: &str, default_end
     (children, end)
 }
 
+/// Decode HTML entities in text.
+fn decode_entities(s: &str) -> String {
+    s.replace("&amp;", "&")
+     .replace("&lt;", "<")
+     .replace("&gt;", ">")
+     .replace("&quot;", "\"")
+     .replace("&#39;", "'")
+     .replace("&apos;", "'")
+     .replace("&nbsp;", "\u{00A0}")
+     .replace("&#x27;", "'")
+     .replace("&#x2F;", "/")
+     .replace("&#60;", "<")
+     .replace("&#62;", ">")
+}
+
 /// Serialize a `SvelteAst` to the legacy Svelte JSON format.
 pub fn to_legacy_json(ast: &SvelteAst, source: &str) -> Value {
     let html = serialize_fragment_legacy(&ast.html, source);
-    json!({ "html": html })
+    let mut root = json!({ "html": html });
+
+    // Add css if present
+    if let Some(style) = &ast.css {
+        root["css"] = serialize_css_legacy(style, source);
+    }
+
+    // Add instance script if present
+    if let Some(script) = &ast.instance {
+        root["instance"] = serialize_script_legacy(script, source, "default");
+    }
+
+    // Add module script if present
+    if let Some(script) = &ast.module {
+        root["module"] = serialize_script_legacy(script, source, "module");
+    }
+
+    root
+}
+
+fn serialize_css_legacy(style: &Style, source: &str) -> Value {
+    // Basic CSS serialization - just the raw content and span
+    json!({
+        "type": "Style",
+        "start": style.span.start,
+        "end": style.span.end,
+        "attributes": [],
+        "children": [],
+        "content": {
+            "start": style.span.start + 7 + style.lang.as_ref().map(|l| l.len() + 7).unwrap_or(0) as u32,
+            "end": style.span.end - 8,
+            "styles": style.content
+        }
+    })
+}
+
+fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Value {
+    // Parse the script content with oxc and serialize to estree
+    use oxc::allocator::Allocator;
+    use oxc::parser::Parser;
+    use oxc::span::SourceType;
+
+    let alloc = Allocator::default();
+    let source_type = if script.lang.as_deref() == Some("ts") {
+        SourceType::ts()
+    } else {
+        SourceType::mjs()
+    };
+
+    // Find the script content start position in the original source
+    let tag_text = &source[script.span.start as usize..script.span.end as usize];
+    let content_start_rel = tag_text.find('>').map(|p| p + 1).unwrap_or(0);
+    let content_start = script.span.start + content_start_rel as u32;
+
+    let result = Parser::new(&alloc, &script.content, source_type).parse();
+
+    let body: Vec<Value> = Vec::new(); // Simplified - would need full statement serialization
+    let program_end = content_start + script.content.len() as u32;
+
+    json!({
+        "type": "Script",
+        "start": script.span.start,
+        "end": script.span.end,
+        "context": context,
+        "content": {
+            "type": "Program",
+            "start": content_start,
+            "end": program_end,
+            "loc": loc_json(source, content_start, program_end),
+            "body": body,
+            "sourceType": "module"
+        }
+    })
 }
 
 fn serialize_fragment_legacy(fragment: &Fragment, source: &str) -> Value {
@@ -775,9 +881,15 @@ fn serialize_fragment_legacy(fragment: &Fragment, source: &str) -> Value {
     let filtered = strip_trailing_whitespace(&fragment.nodes);
     let children: Vec<Value> = filtered.iter().map(|n| serialize_node_legacy(n, source)).collect();
     let end = filtered.last().map(|n| node_span_end(n)).unwrap_or(fragment.span.end);
+    // Fragment start: use the first non-whitespace-text node's start position
+    let start = filtered.iter()
+        .find(|n| !matches!(n, TemplateNode::Text(t) if t.data.chars().all(|c| c.is_ascii_whitespace())))
+        .map(|n| node_span_start(n))
+        .or_else(|| filtered.first().map(|n| node_span_start(n)))
+        .unwrap_or(fragment.span.start);
     json!({
         "type": "Fragment",
-        "start": fragment.span.start,
+        "start": start,
         "end": end,
         "children": children
     })
@@ -791,7 +903,7 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
                 "start": t.span.start,
                 "end": t.span.end,
                 "raw": t.data,
-                "data": t.data
+                "data": decode_entities(&t.data)
             })
         }
         TemplateNode::Comment(c) => {
@@ -806,8 +918,29 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
         TemplateNode::Element(el) => {
             let children: Vec<Value> = el.children.iter().map(|n| serialize_node_legacy(n, source)).collect();
             let attributes: Vec<Value> = el.attributes.iter().map(|a| serialize_attribute_legacy(a, source)).collect();
+            // Determine element type: InlineComponent for capitalized names, special elements, etc.
+            let el_type = if el.name.starts_with(|c: char| c.is_uppercase()) {
+                "InlineComponent"
+            } else if el.name.starts_with("svelte:") {
+                match el.name.as_str() {
+                    "svelte:self" => "InlineComponent",
+                    "svelte:component" => "InlineComponent",
+                    "svelte:element" => "InlineComponent",
+                    "svelte:window" => "Window",
+                    "svelte:document" => "Document",
+                    "svelte:body" => "Body",
+                    "svelte:head" => "Head",
+                    "svelte:options" => "Options",
+                    "svelte:fragment" => "SlotTemplate",
+                    _ => "Element",
+                }
+            } else if el.name == "slot" {
+                "Slot"
+            } else {
+                "Element"
+            };
             json!({
-                "type": "Element",
+                "type": el_type,
                 "start": el.span.start,
                 "end": el.span.end,
                 "name": el.name,
@@ -1210,10 +1343,33 @@ fn serialize_attribute_legacy(attr: &Attribute, source: &str) -> Value {
                 "modifiers": modifiers
             });
 
-            if let Some(expr) = expression {
-                obj["expression"] = expr;
+            // Style directives use "value" instead of "expression"
+            if matches!(kind, DirectiveKind::StyleDirective) {
+                if let Some(expr) = expression {
+                    // Wrap in a MustacheTag-like array for style directives
+                    let brace_pos = attr_text.find('{');
+                    let close_brace = attr_text.rfind('}');
+                    if let (Some(bp), Some(cbp)) = (brace_pos, close_brace) {
+                        let mustache_start = span.start + bp as u32;
+                        let mustache_end = span.start + cbp as u32 + 1;
+                        obj["value"] = json!([{
+                            "type": "MustacheTag",
+                            "start": mustache_start,
+                            "end": mustache_end,
+                            "expression": expr
+                        }]);
+                    } else {
+                        obj["value"] = json!([expr]);
+                    }
+                } else {
+                    obj["value"] = json!(true);
+                }
             } else {
-                obj["expression"] = Value::Null;
+                if let Some(expr) = expression {
+                    obj["expression"] = expr;
+                } else {
+                    obj["expression"] = Value::Null;
+                }
             }
 
             // Add intro/outro for transitions
