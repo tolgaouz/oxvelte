@@ -1584,12 +1584,13 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
         TemplateNode::IfBlock(block) => {
             let (children, _) = serialize_filtered_children(&block.consequent.nodes, source, block.span.end);
             // For the condition expression, find it in source after "{#if "
-            let expr_start = if block.test.is_empty() {
-                block.span.start
+            let src_at_block = &source[block.span.start as usize..];
+            let is_real_if = src_at_block.starts_with("{#if");
+            let expr_start = if is_real_if {
+                block.span.start + 5
             } else {
-                // Find the expression in source
-                let prefix_len = if source[block.span.start as usize..].starts_with("{#if") { 5 } else { 10 };
-                block.span.start + prefix_len
+                // {:else} synthetic block — no expression
+                block.span.start
             };
             let mut obj = json!({
                 "type": "IfBlock",
