@@ -4,6 +4,7 @@
 
 pub mod template;
 pub mod serialize;
+pub mod css;
 
 use oxc_diagnostics::OxcDiagnostic;
 use oxc::span::Span;

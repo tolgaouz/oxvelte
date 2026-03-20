@@ -946,12 +946,15 @@ fn serialize_css_legacy(style: &Style, source: &str) -> Value {
     let content_start = style.span.start + content_start_rel as u32;
     let content_end = style.span.start + content_end_rel as u32;
 
+    // Parse CSS children
+    let children = crate::parser::css::parse_css_children(&style.content, content_start);
+
     json!({
         "type": "Style",
         "start": style.span.start,
         "end": style.span.end,
         "attributes": [],
-        "children": [],
+        "children": children,
         "content": {
             "start": content_start,
             "end": content_end,
