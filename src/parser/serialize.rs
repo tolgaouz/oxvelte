@@ -1018,10 +1018,43 @@ pub fn to_modern_json(ast: &SvelteAst, source: &str) -> Value {
         Value::Null
     };
 
-    // Add instance in modern format (with attributes field)
+    // Add instance in modern format (with attributes from script tag)
     let instance_val = if let Some(script) = &ast.instance {
         let mut s = serialize_script_legacy(script, source, "default");
-        s["attributes"] = json!([]);
+        // Parse script tag attributes
+        let tag_text = &source[script.span.start as usize..script.span.end as usize];
+        let gt_pos = tag_text.find('>').unwrap_or(tag_text.len());
+        let attrs_text = &tag_text[7..gt_pos]; // after "<script"
+        let mut attrs = Vec::new();
+        // Simple: check for lang attribute
+        if let Some(lang) = &script.lang {
+            if let Some(lang_pos) = attrs_text.find("lang") {
+                let attr_start = script.span.start + 7 + lang_pos as u32;
+                let attr_end = attrs_text.find('>').map(|p| script.span.start + 7 + p as u32)
+                    .unwrap_or(script.span.start + gt_pos as u32);
+                // Find the value position
+                let eq_pos = attrs_text[lang_pos..].find('=').unwrap_or(4);
+                let val_region = &attrs_text[lang_pos + eq_pos + 1..];
+                let quote = val_region.chars().next().unwrap_or('"');
+                let val_start = attr_start + eq_pos as u32 + 2;
+                let val_end = val_start + lang.len() as u32;
+                let attr_full_end = val_end + 1; // include closing quote
+                attrs.push(json!({
+                    "start": attr_start,
+                    "end": attr_full_end,
+                    "type": "Attribute",
+                    "name": "lang",
+                    "value": [{
+                        "start": val_start,
+                        "end": val_end,
+                        "type": "Text",
+                        "data": lang,
+                        "raw": lang
+                    }]
+                }));
+            }
+        }
+        s["attributes"] = json!(attrs);
         s
     } else {
         Value::Null
