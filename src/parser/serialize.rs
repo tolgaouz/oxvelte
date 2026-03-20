@@ -933,8 +933,20 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
 
     let result = Parser::new(&alloc, &script.content, source_type).parse();
 
-    let body: Vec<Value> = Vec::new(); // Simplified - would need full statement serialization
     let program_end = content_start + script.content.len() as u32;
+
+    // Compute loc: start is {line:1, column:0} (script-relative convention)
+    // End uses full source coordinates for the closing </script> position
+    let (end_line, end_col) = offset_to_loc(source, script.span.end as usize);
+    let content_loc = json!({
+        "start": { "line": 1, "column": 0 },
+        "end": { "line": end_line, "column": end_col }
+    });
+
+    // Serialize the program body statements
+    let body: Vec<Value> = result.program.body.iter().map(|stmt| {
+        serialize_statement_legacy(stmt, source, content_start)
+    }).collect();
 
     json!({
         "type": "Script",
@@ -945,11 +957,160 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
             "type": "Program",
             "start": content_start,
             "end": program_end,
-            "loc": loc_json(source, content_start, program_end),
+            "loc": content_loc,
             "body": body,
             "sourceType": "module"
         }
     })
+}
+
+fn offset_to_loc_json(text: &str, offset: usize) -> Value {
+    let (line, col) = offset_to_loc(text, offset);
+    json!({ "line": line, "column": col })
+}
+
+/// Serialize a JS statement to legacy estree JSON.
+fn serialize_statement_legacy(stmt: &oxc::ast::ast::Statement<'_>, source: &str, offset: u32) -> Value {
+    use oxc::ast::ast::Statement;
+    match stmt {
+        Statement::VariableDeclaration(decl) => {
+            let start = offset + decl.span.start;
+            let end = offset + decl.span.end;
+            let declarations: Vec<Value> = decl.declarations.iter().map(|d| {
+                let d_start = offset + d.span.start;
+                let d_end = offset + d.span.end;
+                let id = estree_binding_pat(&d.id, source, offset);
+                let init = d.init.as_ref().map(|e| estree_expr(e, source, offset));
+                let mut obj = json!({
+                    "type": "VariableDeclarator",
+                    "start": d_start,
+                    "end": d_end,
+                    "loc": loc_json(source, d_start, d_end),
+                    "id": id,
+                    "init": init
+                });
+                obj
+            }).collect();
+            json!({
+                "type": "VariableDeclaration",
+                "start": start,
+                "end": end,
+                "loc": loc_json(source, start, end),
+                "declarations": declarations,
+                "kind": match decl.kind {
+                    oxc::ast::ast::VariableDeclarationKind::Var => "var",
+                    oxc::ast::ast::VariableDeclarationKind::Let => "let",
+                    oxc::ast::ast::VariableDeclarationKind::Const => "const",
+                    oxc::ast::ast::VariableDeclarationKind::Using => "using",
+                    oxc::ast::ast::VariableDeclarationKind::AwaitUsing => "await using",
+                }
+            })
+        }
+        Statement::ExpressionStatement(es) => {
+            let start = offset + es.span.start;
+            let end = offset + es.span.end;
+            json!({
+                "type": "ExpressionStatement",
+                "start": start,
+                "end": end,
+                "loc": loc_json(source, start, end),
+                "expression": estree_expr(&es.expression, source, offset)
+            })
+        }
+        Statement::ImportDeclaration(imp) => {
+            let start = offset + imp.span.start;
+            let end = offset + imp.span.end;
+            json!({
+                "type": "ImportDeclaration",
+                "start": start,
+                "end": end,
+                "loc": loc_json(source, start, end)
+            })
+        }
+        Statement::ExportNamedDeclaration(exp) => {
+            let start = offset + exp.span.start;
+            let end = offset + exp.span.end;
+            let declaration = exp.declaration.as_ref().map(|d| {
+                serialize_statement_legacy_from_decl(d, source, offset)
+            });
+            json!({
+                "type": "ExportNamedDeclaration",
+                "start": start,
+                "end": end,
+                "loc": loc_json(source, start, end),
+                "declaration": declaration,
+                "specifiers": [],
+                "source": null
+            })
+        }
+        _ => {
+            // Fallback for unhandled statement types
+            json!({
+                "type": "UnknownStatement"
+            })
+        }
+    }
+}
+
+fn serialize_statement_legacy_from_decl(decl: &oxc::ast::ast::Declaration<'_>, source: &str, offset: u32) -> Value {
+    use oxc::ast::ast::Declaration;
+    match decl {
+        Declaration::VariableDeclaration(v) => {
+            // Reuse the VariableDeclaration serialization by wrapping in a Statement
+            let start = offset + v.span.start;
+            let end = offset + v.span.end;
+            let declarations: Vec<Value> = v.declarations.iter().map(|d| {
+                let d_start = offset + d.span.start;
+                let d_end = offset + d.span.end;
+                let id = estree_binding_pat(&d.id, source, offset);
+                let init = d.init.as_ref().map(|e| estree_expr(e, source, offset));
+                json!({
+                    "type": "VariableDeclarator",
+                    "start": d_start,
+                    "end": d_end,
+                    "loc": loc_json(source, d_start, d_end),
+                    "id": id,
+                    "init": init
+                })
+            }).collect();
+            json!({
+                "type": "VariableDeclaration",
+                "start": start,
+                "end": end,
+                "loc": loc_json(source, start, end),
+                "declarations": declarations,
+                "kind": match v.kind {
+                    oxc::ast::ast::VariableDeclarationKind::Var => "var",
+                    oxc::ast::ast::VariableDeclarationKind::Let => "let",
+                    oxc::ast::ast::VariableDeclarationKind::Const => "const",
+                    oxc::ast::ast::VariableDeclarationKind::Using => "using",
+                    oxc::ast::ast::VariableDeclarationKind::AwaitUsing => "await using",
+                }
+            })
+        }
+        Declaration::FunctionDeclaration(f) => {
+            let start = offset + f.span.start;
+            let end = offset + f.span.end;
+            json!({
+                "type": "FunctionDeclaration",
+                "start": start,
+                "end": end,
+                "loc": loc_json(source, start, end),
+                "id": f.id.as_ref().map(|id| {
+                    let id_start = offset + id.span.start;
+                    let id_end = offset + id.span.end;
+                    json!({
+                        "type": "Identifier",
+                        "start": id_start,
+                        "end": id_end,
+                        "loc": loc_json(source, id_start, id_end),
+                        "name": id.name.as_str()
+                    })
+                })
+            })
+        }
+        _ => json!({ "type": "UnknownDeclaration" })
+    }
 }
 
 fn serialize_fragment_legacy(fragment: &Fragment, source: &str) -> Value {
