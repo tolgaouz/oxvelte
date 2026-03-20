@@ -329,7 +329,7 @@ impl<'a> TemplateParser<'a> {
                     }
                     depth -= 1;
                 }
-                b'\'' | b'"' | b'`' => self.skip_string_literal(bytes[self.pos])?,
+                b'\'' | b'"' | b'`' => { self.skip_string_literal(bytes[self.pos])?; continue; }
                 _ => {}
             }
             self.pos += 1;
@@ -346,6 +346,7 @@ impl<'a> TemplateParser<'a> {
             if bytes[self.pos] == b'\\' {
                 self.pos += 1; // skip escaped char
             } else if bytes[self.pos] == quote {
+                self.pos += 1; // skip closing quote
                 return Ok(());
             }
             self.pos += 1;
@@ -779,7 +780,29 @@ impl<'a> TemplateParser<'a> {
         self.skip_whitespace();
 
         // Parse: expression as context, index (key)
-        let header = self.eat_until("}");
+        // Uses balanced brace/bracket reading to handle destructured patterns
+        let header = {
+            let header_start = self.pos;
+            let mut depth = 0i32;
+            while self.pos < self.source.len() {
+                let ch = self.source.as_bytes()[self.pos];
+                match ch {
+                    b'{' | b'(' | b'[' => depth += 1,
+                    b')' | b']' => depth -= 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth < 0 { break; }
+                    }
+                    b'\'' | b'"' | b'`' => {
+                        let _ = self.skip_string_literal(ch);
+                        continue;
+                    }
+                    _ => {}
+                }
+                self.pos += 1;
+            }
+            &self.source[header_start..self.pos]
+        };
         self.eat("}")?;
 
         let (expression, context, index, key) = parse_each_header(header);
