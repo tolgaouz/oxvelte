@@ -1202,7 +1202,14 @@ fn convert_selector_to_complex(selector: &Value) -> Value {
                     current_combinator = child.clone();
                     rel_start = child.get("end").cloned().unwrap_or(json!(0));
                 } else {
-                    current_selectors.push(child.clone());
+                    // Recursively convert args in PseudoClassSelectors
+                    let mut c = child.clone();
+                    if let Some(obj) = c.as_object_mut() {
+                        if let Some(args) = obj.get_mut("args") {
+                            convert_selector_list_modern(args);
+                        }
+                    }
+                    current_selectors.push(c);
                 }
             }
             if !current_selectors.is_empty() {

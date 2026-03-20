@@ -236,7 +236,8 @@ impl<'a> CssParser<'a> {
                     let name_start = self.pos;
                     self.read_ident();
                     let name = &self.source[name_start..self.pos];
-                    // Check for args in parens
+                    let name_end_pos = self.pos;
+                    // Check for args in parens — skip them but don't include in element end
                     if self.pos < self.source.len() && self.source.as_bytes()[self.pos] == b'(' {
                         self.skip_parens();
                     }
@@ -244,23 +245,54 @@ impl<'a> CssParser<'a> {
                         "type": "PseudoElementSelector",
                         "name": name,
                         "start": self.abs(start),
-                        "end": self.abs(self.pos)
+                        "end": self.abs(name_end_pos)
                     }))
                 } else {
                     // Pseudo-class
                     let name_start = self.pos;
                     self.read_ident();
                     let name = &self.source[name_start..self.pos];
-                    // Check for args in parens
+                    // Check for args in parens — parse as SelectorList for :global/:is/:where
                     if self.pos < self.source.len() && self.source.as_bytes()[self.pos] == b'(' {
-                        self.skip_parens();
+                        let args_start = self.pos;
+                        self.pos += 1; // skip (
+                        // Parse inner content as selectors
+                        let inner_start = self.pos;
+                        let mut depth = 1;
+                        while self.pos < self.source.len() && depth > 0 {
+                            match self.source.as_bytes()[self.pos] {
+                                b'(' => depth += 1,
+                                b')' => depth -= 1,
+                                _ => {}
+                            }
+                            if depth > 0 { self.pos += 1; }
+                        }
+                        let inner = &self.source[inner_start..self.pos];
+                        let inner_offset = self.abs(inner_start);
+                        // Parse inner as selector list
+                        let args = {
+                            let mut inner_parser = CssParser::new(inner, inner_offset);
+                            inner_parser.parse_selector_list()
+                        };
+                        if self.pos < self.source.len() { self.pos += 1; } // skip )
+                        let mut obj = json!({
+                            "type": "PseudoClassSelector",
+                            "name": name,
+                            "start": self.abs(start),
+                            "end": self.abs(self.pos)
+                        });
+                        if let Some(args_val) = args {
+                            obj["args"] = args_val;
+                        }
+                        Some(obj)
+                    } else {
+                        Some(json!({
+                            "type": "PseudoClassSelector",
+                            "name": name,
+                            "start": self.abs(start),
+                            "end": self.abs(self.pos)
+                        }))
                     }
-                    Some(json!({
-                        "type": "PseudoClassSelector",
-                        "name": name,
-                        "start": self.abs(start),
-                        "end": self.abs(self.pos)
-                    }))
                 }
             }
             b'*' => {
