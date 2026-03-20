@@ -743,14 +743,26 @@ fn parse_each_header(header: &str) -> (String, String, Option<String>, Option<St
         (rest.trim(), None)
     };
 
-    // Check for ", index"
-    let (context, index) = if let Some(comma_idx) = rest.find(',') {
-        (
-            rest[..comma_idx].trim().to_string(),
-            Some(rest[comma_idx + 1..].trim().to_string()),
-        )
-    } else {
-        (rest.trim().to_string(), None)
+    // Check for ", index" — but skip commas inside [] or {}
+    let (context, index) = {
+        let mut depth = 0i32;
+        let mut comma_pos = None;
+        for (i, ch) in rest.char_indices() {
+            match ch {
+                '[' | '{' | '(' => depth += 1,
+                ']' | '}' | ')' => depth -= 1,
+                ',' if depth == 0 => { comma_pos = Some(i); break; }
+                _ => {}
+            }
+        }
+        if let Some(comma_idx) = comma_pos {
+            (
+                rest[..comma_idx].trim().to_string(),
+                Some(rest[comma_idx + 1..].trim().to_string()),
+            )
+        } else {
+            (rest.trim().to_string(), None)
+        }
     };
 
     (expression, context, index, key)

@@ -1362,13 +1362,39 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
             let ctx_start = block.span.start + as_pos as u32;
             let ctx_end = ctx_start + context_str.len() as u32;
 
-            let context = json!({
-                "type": "Identifier",
-                "name": context_str,
-                "start": ctx_start,
-                "end": ctx_end,
-                "loc": loc_json_with_char(source, ctx_start, ctx_end)
-            });
+            // Parse context - could be Identifier, ArrayPattern, ObjectPattern
+            let context = if context_str.starts_with('[') || context_str.starts_with('{') {
+                // Destructured pattern — parse with oxc
+                // Wrap in a var declaration to parse as a pattern
+                let wrapper = format!("var {} = x", context_str);
+                use oxc::allocator::Allocator;
+                use oxc::parser::Parser;
+                use oxc::span::SourceType;
+                let alloc = Allocator::default();
+                let result = Parser::new(&alloc, &wrapper, SourceType::mjs()).parse();
+                if let Some(stmt) = result.program.body.first() {
+                    if let oxc::ast::ast::Statement::VariableDeclaration(decl) = stmt {
+                        if let Some(declarator) = decl.declarations.first() {
+                            // Offset: ctx_start minus the "var " prefix (4 chars)
+                            estree_binding_pat(&declarator.id, source, ctx_start - 4)
+                        } else {
+                            json!({ "type": "Identifier", "name": context_str, "start": ctx_start, "end": ctx_end })
+                        }
+                    } else {
+                        json!({ "type": "Identifier", "name": context_str, "start": ctx_start, "end": ctx_end })
+                    }
+                } else {
+                    json!({ "type": "Identifier", "name": context_str, "start": ctx_start, "end": ctx_end })
+                }
+            } else {
+                json!({
+                    "type": "Identifier",
+                    "name": context_str,
+                    "start": ctx_start,
+                    "end": ctx_end,
+                    "loc": loc_json_with_char(source, ctx_start, ctx_end)
+                })
+            };
 
             let mut obj = json!({
                 "type": "EachBlock",
