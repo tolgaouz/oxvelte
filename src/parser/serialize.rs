@@ -1288,11 +1288,15 @@ fn serialize_fragment_legacy_root(fragment: &Fragment, source: &str, has_blocks:
     };
     let children: Vec<Value> = filtered.iter().map(|n| serialize_node_legacy(n, source)).collect();
     // Fragment end: use the last NON-whitespace child's end
-    let end = filtered.iter().rev()
+    let mut end = filtered.iter().rev()
         .find(|n| !matches!(n, TemplateNode::Text(t) if t.data.chars().all(|c| c.is_ascii_whitespace())))
         .map(|n| node_span_end(n))
         .or_else(|| filtered.last().map(|n| node_span_end(n)))
         .unwrap_or(fragment.span.end);
+    // If source ends with newline and end == source.len(), trim it
+    if end as usize == source.len() && source.ends_with('\n') {
+        end -= 1;
+    }
     let start = filtered.iter()
         .find(|n| !matches!(n, TemplateNode::Text(t) if t.data.chars().all(|c| c.is_ascii_whitespace())))
         .map(|n| node_span_start(n))
