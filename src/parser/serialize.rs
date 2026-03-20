@@ -1703,7 +1703,7 @@ fn serialize_node_modern_ctx(node: &TemplateNode, source: &str, in_shadow_root: 
                 } else { json!([]) }
             } else { json!([]) };
 
-            json!({
+            let mut snippet_json = json!({
                 "type": "SnippetBlock",
                 "start": block.span.start,
                 "end": block.span.end,
@@ -1716,7 +1716,18 @@ fn serialize_node_modern_ctx(node: &TemplateNode, source: &str, in_shadow_root: 
                 },
                 "parameters": parameters,
                 "body": body
-            })
+            });
+            // Add typeParams for generic snippets
+            if block.name.contains('<') {
+                if let Some(angle_pos) = block.name.find('<') {
+                    let generic_part = &block.name[angle_pos..];
+                    if generic_part.starts_with('<') && generic_part.ends_with('>') {
+                        let inner = &generic_part[1..generic_part.len() - 1];
+                        snippet_json["typeParams"] = json!(inner);
+                    }
+                }
+            }
+            snippet_json
         }
         TemplateNode::RenderTag(r) => {
             let expr_start = r.span.start + 9;
