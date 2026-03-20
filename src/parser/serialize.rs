@@ -72,23 +72,33 @@ fn expression_to_estree(source: &str, expr_str: &str, expr_start: u32) -> Value 
     use oxc::parser::Parser;
     use oxc::span::SourceType;
 
+    // Try JS first, then TypeScript
     let alloc = Allocator::default();
-    let source_type = SourceType::mjs();
-    let result = Parser::new(&alloc, expr_str, source_type).parse_expression();
+    let js_result = Parser::new(&alloc, expr_str, SourceType::mjs()).parse_expression();
 
-    match result {
-        Ok(expr) if !expr_str.ends_with('.') => estree_expr(&expr, source, expr_start),
-        _ => {
-            // Fallback: empty identifier for invalid expressions (Svelte compiler behavior)
-            let expr_end = expr_start + expr_str.len() as u32;
-            json!({
-                "type": "Identifier",
-                "start": expr_start,
-                "end": expr_end,
-                "name": ""
-            })
+    if let Ok(expr) = &js_result {
+        if !expr_str.ends_with('.') {
+            return estree_expr(expr, source, expr_start);
         }
     }
+
+    // Try TypeScript
+    let alloc_ts = Allocator::default();
+    let ts_result = Parser::new(&alloc_ts, expr_str, SourceType::ts()).parse_expression();
+
+    match ts_result {
+        Ok(expr) if !expr_str.ends_with('.') => { return estree_expr(&expr, source, expr_start); }
+        _ => {}
+    }
+
+    // Final fallback: empty identifier for invalid expressions
+    let expr_end = expr_start + expr_str.len() as u32;
+    json!({
+        "type": "Identifier",
+        "start": expr_start,
+        "end": expr_end,
+        "name": ""
+    })
 }
 
 /// Convert an oxc Expression AST node to estree JSON.
@@ -800,6 +810,36 @@ fn serialize_ts_type(ts_type: &oxc::ast::ast::TSType<'_>, source: &str, offset: 
         TSType::TSVoidKeyword(t) => t.span,
         TSType::TSNullKeyword(t) => t.span,
         TSType::TSUndefinedKeyword(t) => t.span,
+        TSType::TSTypeReference(t) => {
+            let start = offset + t.span.start;
+            let end = offset + t.span.end;
+            let type_name_node = match &t.type_name {
+                oxc::ast::ast::TSTypeName::IdentifierReference(id) => {
+                    let id_start = offset + id.span.start;
+                    let id_end = offset + id.span.end;
+                    json!({
+                        "type": "Identifier",
+                        "start": id_start,
+                        "end": id_end,
+                        "loc": loc_json(source, id_start, id_end),
+                        "name": id.name.as_str()
+                    })
+                }
+                oxc::ast::ast::TSTypeName::QualifiedName(q) => {
+                    json!({ "type": "TSQualifiedName", "start": offset + q.span.start, "end": offset + q.span.end })
+                }
+                _ => {
+                    json!({ "type": "Identifier", "name": "this" })
+                }
+            };
+            return json!({
+                "type": "TSTypeReference",
+                "start": start,
+                "end": end,
+                "loc": loc_json(source, start, end),
+                "typeName": type_name_node
+            });
+        }
         _ => return json!({ "type": "TSUnknownType" }),
     };
     let start = offset + span.start;
@@ -1124,11 +1164,18 @@ fn serialize_attribute_modern(attr: &Attribute, source: &str) -> Value {
                 None
             };
 
+            // Calculate name_loc for directive
+            let name_end_rel = if let Some(eq) = attr_text.find('=') { eq }
+                else if let Some(pipe) = attr_text.find('|') { pipe }
+                else { attr_text.len() };
+            let name_loc_end = span.start + name_end_rel as u32;
+
             let mut obj = json!({
                 "type": type_name,
                 "start": span.start,
                 "end": span.end,
                 "name": name,
+                "name_loc": loc_json_with_char(source, span.start, name_loc_end),
                 "modifiers": modifiers
             });
 
