@@ -908,7 +908,8 @@ fn serialize_css_legacy(style: &Style, source: &str) -> Value {
         "content": {
             "start": style.span.start + 7 + style.lang.as_ref().map(|l| l.len() + 7).unwrap_or(0) as u32,
             "end": style.span.end - 8,
-            "styles": style.content
+            "styles": style.content,
+            "comment": null
         }
     })
 }

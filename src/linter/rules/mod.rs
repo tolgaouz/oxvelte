@@ -55,6 +55,34 @@ mod no_spaces_around_equal_signs_in_attribute;
 mod no_restricted_html_elements;
 mod no_extra_reactive_curlies;
 
+// New rules
+mod no_top_level_browser_globals;
+mod prefer_svelte_reactivity;
+mod require_store_callbacks_use_set_param;
+mod require_store_reactive_access;
+mod valid_compile;
+mod valid_style_parse;
+mod no_unused_class_name;
+mod prefer_const;
+mod prefer_destructured_store_props;
+mod consistent_selector_style;
+mod derived_has_same_inputs_outputs;
+mod first_attribute_linebreak;
+mod html_closing_bracket_new_line;
+mod html_closing_bracket_spacing;
+mod html_quotes;
+mod indent;
+mod max_attributes_per_line;
+mod mustache_spacing;
+mod sort_attributes;
+mod require_event_prefix;
+mod valid_prop_names_in_kit_pages;
+mod no_navigation_without_resolve;
+mod experimental_require_slot_types;
+mod experimental_require_strict_events;
+mod comment_directive;
+mod system;
+
 use super::Rule;
 
 /// Return all implemented lint rules.
@@ -110,6 +138,33 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(no_spaces_around_equal_signs_in_attribute::NoSpacesAroundEqualSignsInAttribute),
         Box::new(no_restricted_html_elements::NoRestrictedHtmlElements),
         Box::new(no_extra_reactive_curlies::NoExtraReactiveCurlies),
+        // New rules
+        Box::new(no_top_level_browser_globals::NoTopLevelBrowserGlobals),
+        Box::new(prefer_svelte_reactivity::PreferSvelteReactivity),
+        Box::new(require_store_callbacks_use_set_param::RequireStoreCallbacksUseSetParam),
+        Box::new(require_store_reactive_access::RequireStoreReactiveAccess),
+        Box::new(valid_compile::ValidCompile),
+        Box::new(valid_style_parse::ValidStyleParse),
+        Box::new(no_unused_class_name::NoUnusedClassName),
+        Box::new(prefer_const::PreferConst),
+        Box::new(prefer_destructured_store_props::PreferDestructuredStoreProps),
+        Box::new(consistent_selector_style::ConsistentSelectorStyle),
+        Box::new(derived_has_same_inputs_outputs::DerivedHasSameInputsOutputs),
+        Box::new(first_attribute_linebreak::FirstAttributeLinebreak),
+        Box::new(html_closing_bracket_new_line::HtmlClosingBracketNewLine),
+        Box::new(html_closing_bracket_spacing::HtmlClosingBracketSpacing),
+        Box::new(html_quotes::HtmlQuotes),
+        Box::new(indent::Indent),
+        Box::new(max_attributes_per_line::MaxAttributesPerLine),
+        Box::new(mustache_spacing::MustacheSpacing),
+        Box::new(sort_attributes::SortAttributes),
+        Box::new(require_event_prefix::RequireEventPrefix),
+        Box::new(valid_prop_names_in_kit_pages::ValidPropNamesInKitPages),
+        Box::new(no_navigation_without_resolve::NoNavigationWithoutResolve),
+        Box::new(experimental_require_slot_types::ExperimentalRequireSlotTypes),
+        Box::new(experimental_require_strict_events::ExperimentalRequireStrictEvents),
+        Box::new(comment_directive::CommentDirective),
+        Box::new(system::System),
     ]
 }
 

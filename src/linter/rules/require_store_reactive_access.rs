@@ -2,7 +2,6 @@
 //! ⭐ Recommended 🔧 Fixable
 
 use crate::linter::{LintContext, Rule};
-use oxc::span::Span;
 
 pub struct RequireStoreReactiveAccess;
 

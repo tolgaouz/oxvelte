@@ -151,6 +151,45 @@ impl<'a> TemplateParser<'a> {
         }
     }
 
+    /// Parse children of raw text elements (textarea, title).
+    /// HTML tags are treated as text, but mustache expressions are parsed.
+    fn parse_raw_text_children(&mut self, tag_name: &str) -> Result<Vec<TemplateNode>, OxcDiagnostic> {
+        let close_tag = format!("</{}>", tag_name);
+        let mut nodes = Vec::new();
+
+        while self.pos < self.source.len() {
+            if self.looking_at(&close_tag) {
+                // Eat closing tag
+                self.eat_until(">");
+                self.eat(">")?;
+                break;
+            }
+
+            if self.looking_at("{") && !self.looking_at("{{") {
+                // Mustache expression
+                nodes.push(self.parse_mustache()?);
+            } else {
+                // Raw text until next { or closing tag
+                let text_start = self.pos as u32;
+                while self.pos < self.source.len()
+                    && !self.looking_at(&close_tag)
+                    && !self.looking_at("{")
+                {
+                    self.pos += 1;
+                }
+                let text = &self.source[text_start as usize..self.pos];
+                if !text.is_empty() {
+                    nodes.push(TemplateNode::Text(Text {
+                        data: text.to_string(),
+                        span: Span::new(text_start, self.pos as u32),
+                    }));
+                }
+            }
+        }
+
+        Ok(nodes)
+    }
+
     /// Peek at the next tag name without advancing the parser position.
     fn peek_tag_name(&self) -> String {
         let remaining = self.remaining();
@@ -328,8 +367,12 @@ impl<'a> TemplateParser<'a> {
 
         let is_void = is_void_element(&name);
 
+        let is_raw_text = name == "textarea" || name == "title";
         let children = if self_closing || is_void {
             Vec::new()
+        } else if is_raw_text {
+            // Raw text elements: parse as text with mustache expressions, no HTML elements
+            self.parse_raw_text_children(&name)?
         } else {
             // Parse children until closing tag (with implicit closing for li, p, etc.)
             let fragment = self.parse_fragment_with_parent(Some(&name))?;
