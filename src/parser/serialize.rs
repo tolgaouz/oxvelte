@@ -1443,6 +1443,55 @@ pub fn to_modern_json(ast: &SvelteAst, source: &str) -> Value {
         root["module"] = m;
     }
 
+    // Collect JS-style comments from template for modern format
+    // Exclude comments inside <script> and <style> blocks
+    let script_ranges: Vec<(usize, usize)> = [&ast.instance, &ast.module].iter()
+        .filter_map(|s| s.as_ref())
+        .map(|s| (s.span.start as usize, s.span.end as usize))
+        .chain(ast.css.as_ref().map(|s| (s.span.start as usize, s.span.end as usize)))
+        .collect();
+    let in_script_or_style = |pos: usize| -> bool {
+        script_ranges.iter().any(|(s, e)| pos >= *s && pos < *e)
+    };
+    let mut js_comments = Vec::new();
+    {
+        let bytes = source.as_bytes();
+        let mut i = 0;
+        while i < source.len() {
+            if in_script_or_style(i) { i += 1; continue; }
+            if bytes[i] == b'"' || bytes[i] == b'\'' || bytes[i] == b'`' {
+                let q = bytes[i]; i += 1;
+                while i < source.len() && bytes[i] != q {
+                    if bytes[i] == b'\\' { i += 1; }
+                    i += 1;
+                }
+                if i < source.len() { i += 1; }
+            } else if i + 1 < source.len() && bytes[i] == b'/' && bytes[i + 1] == b'/' {
+                let start = i as u32; i += 2;
+                let value_start = i;
+                while i < source.len() && bytes[i] != b'\n' { i += 1; }
+                js_comments.push(json!({
+                    "type": "Line", "start": start, "end": i as u32,
+                    "value": &source[value_start..i],
+                    "loc": loc_json_with_char(source, start, i as u32)
+                }));
+            } else if i + 1 < source.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+                let start = i as u32; i += 2;
+                let value_start = i;
+                while i + 1 < source.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') { i += 1; }
+                let value = &source[value_start..i]; i += 2;
+                js_comments.push(json!({
+                    "type": "Block", "start": start, "end": i as u32,
+                    "value": value,
+                    "loc": loc_json_with_char(source, start, i as u32)
+                }));
+            } else { i += 1; }
+        }
+    }
+    if !js_comments.is_empty() {
+        root["comments"] = json!(js_comments);
+    }
+
     if has_multibyte(source) {
         convert_byte_to_char_offsets(&mut root, source);
     }
