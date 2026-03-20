@@ -723,8 +723,17 @@ impl<'a> TemplateParser<'a> {
             None
         };
 
-        if self.looking_at("{/each}") {
+        let closed = self.looking_at("{/each}");
+        if closed {
             self.eat("{/each}")?;
+        }
+
+        let mut end = self.pos as u32;
+        // For unclosed blocks, trim trailing whitespace from span
+        if !closed {
+            while end > start && self.source.as_bytes()[(end - 1) as usize].is_ascii_whitespace() {
+                end -= 1;
+            }
         }
 
         Ok(TemplateNode::EachBlock(EachBlock {
@@ -734,7 +743,7 @@ impl<'a> TemplateParser<'a> {
             key,
             body,
             fallback,
-            span: Span::new(start, self.pos as u32),
+            span: Span::new(start, end),
         }))
     }
 

@@ -1438,6 +1438,20 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
                 "Element"
             };
             let attributes: Vec<Value> = filtered_attrs.iter().map(|a| serialize_attribute_legacy(a, source)).collect();
+            // For <style> elements inside other elements, if empty, add empty Text node
+            let children = if el.name == "style" && children.is_empty() {
+                // Find position after <style>
+                let tag_text = &source[el.span.start as usize..el.span.end as usize];
+                let content_pos = el.span.start + tag_text.find('>').map(|p| p + 1).unwrap_or(0) as u32;
+                vec![json!({
+                    "type": "Text",
+                    "start": content_pos,
+                    "end": content_pos,
+                    "data": ""
+                })]
+            } else {
+                children
+            };
             let mut obj = json!({
                 "type": el_type,
                 "start": el.span.start,
