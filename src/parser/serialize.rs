@@ -1338,12 +1338,37 @@ pub fn to_modern_json(ast: &SvelteAst, source: &str) -> Value {
                 n.get("type").and_then(|t| t.as_str()) == Some("SvelteOptionsRaw")
             }) {
                 let options_node = arr.remove(idx);
-                // Build options from the SvelteOptionsRaw element
-                options_val = json!({
+                let attrs = options_node.get("attributes").cloned().unwrap_or(json!([]));
+                let mut opts = json!({
                     "start": options_node.get("start"),
                     "end": options_node.get("end"),
-                    "attributes": options_node.get("attributes").cloned().unwrap_or(json!([]))
+                    "attributes": attrs.clone()
                 });
+                // Extract specific option values from attributes
+                if let Some(attr_arr) = attrs.as_array() {
+                    for attr in attr_arr {
+                        let name = attr.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                        match name {
+                            "customElement" => {
+                                if let Some(val) = attr.get("value") {
+                                    if let Some(arr) = val.as_array() {
+                                        if let Some(text) = arr.first() {
+                                            if let Some(data) = text.get("data").and_then(|d| d.as_str()) {
+                                                opts["customElement"] = json!({ "tag": data });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            "runes" => {
+                                // runes={true} → runes: true
+                                opts["runes"] = json!(true);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                options_val = opts;
             }
         }
     }
@@ -1416,6 +1441,26 @@ pub fn to_modern_json(ast: &SvelteAst, source: &str) -> Value {
                 }));
             }
         }
+        // Add generics attribute if present
+        if let Some(gen_pos) = attrs_text.find("generics") {
+            let attr_start = script.span.start + 7 + gen_pos as u32;
+            let eq_pos = attrs_text[gen_pos..].find('=').unwrap_or(8);
+            let after_eq = &attrs_text[gen_pos + eq_pos + 1..];
+            let quote = after_eq.chars().next().unwrap_or('"');
+            if let Some(close) = after_eq[1..].find(quote) {
+                let gen_val = &after_eq[1..1 + close];
+                let val_start = attr_start + eq_pos as u32 + 2;
+                let val_end = val_start + gen_val.len() as u32;
+                let attr_full_end = val_end + 1;
+                let name_end = attr_start + 8;
+                attrs.push(json!({
+                    "start": attr_start, "end": attr_full_end,
+                    "type": "Attribute", "name": "generics",
+                    "name_loc": loc_json_with_char(source, attr_start, name_end),
+                    "value": [{ "start": val_start, "end": val_end, "type": "Text", "data": gen_val, "raw": gen_val }]
+                }));
+            }
+        }
         s["attributes"] = json!(attrs);
         s
     } else {
@@ -1439,7 +1484,44 @@ pub fn to_modern_json(ast: &SvelteAst, source: &str) -> Value {
     // Add module script in modern format
     if let Some(module) = &ast.module {
         let mut m = serialize_script_legacy(module, source, "module");
-        m["attributes"] = json!([]);
+        // Parse module script tag attributes
+        let tag_text = &source[module.span.start as usize..module.span.end as usize];
+        let gt_pos = tag_text.find('>').unwrap_or(tag_text.len());
+        let attrs_text = &tag_text[7..gt_pos]; // after "<script"
+        // Parse script tag attributes in source order
+        let mut attr_items: Vec<(usize, Value)> = Vec::new();
+        // module attribute
+        if let Some(mod_pos) = attrs_text.find("module") {
+            if !attrs_text[..mod_pos].ends_with("context=") {
+                let attr_start = module.span.start + 7 + mod_pos as u32;
+                let attr_end = attr_start + 6;
+                attr_items.push((mod_pos, json!({
+                    "start": attr_start, "end": attr_end,
+                    "type": "Attribute", "name": "module",
+                    "name_loc": loc_json_with_char(source, attr_start, attr_end),
+                    "value": true
+                })));
+            }
+        }
+        // lang attribute
+        if let Some(lang) = &module.lang {
+            if let Some(lang_pos) = attrs_text.find("lang") {
+                let attr_start = module.span.start + 7 + lang_pos as u32;
+                let eq_pos = attrs_text[lang_pos..].find('=').unwrap_or(4);
+                let val_start = attr_start + eq_pos as u32 + 2;
+                let val_end = val_start + lang.len() as u32;
+                let attr_full_end = val_end + 1;
+                let name_end = attr_start + 4;
+                attr_items.push((lang_pos, json!({
+                    "start": attr_start, "end": attr_full_end,
+                    "type": "Attribute", "name": "lang",
+                    "name_loc": loc_json_with_char(source, attr_start, name_end),
+                    "value": [{ "start": val_start, "end": val_end, "type": "Text", "data": lang, "raw": lang }]
+                })));
+            }
+        }
+        attr_items.sort_by_key(|(pos, _)| *pos);
+        m["attributes"] = json!(attr_items.into_iter().map(|(_, v)| v).collect::<Vec<_>>());
         root["module"] = m;
     }
 
