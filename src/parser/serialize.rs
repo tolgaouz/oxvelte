@@ -1785,12 +1785,56 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
         }
         TemplateNode::SnippetBlock(block) => {
             let (children, _) = serialize_filtered_children(&block.body.nodes, source, block.span.end);
+
+            // Find the name position in source: after "{#snippet "
+            let tag_text = &source[block.span.start as usize..];
+            let name_start_rel = tag_text.find(&block.name).unwrap_or(10);
+            let name_start = block.span.start + name_start_rel as u32;
+            let name_end = name_start + block.name.len() as u32;
+
+            let expression = json!({
+                "type": "Identifier",
+                "name": block.name,
+                "start": name_start,
+                "end": name_end,
+                "loc": loc_json_with_char(source, name_start, name_end)
+            });
+
+            // Parse parameters if present
+            let parameters = if !block.params.is_empty() {
+                // Find params in source between ( and )
+                let paren_start_rel = tag_text.find('(').unwrap_or(0);
+                let paren_start = block.span.start + paren_start_rel as u32;
+
+                // Parse as function params using oxc
+                let wrapper = format!("function f({}) {{}}", block.params);
+                use oxc::allocator::Allocator;
+                use oxc::parser::Parser;
+                use oxc::span::SourceType;
+                let alloc = Allocator::default();
+                let result = Parser::new(&alloc, &wrapper, SourceType::ts()).parse();
+                if let Some(stmt) = result.program.body.first() {
+                    if let oxc::ast::ast::Statement::FunctionDeclaration(func) = stmt {
+                        let params: Vec<Value> = func.params.items.iter().map(|p| {
+                            estree_binding_pattern(p, source, paren_start + 1 - 13) // adjust for "function f(" prefix
+                        }).collect();
+                        json!(params)
+                    } else {
+                        json!([])
+                    }
+                } else {
+                    json!([])
+                }
+            } else {
+                json!([])
+            };
+
             json!({
                 "type": "SnippetBlock",
                 "start": block.span.start,
                 "end": block.span.end,
-                "name": block.name,
-                "params": block.params,
+                "expression": expression,
+                "parameters": parameters,
                 "children": children
             })
         }
@@ -2001,20 +2045,25 @@ fn serialize_attribute_legacy(attr: &Attribute, source: &str) -> Value {
             // Style directives use "value" instead of "expression"
             if matches!(kind, DirectiveKind::StyleDirective) {
                 if let Some(expr) = expression {
-                    // Wrap in a MustacheTag-like array for style directives
-                    let brace_pos = attr_text.find('{');
-                    let close_brace = attr_text.rfind('}');
-                    if let (Some(bp), Some(cbp)) = (brace_pos, close_brace) {
-                        let mustache_start = span.start + bp as u32;
-                        let mustache_end = span.start + cbp as u32 + 1;
-                        obj["value"] = json!([{
-                            "type": "MustacheTag",
-                            "start": mustache_start,
-                            "end": mustache_end,
-                            "expression": expr
-                        }]);
+                    if expr.is_array() {
+                        // Already an array (e.g., string value [{Text}]) — use directly
+                        obj["value"] = expr;
                     } else {
-                        obj["value"] = json!([expr]);
+                        // Expression value — wrap in MustacheTag array
+                        let brace_pos = attr_text.find('{');
+                        let close_brace = attr_text.rfind('}');
+                        if let (Some(bp), Some(cbp)) = (brace_pos, close_brace) {
+                            let mustache_start = span.start + bp as u32;
+                            let mustache_end = span.start + cbp as u32 + 1;
+                            obj["value"] = json!([{
+                                "type": "MustacheTag",
+                                "start": mustache_start,
+                                "end": mustache_end,
+                                "expression": expr
+                            }]);
+                        } else {
+                            obj["value"] = json!([expr]);
+                        }
                     }
                 } else {
                     obj["value"] = json!(true);
