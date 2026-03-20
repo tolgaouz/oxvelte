@@ -26,6 +26,10 @@ mod no_inner_declarations;
 mod spaced_html_comment;
 mod no_trailing_spaces;
 mod require_event_dispatcher_types;
+mod no_unused_svelte_ignore;
+mod html_self_closing;
+mod no_unknown_style_directive_property;
+mod no_shorthand_style_property_overrides;
 
 use super::Rule;
 
@@ -54,6 +58,10 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(spaced_html_comment::SpacedHtmlComment),
         Box::new(no_trailing_spaces::NoTrailingSpaces),
         Box::new(require_event_dispatcher_types::RequireEventDispatcherTypes),
+        Box::new(no_unused_svelte_ignore::NoUnusedSvelteIgnore),
+        Box::new(html_self_closing::HtmlSelfClosing),
+        Box::new(no_unknown_style_directive_property::NoUnknownStyleDirectiveProperty),
+        Box::new(no_shorthand_style_property_overrides::NoShorthandStylePropertyOverrides),
     ]
 }
 
