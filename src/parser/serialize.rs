@@ -1018,9 +1018,11 @@ pub fn to_modern_json(ast: &SvelteAst, source: &str) -> Value {
         Value::Null
     };
 
-    // Add instance in modern format
+    // Add instance in modern format (with attributes field)
     let instance_val = if let Some(script) = &ast.instance {
-        serialize_script_legacy(script, source, "default")
+        let mut s = serialize_script_legacy(script, source, "default");
+        s["attributes"] = json!([]);
+        s
     } else {
         Value::Null
     };
@@ -1175,13 +1177,39 @@ fn serialize_node_modern(node: &TemplateNode, source: &str) -> Value {
         TemplateNode::EachBlock(block) => {
             let expr_start = block.span.start + 7;
             let body = serialize_fragment_modern(&block.body, source);
-            json!({
+            // Find context position
+            let header = &source[block.span.start as usize..];
+            let as_pos = header.find(" as ").map(|p| p + 4).unwrap_or(0);
+            let ctx_start = block.span.start + as_pos as u32;
+            let context = if !block.context.is_empty() {
+                json!({
+                    "type": "Identifier",
+                    "name": block.context,
+                    "start": ctx_start,
+                    "end": ctx_start + block.context.len() as u32
+                })
+            } else {
+                Value::Null
+            };
+            let mut obj = json!({
                 "type": "EachBlock",
                 "start": block.span.start,
                 "end": block.span.end,
                 "expression": expression_to_estree(source, block.expression.trim(), expr_start),
-                "body": body
-            })
+                "body": body,
+                "context": context
+            });
+            if let Some(key) = &block.key {
+                let key_header = &source[block.span.start as usize..];
+                if let Some(paren) = key_header.find('(') {
+                    let key_start = block.span.start + paren as u32 + 1;
+                    obj["key"] = expression_to_estree(source, key.trim(), key_start);
+                }
+            }
+            if let Some(idx) = &block.index {
+                obj["index"] = json!(idx);
+            }
+            obj
         }
         TemplateNode::AwaitBlock(block) => {
             let expr_start = block.span.start + 8;
@@ -1418,15 +1446,13 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
         program["trailingComments"] = json!(comments);
     }
 
-    let mut result_json = json!({
+    json!({
         "type": "Script",
         "start": script.span.start,
         "end": script.span.end,
         "context": context,
         "content": program
-    });
-
-    result_json
+    })
 }
 
 fn offset_to_loc_json(text: &str, offset: usize) -> Value {
