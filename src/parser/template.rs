@@ -958,8 +958,26 @@ impl<'a> TemplateParser<'a> {
         self.eat("{#snippet")?;
         self.skip_whitespace();
 
-        // Parse: name(params)
-        let header = self.eat_until("}");
+        // Parse: name(params) — use balanced brace reading for generic type params
+        let header = {
+            let header_start = self.pos;
+            let mut depth = 0i32;
+            while self.pos < self.source.len() {
+                let ch = self.source.as_bytes()[self.pos];
+                match ch {
+                    b'{' | b'(' | b'[' | b'<' => depth += 1,
+                    b')' | b']' | b'>' => depth -= 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth < 0 { break; }
+                    }
+                    b'\'' | b'"' | b'`' => { self.skip_string_literal(ch)?; continue; }
+                    _ => {}
+                }
+                self.pos += 1;
+            }
+            &self.source[header_start..self.pos]
+        };
         self.eat("}")?;
 
         let (name, params) = if let Some(paren_idx) = header.find('(') {
