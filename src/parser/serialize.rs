@@ -386,11 +386,17 @@ fn estree_expr(expr: &oxc::ast::ast::Expression<'_>, source: &str, offset: u32) 
                     json!(null)
                 }
             } else {
+                let body_start = offset + arrow.body.span.start;
+                let body_end = offset + arrow.body.span.end;
+                let stmts: Vec<Value> = arrow.body.statements.iter().map(|s| {
+                    serialize_statement_legacy(s, source, offset)
+                }).collect();
                 json!({
                     "type": "BlockStatement",
-                    "start": offset + arrow.body.span.start,
-                    "end": offset + arrow.body.span.end,
-                    "body": []
+                    "start": body_start,
+                    "end": body_end,
+                    "loc": loc_json(source, body_start, body_end),
+                    "body": stmts
                 })
             };
             json!({
@@ -538,6 +544,50 @@ fn estree_expr(expr: &oxc::ast::ast::Expression<'_>, source: &str, offset: u32) 
                     "end": tl_end,
                     "expressions": exprs,
                     "quasis": quasis
+                }
+            })
+        }
+        Expression::ImportExpression(imp) => {
+            let start = offset + imp.span.start;
+            let end = offset + imp.span.end;
+            json!({
+                "type": "ImportExpression",
+                "start": start,
+                "end": end,
+                "loc": loc_json(source, start, end),
+                "source": estree_expr(&imp.source, source, offset),
+                "options": Value::Null
+            })
+        }
+        Expression::FunctionExpression(func) => {
+            let start = offset + func.span.start;
+            let end = offset + func.span.end;
+            let params: Vec<Value> = func.params.items.iter().map(|p| {
+                estree_binding_pattern(p, source, offset)
+            }).collect();
+            json!({
+                "type": "FunctionExpression",
+                "start": start,
+                "end": end,
+                "loc": loc_json(source, start, end),
+                "id": func.id.as_ref().map(|id| {
+                    json!({
+                        "type": "Identifier",
+                        "start": offset + id.span.start,
+                        "end": offset + id.span.end,
+                        "name": id.name.as_str()
+                    })
+                }),
+                "generator": func.generator,
+                "async": func.r#async,
+                "params": params,
+                "body": {
+                    "type": "BlockStatement",
+                    "start": offset + func.body.as_ref().map(|b| b.span.start).unwrap_or(0),
+                    "end": offset + func.body.as_ref().map(|b| b.span.end).unwrap_or(0),
+                    "body": func.body.as_ref().map(|b| {
+                        b.statements.iter().map(|s| serialize_statement_legacy(s, source, offset)).collect::<Vec<_>>()
+                    }).unwrap_or_default()
                 }
             })
         }
@@ -1284,6 +1334,25 @@ fn serialize_statement_legacy_from_decl(decl: &oxc::ast::ast::Declaration<'_>, s
 }
 
 fn serialize_fragment_legacy_root(fragment: &Fragment, source: &str, has_blocks: bool) -> Value {
+    // If the fragment has no non-whitespace, non-script/style content, return null start/end
+    let has_content = fragment.nodes.iter().any(|n| {
+        match n {
+            TemplateNode::Text(t) => !t.data.chars().all(|c| c.is_ascii_whitespace()),
+            _ => true,
+        }
+    });
+    if !has_content && has_blocks {
+        // Only whitespace — set start/end to null but keep children
+        let filtered: Vec<&TemplateNode> = fragment.nodes.iter().collect();
+        let children: Vec<Value> = filtered.iter().map(|n| serialize_node_legacy(n, source)).collect();
+        return json!({
+            "type": "Fragment",
+            "start": null,
+            "end": null,
+            "children": children
+        });
+    }
+
     // For root with script/style blocks: keep all nodes (including trailing whitespace before blocks)
     // For root without blocks: strip trailing whitespace
     let filtered = if has_blocks {
