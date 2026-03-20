@@ -500,9 +500,12 @@ impl<'a> TemplateParser<'a> {
                 }
                 self.pos += 1;
             }
-            Ok(AttributeValue::Static(
-                self.source[start..self.pos].to_string(),
-            ))
+            let value = &self.source[start..self.pos];
+            if value.contains('{') {
+                Ok(parse_concat_value(value))
+            } else {
+                Ok(AttributeValue::Static(value.to_string()))
+            }
         }
     }
 

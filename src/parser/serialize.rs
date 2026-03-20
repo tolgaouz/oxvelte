@@ -1776,17 +1776,45 @@ fn serialize_attr_value_legacy(value: &AttributeValue, source: &str, attr_span: 
             }])
         }
         AttributeValue::Concat(parts) => {
+            // Find the start of the value content in source
+            let region = &source[attr_span.start as usize..attr_span.end as usize];
+            let eq_pos = region.find('=').unwrap_or(0);
+            let after_eq = &region[eq_pos + 1..];
+            let value_offset = if after_eq.starts_with('"') || after_eq.starts_with('\'') {
+                eq_pos + 2 // skip =' or ="
+            } else {
+                eq_pos + 1 // unquoted
+            };
+            let mut pos = attr_span.start + value_offset as u32;
+
             let values: Vec<Value> = parts.iter().map(|part| {
                 match part {
-                    AttributeValuePart::Static(s) => json!({
-                        "type": "Text",
-                        "raw": s,
-                        "data": decode_entities(s)
-                    }),
-                    AttributeValuePart::Expression(expr) => json!({
-                        "type": "MustacheTag",
-                        "expression": expression_to_estree(source, expr.trim(), 0)
-                    }),
+                    AttributeValuePart::Static(s) => {
+                        let start = pos;
+                        pos += s.len() as u32;
+                        json!({
+                            "start": start,
+                            "end": pos,
+                            "type": "Text",
+                            "raw": s,
+                            "data": decode_entities(s)
+                        })
+                    }
+                    AttributeValuePart::Expression(expr) => {
+                        let mustache_start = pos;
+                        pos += 1; // skip {
+                        let expr_start = pos;
+                        pos += expr.len() as u32;
+                        let expr_end = pos;
+                        pos += 1; // skip }
+                        let mustache_end = pos;
+                        json!({
+                            "type": "MustacheTag",
+                            "start": mustache_start,
+                            "end": mustache_end,
+                            "expression": expression_to_estree(source, expr.trim(), expr_start)
+                        })
+                    }
                 }
             }).collect();
             Value::Array(values)
