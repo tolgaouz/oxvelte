@@ -1,0 +1,103 @@
+use oxvelte::{parser, linter};
+
+use clap::{Parser, Subcommand};
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+#[derive(Parser)]
+#[command(name = "oxvelte", version, about = "A fast Svelte linter powered by oxc")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Run the linter on Svelte files.
+    Lint {
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        #[arg(long)]
+        all_rules: bool,
+        #[arg(long)]
+        fix: bool,
+    },
+    /// Parse a Svelte file and dump the AST as JSON.
+    Parse {
+        file: PathBuf,
+        #[arg(long, short)]
+        pretty: bool,
+    },
+    /// Parse + lint.
+    Check {
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+    },
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    match cli.command {
+        Command::Lint { paths, all_rules, fix: _ } => cmd_lint(&paths, all_rules),
+        Command::Parse { file, pretty } => cmd_parse(&file, pretty),
+        Command::Check { paths } => cmd_lint(&paths, false),
+    }
+}
+
+fn cmd_lint(paths: &[PathBuf], all_rules: bool) -> ExitCode {
+    let lint = if all_rules { linter::Linter::all() } else { linter::Linter::recommended() };
+    let mut total_diags = 0u32;
+    let mut total_files = 0u32;
+
+    for path in collect_svelte_files(paths) {
+        let source = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => { eprintln!("Error reading {}: {}", path.display(), e); continue; }
+        };
+        let result = parser::parse(&source);
+        let diags = lint.lint(&result.ast, &source);
+        total_files += 1;
+        for d in &diags {
+            total_diags += 1;
+            eprintln!("{}: {} [{}]", path.display(), d.message, d.rule_name);
+        }
+    }
+
+    eprintln!("\n{} problem(s) in {} file(s).", total_diags, total_files);
+    if total_diags > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS }
+}
+
+fn cmd_parse(file: &PathBuf, pretty: bool) -> ExitCode {
+    let source = match std::fs::read_to_string(file) {
+        Ok(s) => s,
+        Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); return ExitCode::from(1); }
+    };
+    let result = parser::parse(&source);
+    for err in &result.errors {
+        eprintln!("Parse error: {:?}", err);
+    }
+    let json = if pretty {
+        serde_json::to_string_pretty(&result.ast)
+    } else {
+        serde_json::to_string(&result.ast)
+    };
+    match json {
+        Ok(j) => { println!("{}", j); ExitCode::SUCCESS }
+        Err(e) => { eprintln!("JSON error: {}", e); ExitCode::from(1) }
+    }
+}
+
+fn collect_svelte_files(paths: &[PathBuf]) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for path in paths {
+        if path.is_file() && path.extension().is_some_and(|e| e == "svelte") {
+            files.push(path.clone());
+        } else if path.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(path) {
+                let children: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+                files.extend(collect_svelte_files(&children));
+            }
+        }
+    }
+    files
+}
