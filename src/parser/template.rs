@@ -341,11 +341,42 @@ impl<'a> TemplateParser<'a> {
     /// Skip a string literal (handles escaped quotes).
     fn skip_string_literal(&mut self, quote: u8) -> Result<(), OxcDiagnostic> {
         self.pos += 1; // skip opening quote
-        let bytes = self.source.as_bytes();
         while self.pos < self.source.len() {
-            if bytes[self.pos] == b'\\' {
-                self.pos += 1; // skip escaped char
-            } else if bytes[self.pos] == quote {
+            let ch = self.source.as_bytes()[self.pos];
+            if ch == b'\\' {
+                self.pos += 2; // skip escaped char + next
+                continue;
+            }
+            // Handle template literal ${...} expressions
+            if quote == b'`' && ch == b'$'
+                && self.pos + 1 < self.source.len()
+                && self.source.as_bytes()[self.pos + 1] == b'{'
+            {
+                self.pos += 2; // skip ${
+                let mut expr_depth = 1i32;
+                while self.pos < self.source.len() && expr_depth > 0 {
+                    let inner = self.source.as_bytes()[self.pos];
+                    match inner {
+                        b'{' => expr_depth += 1,
+                        b'}' => {
+                            expr_depth -= 1;
+                            if expr_depth == 0 {
+                                self.pos += 1; // skip closing }
+                                break;
+                            }
+                        }
+                        b'\'' | b'"' | b'`' => {
+                            self.skip_string_literal(inner)?;
+                            continue; // skip_string_literal already advanced pos
+                        }
+                        b'\\' => { self.pos += 1; } // skip next char
+                        _ => {}
+                    }
+                    self.pos += 1;
+                }
+                continue; // continue reading the template literal
+            }
+            if ch == quote {
                 self.pos += 1; // skip closing quote
                 return Ok(());
             }
