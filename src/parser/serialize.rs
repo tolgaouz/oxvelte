@@ -975,7 +975,13 @@ fn convert_byte_to_char_offsets(value: &mut Value, source: &str) {
 /// Serialize a `SvelteAst` to the legacy Svelte JSON format.
 pub fn to_legacy_json(ast: &SvelteAst, source: &str) -> Value {
     let has_blocks = ast.css.is_some() || ast.instance.is_some() || ast.module.is_some();
-    let html = serialize_fragment_legacy_root(&ast.html, source, has_blocks);
+    // Find the end of the last script/style block for filtering trailing whitespace
+    let last_block_end = [
+        ast.instance.as_ref().map(|s| s.span.end),
+        ast.module.as_ref().map(|s| s.span.end),
+        ast.css.as_ref().map(|s| s.span.end),
+    ].into_iter().flatten().max().unwrap_or(0);
+    let html = serialize_fragment_legacy_root(&ast.html, source, has_blocks, last_block_end);
     let mut root = json!({ "html": html });
 
     // Add css if present
@@ -1386,7 +1392,7 @@ fn serialize_statement_legacy_from_decl(decl: &oxc::ast::ast::Declaration<'_>, s
     }
 }
 
-fn serialize_fragment_legacy_root(fragment: &Fragment, source: &str, has_blocks: bool) -> Value {
+fn serialize_fragment_legacy_root(fragment: &Fragment, source: &str, has_blocks: bool, last_block_end: u32) -> Value {
     // If the fragment has no nodes at all (script-only file with no whitespace between blocks)
     if fragment.nodes.is_empty() && has_blocks {
         return json!({
@@ -1397,10 +1403,21 @@ fn serialize_fragment_legacy_root(fragment: &Fragment, source: &str, has_blocks:
         });
     }
 
-    // For root with script/style blocks: keep all nodes (including trailing whitespace before blocks)
-    // For root without blocks: strip trailing whitespace
+    // For root with script/style blocks: keep nodes but strip trailing whitespace after last block
+    // only if there's no non-whitespace content after it
     let filtered = if has_blocks {
-        fragment.nodes.iter().collect::<Vec<_>>()
+        let mut nodes: Vec<&TemplateNode> = fragment.nodes.iter().collect();
+        // Only strip the LAST node if it's whitespace after the last block
+        while let Some(last) = nodes.last() {
+            if let TemplateNode::Text(t) = last {
+                if t.data.chars().all(|c| c.is_ascii_whitespace()) && t.span.start >= last_block_end {
+                    nodes.pop();
+                    continue;
+                }
+            }
+            break;
+        }
+        nodes
     } else {
         strip_trailing_whitespace(&fragment.nodes)
     };
