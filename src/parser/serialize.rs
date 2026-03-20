@@ -271,6 +271,7 @@ fn estree_expr(expr: &oxc::ast::ast::Expression<'_>, source: &str, offset: u32) 
                     "type": "TemplateElement",
                     "start": q_start,
                     "end": q_end,
+                    "loc": loc_json(source, q_start, q_end),
                     "value": {
                         "raw": q.value.raw.as_str(),
                         "cooked": q.value.cooked.as_ref().map(|c| c.as_str())
@@ -522,6 +523,7 @@ fn estree_expr(expr: &oxc::ast::ast::Expression<'_>, source: &str, offset: u32) 
                     "type": "TemplateElement",
                     "start": q_start,
                     "end": q_end,
+                    "loc": loc_json(source, q_start, q_end),
                     "value": {
                         "raw": q.value.raw.as_str(),
                         "cooked": q.value.cooked.as_ref().map(|c| c.as_str())
@@ -2075,6 +2077,44 @@ fn serialize_attribute_legacy(attr: &Attribute, source: &str) -> Value {
                         let brace_pos = attr_text[eq_pos..].find('{').unwrap_or(2);
                         let expr_start = span.start + eq_pos as u32 + brace_pos as u32 + 1;
                         Some(expression_to_estree(source, expr_str.trim(), expr_start))
+                    } else if inner.contains('{') {
+                        // Quoted concat value: ="red{variable}"
+                        let quote_pos_rel = attr_text[eq_pos..].find(|c: char| c == '"' || c == '\'').unwrap_or(1);
+                        let inner_start = span.start + eq_pos as u32 + quote_pos_rel as u32 + 1;
+                        // Build concat parts
+                        let mut parts = Vec::new();
+                        let mut pos = 0;
+                        let bytes = inner.as_bytes();
+                        while pos < inner.len() {
+                            if bytes[pos] == b'{' {
+                                let expr_start_abs = inner_start + pos as u32 + 1;
+                                let expr_end = inner[pos + 1..].find('}').unwrap_or(inner.len() - pos - 1);
+                                let expr_str = &inner[pos + 1..pos + 1 + expr_end];
+                                let mustache_start = inner_start + pos as u32;
+                                let mustache_end = inner_start + pos as u32 + expr_end as u32 + 2;
+                                parts.push(json!({
+                                    "type": "MustacheTag",
+                                    "start": mustache_start,
+                                    "end": mustache_end,
+                                    "expression": expression_to_estree(source, expr_str.trim(), expr_start_abs)
+                                }));
+                                pos += expr_end + 2;
+                            } else {
+                                let text_start = pos;
+                                while pos < inner.len() && bytes[pos] != b'{' {
+                                    pos += 1;
+                                }
+                                let text = &inner[text_start..pos];
+                                parts.push(json!({
+                                    "type": "Text",
+                                    "start": inner_start + text_start as u32,
+                                    "end": inner_start + pos as u32,
+                                    "raw": text,
+                                    "data": text
+                                }));
+                            }
+                        }
+                        Some(Value::Array(parts))
                     } else {
                         // Static string value
                         let val_start_rel = attr_text[eq_pos..].find(|c: char| c == '"' || c == '\'').unwrap_or(1);
@@ -2089,7 +2129,56 @@ fn serialize_attribute_legacy(attr: &Attribute, source: &str) -> Value {
                         }]))
                     }
                 } else {
-                    None
+                    // Unquoted value: =value or =value{expr}
+                    let val_start_rel = eq_pos + 1 + (attr_text[eq_pos + 1..].len() - value_part.len());
+                    let val_start = span.start + val_start_rel as u32;
+
+                    if value_part.contains('{') {
+                        // Concat value: red{variable} — build parts inline
+                        let mut parts = Vec::new();
+                        let mut pos = 0;
+                        let bytes = value_part.as_bytes();
+                        while pos < value_part.len() {
+                            if bytes[pos] == b'{' {
+                                let expr_start_abs = val_start + pos as u32 + 1;
+                                let expr_end = value_part[pos + 1..].find('}').unwrap_or(value_part.len() - pos - 1);
+                                let expr_str = &value_part[pos + 1..pos + 1 + expr_end];
+                                let mustache_start = val_start + pos as u32;
+                                let mustache_end = val_start + pos as u32 + expr_end as u32 + 2;
+                                parts.push(json!({
+                                    "type": "MustacheTag",
+                                    "start": mustache_start,
+                                    "end": mustache_end,
+                                    "expression": expression_to_estree(source, expr_str.trim(), expr_start_abs)
+                                }));
+                                pos += expr_end + 2;
+                            } else {
+                                let text_start = pos;
+                                while pos < value_part.len() && bytes[pos] != b'{' {
+                                    pos += 1;
+                                }
+                                let text = &value_part[text_start..pos];
+                                parts.push(json!({
+                                    "type": "Text",
+                                    "start": val_start + text_start as u32,
+                                    "end": val_start + pos as u32,
+                                    "raw": text,
+                                    "data": text
+                                }));
+                            }
+                        }
+                        Some(Value::Array(parts))
+                    } else {
+                        // Plain value: red
+                        let val_end = val_start + value_part.len() as u32;
+                        Some(json!([{
+                            "type": "Text",
+                            "start": val_start,
+                            "end": val_end,
+                            "raw": value_part,
+                            "data": value_part
+                        }]))
+                    }
                 }
             } else {
                 None
