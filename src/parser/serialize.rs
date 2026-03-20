@@ -1672,9 +1672,16 @@ fn serialize_node_modern_ctx(node: &TemplateNode, source: &str, in_shadow_root: 
             let body = serialize_fragment_modern_ctx(&block.body, source, in_shadow_root);
             let actual_name = if let Some(angle) = block.name.find('<') { &block.name[..angle] } else { &block.name };
             let tag_text = &source[block.span.start as usize..];
-            let name_start_rel = tag_text.find(actual_name).unwrap_or(10);
-            let name_start = block.span.start + name_start_rel as u32;
-            let name_end = name_start + actual_name.len() as u32;
+            let (name_start, name_end) = if actual_name.is_empty() {
+                // Empty snippet name: position is after "{#snippet "
+                let pos = block.span.start + 10; // "{#snippet " = 10 chars
+                (pos, pos)
+            } else {
+                let name_start_rel = tag_text.find(actual_name).unwrap_or(10);
+                let name_start = block.span.start + name_start_rel as u32;
+                let name_end = name_start + actual_name.len() as u32;
+                (name_start, name_end)
+            };
 
             // Parse parameters
             let parameters = if !block.params.is_empty() {
