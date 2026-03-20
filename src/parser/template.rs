@@ -482,12 +482,20 @@ impl<'a> TemplateParser<'a> {
             fragment.nodes
         };
 
+        // For unclosed elements at EOF, trim trailing whitespace from span
+        let mut end = self.pos as u32;
+        if end as usize >= self.source.len() {
+            while end > start && self.source.as_bytes()[(end - 1) as usize].is_ascii_whitespace() {
+                end -= 1;
+            }
+        }
+
         Ok(TemplateNode::Element(Element {
             name,
             attributes,
             children,
             self_closing,
-            span: Span::new(start, self.pos as u32),
+            span: Span::new(start, end),
         }))
     }
 
