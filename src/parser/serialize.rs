@@ -26,14 +26,14 @@ fn has_multibyte(source: &str) -> bool {
 fn offset_to_loc(source: &str, offset: usize) -> (usize, usize) {
     let mut line = 1;
     let mut col_utf16: usize = 0;
-    let mut last_newline_byte: isize = -1;
+    let mut line_start_byte: usize = 0;
     for (i, ch) in source.char_indices() {
         if i >= offset {
             break;
         }
         if ch == '\n' {
             line += 1;
-            last_newline_byte = i as isize;
+            line_start_byte = i + 1;
             col_utf16 = 0;
         } else {
             col_utf16 += ch.len_utf16();
@@ -43,7 +43,7 @@ fn offset_to_loc(source: &str, offset: usize) -> (usize, usize) {
     if has_multibyte(source) {
         (line, col_utf16)
     } else {
-        let col = (offset as isize - last_newline_byte - 1).max(0) as usize;
+        let col = offset.saturating_sub(line_start_byte);
         (line, col)
     }
 }
@@ -719,12 +719,24 @@ fn estree_binding_pat(pat: &oxc::ast::ast::BindingPattern<'_>, source: &str, off
         oxc::ast::ast::BindingPattern::ArrayPattern(arr) => {
             let start = offset + arr.span.start;
             let end = offset + arr.span.end;
-            let elements: Vec<Value> = arr.elements.iter().map(|el| {
+            let mut elements: Vec<Value> = arr.elements.iter().map(|el| {
                 match el {
                     Some(pat) => estree_binding_pat(pat, source, offset),
                     None => Value::Null,
                 }
             }).collect();
+            // Include rest element (...rest)
+            if let Some(rest) = &arr.rest {
+                let r_start = offset + rest.span.start;
+                let r_end = offset + rest.span.end;
+                elements.push(json!({
+                    "type": "RestElement",
+                    "start": r_start,
+                    "end": r_end,
+                    "loc": loc_json(source, r_start, r_end),
+                    "argument": estree_binding_pat(&rest.argument, source, offset)
+                }));
+            }
             json!({
                 "type": "ArrayPattern",
                 "start": start,
