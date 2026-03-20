@@ -2931,9 +2931,15 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
                 &block.name
             };
 
-            let name_start_rel = tag_text.find(actual_name).unwrap_or(10);
-            let name_start = block.span.start + name_start_rel as u32;
-            let name_end = name_start + actual_name.len() as u32;
+            let (name_start, name_end) = if actual_name.is_empty() {
+                let pos = block.span.start + 10; // "{#snippet " = 10 chars
+                (pos, pos)
+            } else {
+                let name_start_rel = tag_text.find(actual_name).unwrap_or(10);
+                let name_start = block.span.start + name_start_rel as u32;
+                let name_end = name_start + actual_name.len() as u32;
+                (name_start, name_end)
+            };
 
             let expression = json!({
                 "type": "Identifier",
