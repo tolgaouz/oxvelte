@@ -83,9 +83,46 @@ impl<'a> TemplateParser<'a> {
             } else if self.looking_at("{@render") {
                 nodes.push(self.parse_render_tag()?);
             } else if self.looking_at("{") {
-                nodes.push(self.parse_mustache()?);
+                match self.parse_mustache() {
+                    Ok(node) => nodes.push(node),
+                    Err(_) => {
+                        // Error recovery for malformed mustache
+                        let start = self.pos as u32;
+                        self.pos += 1; // skip {
+                        let data = "{".to_string();
+                        nodes.push(TemplateNode::Text(Text {
+                            data,
+                            span: Span::new(start, self.pos as u32),
+                        }));
+                    }
+                }
             } else if self.looking_at("<") {
-                nodes.push(self.parse_element()?);
+                match self.parse_element() {
+                    Ok(node) => nodes.push(node),
+                    Err(_) => {
+                        // Error recovery: skip to next > or newline
+                        let recovery_start = self.pos as u32;
+                        while self.pos < self.source.len() {
+                            let ch = self.source.as_bytes()[self.pos];
+                            if ch == b'>' {
+                                self.pos += 1;
+                                break;
+                            }
+                            if ch == b'\n' {
+                                break;
+                            }
+                            self.pos += 1;
+                        }
+                        // Emit the skipped content as a text node
+                        if self.pos as u32 > recovery_start {
+                            let data = self.source[recovery_start as usize..self.pos].to_string();
+                            nodes.push(TemplateNode::Text(Text {
+                                data,
+                                span: Span::new(recovery_start, self.pos as u32),
+                            }));
+                        }
+                    }
+                }
             } else {
                 nodes.push(self.parse_text()?);
             }
