@@ -351,3 +351,97 @@ mod parser_fixture_tests {
     legacy_fixture_test!(legacy_loose_unclosed_open_tag, "loose-unclosed-open-tag");
     legacy_fixture_test!(legacy_loose_unclosed_tag, "loose-unclosed-tag");
 }
+
+#[cfg(test)]
+mod modern_fixture_tests {
+    use crate::parser;
+    use crate::parser::serialize::to_modern_json;
+
+    fn json_diff(expected: &serde_json::Value, actual: &serde_json::Value, path: &str) -> Vec<String> {
+        use serde_json::Value;
+        let mut diffs = Vec::new();
+        match (expected, actual) {
+            (Value::Object(exp_map), Value::Object(act_map)) => {
+                for (key, exp_val) in exp_map {
+                    if let Some(act_val) = act_map.get(key) {
+                        diffs.extend(json_diff(exp_val, act_val, &format!("{}.{}", path, key)));
+                    } else {
+                        diffs.push(format!("{}.{}: missing in actual", path, key));
+                    }
+                }
+                for key in act_map.keys() {
+                    if !exp_map.contains_key(key) {
+                        diffs.push(format!("{}.{}: unexpected in actual", path, key));
+                    }
+                }
+            }
+            (Value::Array(exp_arr), Value::Array(act_arr)) => {
+                if exp_arr.len() != act_arr.len() {
+                    diffs.push(format!("{}: array length {} vs {}", path, exp_arr.len(), act_arr.len()));
+                }
+                for (i, (e, a)) in exp_arr.iter().zip(act_arr.iter()).enumerate() {
+                    diffs.extend(json_diff(e, a, &format!("{}[{}]", path, i)));
+                }
+            }
+            _ => {
+                if expected != actual {
+                    diffs.push(format!("{}: expected {:?}, got {:?}", path, expected, actual));
+                }
+            }
+        }
+        diffs
+    }
+
+    fn run_modern_fixture(name: &str) {
+        let fixture_dir = format!("fixtures/parser/modern/{}", name);
+        let input_path = format!("{}/input.svelte", fixture_dir);
+        let output_path = format!("{}/output.json", fixture_dir);
+
+        let input = std::fs::read_to_string(&input_path)
+            .unwrap_or_else(|e| panic!("Cannot read {}: {}", input_path, e));
+        let expected_str = std::fs::read_to_string(&output_path)
+            .unwrap_or_else(|e| panic!("Cannot read {}: {}", output_path, e));
+
+        let expected: serde_json::Value = serde_json::from_str(&expected_str)
+            .unwrap_or_else(|e| panic!("Invalid JSON in {}: {}", output_path, e));
+
+        let result = parser::parse(&input);
+        let actual = to_modern_json(&result.ast, &input);
+
+        let diffs = json_diff(&expected, &actual, "");
+        assert!(diffs.is_empty(), "Fixture '{}' has {} differences:\n{}", name, diffs.len(), diffs.join("\n"));
+    }
+
+    macro_rules! modern_fixture_test {
+        ($test_name:ident, $fixture:expr) => {
+            #[test]
+            fn $test_name() {
+                run_modern_fixture($fixture);
+            }
+        };
+    }
+
+    modern_fixture_test!(modern_if_block, "if-block");
+    modern_fixture_test!(modern_if_block_else, "if-block-else");
+    modern_fixture_test!(modern_if_block_elseif, "if-block-elseif");
+    modern_fixture_test!(modern_each_block_object_pattern, "each-block-object-pattern");
+    modern_fixture_test!(modern_each_block_object_pattern_special, "each-block-object-pattern-special-characters");
+    modern_fixture_test!(modern_snippets, "snippets");
+    modern_fixture_test!(modern_generic_snippets, "generic-snippets");
+    modern_fixture_test!(modern_comment_before_script, "comment-before-script");
+    modern_fixture_test!(modern_comment_in_tag, "comment-in-tag");
+    modern_fixture_test!(modern_comment_before_function_binding, "comment-before-function-binding");
+    modern_fixture_test!(modern_css_nth_syntax, "css-nth-syntax");
+    modern_fixture_test!(modern_css_pseudo_classes, "css-pseudo-classes");
+    modern_fixture_test!(modern_attachments, "attachments");
+    modern_fixture_test!(modern_options, "options");
+    modern_fixture_test!(modern_script_style_no_markup, "script-style-no-markup");
+    modern_fixture_test!(modern_semicolon_inside_quotes, "semicolon-inside-quotes");
+    modern_fixture_test!(modern_template_shadowroot, "template-shadowroot");
+    modern_fixture_test!(modern_typescript_in_event_handler, "typescript-in-event-handler");
+    modern_fixture_test!(modern_loose_valid_each_as, "loose-valid-each-as");
+    modern_fixture_test!(modern_loose_invalid_block, "loose-invalid-block");
+    modern_fixture_test!(modern_loose_invalid_expression, "loose-invalid-expression");
+    modern_fixture_test!(modern_loose_unclosed_open_tag, "loose-unclosed-open-tag");
+    modern_fixture_test!(modern_loose_unclosed_tag, "loose-unclosed-tag");
+}

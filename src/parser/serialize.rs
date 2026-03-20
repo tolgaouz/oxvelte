@@ -985,6 +985,271 @@ fn convert_byte_to_char_offsets(value: &mut Value, source: &str) {
 }
 
 /// Serialize a `SvelteAst` to the legacy Svelte JSON format.
+/// Serialize a `SvelteAst` to the modern Svelte 5 JSON format.
+pub fn to_modern_json(ast: &SvelteAst, source: &str) -> Value {
+    let fragment = serialize_fragment_modern(&ast.html, source);
+
+    // Strip trailing whitespace from fragment nodes
+    let source_len = source.len() as u32;
+    let end = if source.ends_with('\n') { source_len - 1 } else { source_len };
+
+    // Add CSS as StyleSheet in modern format
+    let css_val = if let Some(style) = &ast.css {
+        let tag_text = &source[style.span.start as usize..style.span.end as usize];
+        let content_start_rel = tag_text.find('>').map(|p| p + 1).unwrap_or(0);
+        let content_end_rel = tag_text.find("</style").unwrap_or(tag_text.len());
+        let content_start = style.span.start + content_start_rel as u32;
+        let content_end = style.span.start + content_end_rel as u32;
+        let children = crate::parser::css::parse_css_children(&style.content, content_start);
+        json!({
+            "type": "StyleSheet",
+            "start": style.span.start,
+            "end": style.span.end,
+            "attributes": [],
+            "children": children,
+            "content": {
+                "start": content_start,
+                "end": content_end,
+                "styles": style.content,
+                "comment": null
+            }
+        })
+    } else {
+        Value::Null
+    };
+
+    // Add instance in modern format
+    let instance_val = if let Some(script) = &ast.instance {
+        serialize_script_legacy(script, source, "default")
+    } else {
+        Value::Null
+    };
+
+    let mut root = json!({
+        "css": css_val,
+        "js": [],
+        "start": 0,
+        "end": end,
+        "type": "Root",
+        "fragment": fragment,
+        "options": null
+    });
+
+    if ast.instance.is_some() {
+        root["instance"] = instance_val;
+    }
+
+    if has_multibyte(source) {
+        convert_byte_to_char_offsets(&mut root, source);
+    }
+
+    root
+}
+
+fn serialize_fragment_modern(fragment: &Fragment, source: &str) -> Value {
+    let nodes: Vec<Value> = fragment.nodes.iter()
+        .filter(|n| {
+            // Filter whitespace-only text that's trailing
+            if let TemplateNode::Text(t) = n {
+                if t.data.chars().all(|c| c.is_ascii_whitespace()) && t.span.end as usize >= source.len() - 1 {
+                    return false;
+                }
+            }
+            true
+        })
+        .map(|n| serialize_node_modern(n, source))
+        .collect();
+    json!({
+        "type": "Fragment",
+        "nodes": nodes
+    })
+}
+
+fn serialize_node_modern(node: &TemplateNode, source: &str) -> Value {
+    match node {
+        TemplateNode::Text(t) => {
+            json!({
+                "type": "Text",
+                "start": t.span.start,
+                "end": t.span.end,
+                "raw": t.data,
+                "data": decode_entities(&t.data)
+            })
+        }
+        TemplateNode::Comment(c) => {
+            json!({
+                "type": "Comment",
+                "start": c.span.start,
+                "end": c.span.end,
+                "data": c.data
+            })
+        }
+        TemplateNode::Element(el) => {
+            let children: Vec<Value> = el.children.iter().map(|n| serialize_node_modern(n, source)).collect();
+            let attributes: Vec<Value> = el.attributes.iter().map(|_a| json!({})).collect();
+            let el_type = if el.name.starts_with(|c: char| c.is_uppercase()) || el.name.contains('.') {
+                "Component"
+            } else if el.name.starts_with("svelte:") {
+                match el.name.as_str() {
+                    "svelte:self" => "SvelteComponent",
+                    "svelte:component" => "SvelteComponent",
+                    "svelte:element" => "SvelteElement",
+                    "svelte:window" => "SvelteWindow",
+                    "svelte:document" => "SvelteDocument",
+                    "svelte:body" => "SvelteBody",
+                    "svelte:head" => "SvelteHead",
+                    "svelte:options" => "SvelteOptionsRaw",
+                    "svelte:fragment" => "SvelteFragment",
+                    "svelte:boundary" => "SvelteBoundary",
+                    _ => "RegularElement",
+                }
+            } else {
+                "RegularElement"
+            };
+            // Compute name_loc for the element name
+            let tag_text = &source[el.span.start as usize..];
+            let name_offset = tag_text.find(&el.name[..]).unwrap_or(1);
+            let name_s = el.span.start + name_offset as u32;
+            let name_e = name_s + el.name.len() as u32;
+            json!({
+                "type": el_type,
+                "start": el.span.start,
+                "end": el.span.end,
+                "name": el.name,
+                "name_loc": loc_json_with_char(source, name_s, name_e),
+                "attributes": attributes,
+                "fragment": {
+                    "type": "Fragment",
+                    "nodes": children
+                }
+            })
+        }
+        TemplateNode::MustacheTag(m) => {
+            let expr_start = m.span.start + 1;
+            json!({
+                "type": "ExpressionTag",
+                "start": m.span.start,
+                "end": m.span.end,
+                "expression": expression_to_estree(source, m.expression.trim(), expr_start)
+            })
+        }
+        TemplateNode::RawMustacheTag(r) => {
+            let tag_text = &source[r.span.start as usize..r.span.end as usize];
+            let expr_offset = tag_text.find(r.expression.trim_start()).unwrap_or(7);
+            let expr_start = r.span.start + expr_offset as u32;
+            json!({
+                "type": "HtmlTag",
+                "start": r.span.start,
+                "end": r.span.end,
+                "expression": expression_to_estree(source, r.expression.trim(), expr_start)
+            })
+        }
+        TemplateNode::IfBlock(block) => {
+            let src_at = &source[block.span.start as usize..];
+            let is_real_if = src_at.starts_with("{#if");
+            let expr_start = if is_real_if { block.span.start + 5 } else { block.span.start };
+            let consequent = serialize_fragment_modern(&block.consequent, source);
+            let alternate = block.alternate.as_ref().map(|alt| {
+                if let TemplateNode::IfBlock(alt_block) = alt.as_ref() {
+                    if alt_block.test.is_empty() && !source[alt_block.span.start as usize..].starts_with("{:else if") {
+                        // {:else} block → Fragment
+                        serialize_fragment_modern(&alt_block.consequent, source)
+                    } else {
+                        // {:else if} → nested IfBlock
+                        serialize_node_modern(alt.as_ref(), source)
+                    }
+                } else {
+                    json!(null)
+                }
+            });
+            json!({
+                "type": "IfBlock",
+                "elseif": false,
+                "start": block.span.start,
+                "end": block.span.end,
+                "test": expression_to_estree(source, block.test.trim(), expr_start),
+                "consequent": consequent,
+                "alternate": alternate
+            })
+        }
+        TemplateNode::EachBlock(block) => {
+            let expr_start = block.span.start + 7;
+            let body = serialize_fragment_modern(&block.body, source);
+            json!({
+                "type": "EachBlock",
+                "start": block.span.start,
+                "end": block.span.end,
+                "expression": expression_to_estree(source, block.expression.trim(), expr_start),
+                "body": body
+            })
+        }
+        TemplateNode::AwaitBlock(block) => {
+            let expr_start = block.span.start + 8;
+            json!({
+                "type": "AwaitBlock",
+                "start": block.span.start,
+                "end": block.span.end,
+                "expression": expression_to_estree(source, block.expression.trim(), expr_start)
+            })
+        }
+        TemplateNode::KeyBlock(block) => {
+            let expr_start = block.span.start + 6;
+            let body = serialize_fragment_modern(&block.body, source);
+            json!({
+                "type": "KeyBlock",
+                "start": block.span.start,
+                "end": block.span.end,
+                "expression": expression_to_estree(source, block.expression.trim(), expr_start),
+                "fragment": body
+            })
+        }
+        TemplateNode::SnippetBlock(block) => {
+            let body = serialize_fragment_modern(&block.body, source);
+            let actual_name = if let Some(angle) = block.name.find('<') { &block.name[..angle] } else { &block.name };
+            let tag_text = &source[block.span.start as usize..];
+            let name_start_rel = tag_text.find(actual_name).unwrap_or(10);
+            let name_start = block.span.start + name_start_rel as u32;
+            let name_end = name_start + actual_name.len() as u32;
+            json!({
+                "type": "SnippetBlock",
+                "start": block.span.start,
+                "end": block.span.end,
+                "expression": {
+                    "type": "Identifier",
+                    "name": actual_name,
+                    "start": name_start,
+                    "end": name_end
+                },
+                "body": body
+            })
+        }
+        TemplateNode::RenderTag(r) => {
+            let expr_start = r.span.start + 9;
+            json!({
+                "type": "RenderTag",
+                "start": r.span.start,
+                "end": r.span.end,
+                "expression": expression_to_estree(source, r.expression.trim(), expr_start)
+            })
+        }
+        TemplateNode::DebugTag(d) => {
+            json!({
+                "type": "DebugTag",
+                "start": d.span.start,
+                "end": d.span.end
+            })
+        }
+        TemplateNode::ConstTag(c) => {
+            json!({
+                "type": "ConstTag",
+                "start": c.span.start,
+                "end": c.span.end
+            })
+        }
+    }
+}
+
+/// Serialize a `SvelteAst` to the legacy Svelte JSON format.
 pub fn to_legacy_json(ast: &SvelteAst, source: &str) -> Value {
     let has_blocks = ast.css.is_some() || ast.instance.is_some() || ast.module.is_some();
     // Find the end of the last script/style block for filtering trailing whitespace
