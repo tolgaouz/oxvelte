@@ -21,6 +21,11 @@ mod no_svelte_internal;
 mod no_inline_styles;
 mod valid_each_key;
 mod no_not_function_handler;
+mod no_ignored_unsubscribe;
+mod no_inner_declarations;
+mod spaced_html_comment;
+mod no_trailing_spaces;
+mod require_event_dispatcher_types;
 
 use super::Rule;
 
@@ -44,6 +49,11 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(no_inline_styles::NoInlineStyles),
         Box::new(valid_each_key::ValidEachKey),
         Box::new(no_not_function_handler::NoNotFunctionHandler),
+        Box::new(no_ignored_unsubscribe::NoIgnoredUnsubscribe),
+        Box::new(no_inner_declarations::NoInnerDeclarations),
+        Box::new(spaced_html_comment::SpacedHtmlComment),
+        Box::new(no_trailing_spaces::NoTrailingSpaces),
+        Box::new(require_event_dispatcher_types::RequireEventDispatcherTypes),
     ]
 }
 
