@@ -709,7 +709,7 @@ fn estree_simple_assign_target(target: &oxc::ast::ast::SimpleAssignmentTarget<'_
     }
 }
 
-/// Filter out whitespace-only text nodes (Svelte compiler behavior).
+/// Filter out whitespace-only text nodes from block content.
 fn filter_whitespace_nodes(nodes: &[TemplateNode]) -> Vec<&TemplateNode> {
     nodes.iter()
         .filter(|n| {
@@ -720,6 +720,21 @@ fn filter_whitespace_nodes(nodes: &[TemplateNode]) -> Vec<&TemplateNode> {
             }
         })
         .collect()
+}
+
+/// For root fragments: only strip trailing whitespace-only text nodes.
+fn strip_trailing_whitespace(nodes: &[TemplateNode]) -> Vec<&TemplateNode> {
+    let mut result: Vec<&TemplateNode> = nodes.iter().collect();
+    while let Some(last) = result.last() {
+        if let TemplateNode::Text(t) = last {
+            if t.data.chars().all(|c| c.is_ascii_whitespace()) {
+                result.pop();
+                continue;
+            }
+        }
+        break;
+    }
+    result
 }
 
 /// Get the span end of a node.
@@ -756,7 +771,10 @@ pub fn to_legacy_json(ast: &SvelteAst, source: &str) -> Value {
 }
 
 fn serialize_fragment_legacy(fragment: &Fragment, source: &str) -> Value {
-    let (children, end) = serialize_filtered_children(&fragment.nodes, source, fragment.span.end);
+    // Root fragment: only strip trailing whitespace, keep all other nodes
+    let filtered = strip_trailing_whitespace(&fragment.nodes);
+    let children: Vec<Value> = filtered.iter().map(|n| serialize_node_legacy(n, source)).collect();
+    let end = filtered.last().map(|n| node_span_end(n)).unwrap_or(fragment.span.end);
     json!({
         "type": "Fragment",
         "start": fragment.span.start,
@@ -949,6 +967,8 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
                 let (else_children, _) = serialize_filtered_children(&fb.nodes, source, fb.span.end);
                 obj["else"] = json!({
                     "type": "ElseBlock",
+                    "start": fb.span.start,
+                    "end": fb.span.end,
                     "children": else_children
                 });
             }
@@ -1114,25 +1134,106 @@ fn serialize_attribute_legacy(attr: &Attribute, source: &str) -> Value {
             })
         }
         Attribute::Directive { kind, name, modifiers, span } => {
-            let prefix = match kind {
+            let type_name = match kind {
                 DirectiveKind::EventHandler => "EventHandler",
                 DirectiveKind::Binding => "Binding",
                 DirectiveKind::Class => "Class",
                 DirectiveKind::StyleDirective => "StyleDirective",
                 DirectiveKind::Use => "Action",
                 DirectiveKind::Transition => "Transition",
-                DirectiveKind::In => "InlineComponent", // approximate
-                DirectiveKind::Out => "OutlineComponent",
+                DirectiveKind::In => "Transition",
+                DirectiveKind::Out => "Transition",
                 DirectiveKind::Animate => "Animation",
                 DirectiveKind::Let => "Let",
             };
-            json!({
-                "type": prefix,
+
+            // Calculate name_loc: from directive start to end of directive name (prefix:name)
+            let attr_text = &source[span.start as usize..span.end as usize];
+            let colon_pos = attr_text.find(':').unwrap_or(0);
+            let name_start = span.start;
+            // name_loc covers the entire "prefix:name" part
+            let name_end_rel = if let Some(eq) = attr_text.find('=') {
+                eq
+            } else if let Some(pipe) = attr_text.find('|') {
+                pipe
+            } else {
+                attr_text.len()
+            };
+            let name_end = span.start + name_end_rel as u32;
+
+            // Parse expression from directive value if present
+            let expression = if let Some(eq_pos) = attr_text.find('=') {
+                let value_part = attr_text[eq_pos + 1..].trim_start();
+                if value_part.starts_with('{') && value_part.ends_with('}') {
+                    // Direct expression: ={expr}
+                    let expr_str = &value_part[1..value_part.len()-1];
+                    let brace_pos = attr_text[eq_pos..].find('{').unwrap_or(1);
+                    let expr_start = span.start + eq_pos as u32 + brace_pos as u32 + 1;
+                    Some(expression_to_estree(source, expr_str.trim(), expr_start))
+                } else if (value_part.starts_with('"') || value_part.starts_with('\''))
+                    && value_part.len() > 2
+                {
+                    // Quoted value: ="{expr}" or ="static"
+                    let inner = &value_part[1..value_part.len()-1];
+                    if inner.starts_with('{') && inner.ends_with('}') {
+                        // Quoted expression: ="{expr}"
+                        let expr_str = &inner[1..inner.len()-1];
+                        let brace_pos = attr_text[eq_pos..].find('{').unwrap_or(2);
+                        let expr_start = span.start + eq_pos as u32 + brace_pos as u32 + 1;
+                        Some(expression_to_estree(source, expr_str.trim(), expr_start))
+                    } else {
+                        // Static string value
+                        let val_start_rel = attr_text[eq_pos..].find(|c: char| c == '"' || c == '\'').unwrap_or(1);
+                        let val_start = span.start + eq_pos as u32 + val_start_rel as u32 + 1;
+                        let val_end = span.end - 1;
+                        Some(json!([{
+                            "type": "Text",
+                            "start": val_start,
+                            "end": val_end,
+                            "raw": inner,
+                            "data": inner
+                        }]))
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let mut obj = json!({
                 "start": span.start,
                 "end": span.end,
+                "type": type_name,
                 "name": name,
+                "name_loc": loc_json_with_char(source, name_start, name_end),
                 "modifiers": modifiers
-            })
+            });
+
+            if let Some(expr) = expression {
+                obj["expression"] = expr;
+            } else {
+                obj["expression"] = Value::Null;
+            }
+
+            // Add intro/outro for transitions
+            match kind {
+                DirectiveKind::Transition => {
+                    obj["intro"] = json!(true);
+                    obj["outro"] = json!(true);
+                }
+                DirectiveKind::In => {
+                    obj["intro"] = json!(true);
+                    obj["outro"] = json!(false);
+                }
+                DirectiveKind::Out => {
+                    obj["intro"] = json!(false);
+                    obj["outro"] = json!(true);
+                }
+                _ => {}
+            }
+
+            obj
         }
     }
 }
