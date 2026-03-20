@@ -70,9 +70,10 @@ fn extract_regions<'a>(source: &'a str) -> Regions<'a> {
         let Some(open_end_rel) = after_tag.find('>') else { break };
         let tag_attrs = &after_tag[..open_end_rel];
         let content_start = open_start + 7 + open_end_rel + 1;
-        let Some(close_rel) = source[content_start..].find("</script>") else { break };
+        let Some(close_rel) = find_close_tag(&source[content_start..], "script") else { break };
         let content_end = content_start + close_rel;
-        let block_end = content_end + "</script>".len();
+        let block_end = source[content_end..].find('>').map(|p| content_end + p + 1)
+            .unwrap_or(content_end + 9);
         let content = &source[content_start..content_end];
         let lang = extract_attr(tag_attrs, "lang");
         let is_module = tag_attrs.contains("context=\"module\"")
@@ -90,9 +91,13 @@ fn extract_regions<'a>(source: &'a str) -> Regions<'a> {
         if let Some(open_end_rel) = after_tag.find('>') {
             let tag_attrs = &after_tag[..open_end_rel];
             let content_start = open_start + 6 + open_end_rel + 1;
-            if let Some(close_rel) = source[content_start..].find("</style>") {
+            // Find </style> or </style followed by whitespace then >
+            if let Some(close_rel) = find_close_tag(&source[content_start..], "style") {
                 let content_end = content_start + close_rel;
-                let block_end = content_end + "</style>".len();
+                // Find the > after </style
+                let close_tag_start = content_end;
+                let block_end = source[close_tag_start..].find('>').map(|p| close_tag_start + p + 1)
+                    .unwrap_or(content_end + 8);
                 regions.style = Some(Region {
                     content: &source[content_start..content_end],
                     lang: extract_attr(tag_attrs, "lang"),
@@ -102,6 +107,24 @@ fn extract_regions<'a>(source: &'a str) -> Regions<'a> {
         }
     }
     regions
+}
+
+/// Find a closing tag like </tagname> or </tagname  \n  > (with whitespace).
+/// Returns the byte offset of `</tagname` relative to the input.
+fn find_close_tag(source: &str, tag_name: &str) -> Option<usize> {
+    let prefix = format!("</{}", tag_name);
+    let mut search_from = 0;
+    while let Some(pos) = source[search_from..].find(&prefix) {
+        let abs_pos = search_from + pos;
+        let after = &source[abs_pos + prefix.len()..];
+        // Check that next non-whitespace char is >
+        let trimmed = after.trim_start();
+        if trimmed.starts_with('>') {
+            return Some(abs_pos);
+        }
+        search_from = abs_pos + prefix.len();
+    }
+    None
 }
 
 fn extract_attr<'a>(attrs: &'a str, name: &str) -> Option<&'a str> {

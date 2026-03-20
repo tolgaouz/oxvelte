@@ -214,11 +214,37 @@ impl<'a> TemplateParser<'a> {
     /// Skip a `<script>` or `<style>` block entirely.
     fn skip_block(&mut self) -> Result<(), OxcDiagnostic> {
         let is_script = self.looking_at("<script");
-        let close_tag = if is_script { "</script>" } else { "</style>" };
+        let close_prefix = if is_script { "</script" } else { "</style" };
+        let close_tag_exact = if is_script { "</script>" } else { "</style>" };
 
-        self.eat_until(close_tag);
-        if self.looking_at(close_tag) {
-            self.pos += close_tag.len();
+        // Try exact match first, then prefix with whitespace
+        loop {
+            self.eat_until(close_prefix);
+            if self.pos >= self.source.len() {
+                break;
+            }
+            if self.looking_at(close_tag_exact) {
+                self.pos += close_tag_exact.len();
+                break;
+            }
+            if self.looking_at(close_prefix) {
+                let after = &self.source[self.pos + close_prefix.len()..];
+                if after.trim_start().starts_with('>') {
+                    // Skip to the >
+                    self.pos += close_prefix.len();
+                    while self.pos < self.source.len() && self.source.as_bytes()[self.pos] != b'>' {
+                        self.pos += 1;
+                    }
+                    if self.pos < self.source.len() {
+                        self.pos += 1; // skip >
+                    }
+                    break;
+                }
+                // Not a valid close tag, skip past this occurrence
+                self.pos += close_prefix.len();
+            } else {
+                break;
+            }
         }
         Ok(())
     }

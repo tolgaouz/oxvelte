@@ -898,7 +898,13 @@ pub fn to_legacy_json(ast: &SvelteAst, source: &str) -> Value {
 }
 
 fn serialize_css_legacy(style: &Style, source: &str) -> Value {
-    // Basic CSS serialization - just the raw content and span
+    // Find actual content boundaries in source
+    let tag_text = &source[style.span.start as usize..style.span.end as usize];
+    let content_start_rel = tag_text.find('>').map(|p| p + 1).unwrap_or(0);
+    let content_end_rel = tag_text.find("</style").unwrap_or(tag_text.len());
+    let content_start = style.span.start + content_start_rel as u32;
+    let content_end = style.span.start + content_end_rel as u32;
+
     json!({
         "type": "Style",
         "start": style.span.start,
@@ -906,8 +912,8 @@ fn serialize_css_legacy(style: &Style, source: &str) -> Value {
         "attributes": [],
         "children": [],
         "content": {
-            "start": style.span.start + 7 + style.lang.as_ref().map(|l| l.len() + 7).unwrap_or(0) as u32,
-            "end": style.span.end - 8,
+            "start": content_start,
+            "end": content_end,
             "styles": style.content,
             "comment": null
         }
