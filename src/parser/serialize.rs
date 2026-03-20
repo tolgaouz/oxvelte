@@ -1021,6 +1021,101 @@ fn decode_entities(s: &str) -> String {
     result
 }
 
+/// Convert legacy CSS AST to modern format (Selector → ComplexSelector/RelativeSelector).
+fn convert_css_to_modern(children: &[Value]) -> Vec<Value> {
+    children.iter().map(|child| {
+        let mut c = child.clone();
+        if let Some(obj) = c.as_object_mut() {
+            // Convert SelectorList children from Selector to ComplexSelector
+            if let Some(prelude) = obj.get_mut("prelude") {
+                convert_selector_list_modern(prelude);
+            }
+            // Convert block children recursively
+            if let Some(block) = obj.get_mut("block") {
+                if let Some(block_children) = block.get_mut("children") {
+                    if let Some(arr) = block_children.as_array_mut() {
+                        let converted = convert_css_to_modern(&arr.clone());
+                        *block_children = json!(converted);
+                    }
+                }
+            }
+        }
+        c
+    }).collect()
+}
+
+fn convert_selector_list_modern(selector_list: &mut Value) {
+    if let Some(obj) = selector_list.as_object_mut() {
+        if obj.get("type").and_then(|t| t.as_str()) == Some("SelectorList") {
+            if let Some(children) = obj.get_mut("children") {
+                if let Some(arr) = children.as_array_mut() {
+                    let converted: Vec<Value> = arr.iter().map(|selector| {
+                        convert_selector_to_complex(selector)
+                    }).collect();
+                    *children = json!(converted);
+                }
+            }
+        }
+    }
+}
+
+fn convert_selector_to_complex(selector: &Value) -> Value {
+    if let Some(obj) = selector.as_object() {
+        if obj.get("type").and_then(|t| t.as_str()) == Some("Selector") {
+            let start = obj.get("start").cloned().unwrap_or(json!(0));
+            let end = obj.get("end").cloned().unwrap_or(json!(0));
+            let children = obj.get("children").and_then(|c| c.as_array()).cloned().unwrap_or_default();
+
+            // Group children into RelativeSelectors (split on Combinator)
+            let mut relative_selectors = Vec::new();
+            let mut current_selectors = Vec::new();
+            let mut current_combinator = Value::Null;
+            let mut rel_start = start.clone();
+
+            for child in &children {
+                let child_type = child.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                if child_type == "Combinator" {
+                    if !current_selectors.is_empty() {
+                        let rel_end = current_selectors.last()
+                            .and_then(|s: &Value| s.get("end")).cloned().unwrap_or(json!(0));
+                        relative_selectors.push(json!({
+                            "type": "RelativeSelector",
+                            "combinator": current_combinator,
+                            "start": rel_start,
+                            "end": rel_end,
+                            "selectors": current_selectors
+                        }));
+                        current_selectors = Vec::new();
+                    }
+                    current_combinator = child.clone();
+                    rel_start = child.get("end").cloned().unwrap_or(json!(0));
+                } else {
+                    current_selectors.push(child.clone());
+                }
+            }
+            if !current_selectors.is_empty() {
+                let rel_end = current_selectors.last()
+                    .and_then(|s| s.get("end")).cloned().unwrap_or(end.clone());
+                relative_selectors.push(json!({
+                    "type": "RelativeSelector",
+                    "combinator": current_combinator,
+                    "start": rel_start,
+                    "end": rel_end,
+                    "selectors": current_selectors
+                }));
+            }
+
+            return json!({
+                "type": "ComplexSelector",
+                "start": start,
+                "end": end,
+                "children": relative_selectors
+            });
+        }
+    }
+    selector.clone()
+}
+
 /// Convert byte offsets to character offsets in a JSON value tree.
 fn convert_byte_to_char_offsets(value: &mut Value, source: &str) {
     match value {
@@ -1061,7 +1156,8 @@ pub fn to_modern_json(ast: &SvelteAst, source: &str) -> Value {
         let content_end_rel = tag_text.find("</style").unwrap_or(tag_text.len());
         let content_start = style.span.start + content_start_rel as u32;
         let content_end = style.span.start + content_end_rel as u32;
-        let children = crate::parser::css::parse_css_children(&style.content, content_start);
+        let legacy_children = crate::parser::css::parse_css_children(&style.content, content_start);
+        let children = convert_css_to_modern(&legacy_children);
         json!({
             "type": "StyleSheet",
             "start": style.span.start,
