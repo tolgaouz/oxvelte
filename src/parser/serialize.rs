@@ -1378,9 +1378,12 @@ pub fn to_modern_json(ast: &SvelteAst, source: &str) -> Value {
 }
 
 fn serialize_fragment_modern(fragment: &Fragment, source: &str) -> Value {
+    serialize_fragment_modern_ctx(fragment, source, false)
+}
+
+fn serialize_fragment_modern_ctx(fragment: &Fragment, source: &str, in_shadow_root: bool) -> Value {
     let nodes: Vec<Value> = fragment.nodes.iter()
         .filter(|n| {
-            // Filter whitespace-only text that's trailing
             if let TemplateNode::Text(t) = n {
                 if t.data.chars().all(|c| c.is_ascii_whitespace()) && t.span.end as usize >= source.len() - 1 {
                     return false;
@@ -1388,7 +1391,7 @@ fn serialize_fragment_modern(fragment: &Fragment, source: &str) -> Value {
             }
             true
         })
-        .map(|n| serialize_node_modern(n, source))
+        .map(|n| serialize_node_modern_ctx(n, source, in_shadow_root))
         .collect();
     json!({
         "type": "Fragment",
@@ -1397,6 +1400,10 @@ fn serialize_fragment_modern(fragment: &Fragment, source: &str) -> Value {
 }
 
 fn serialize_node_modern(node: &TemplateNode, source: &str) -> Value {
+    serialize_node_modern_ctx(node, source, false)
+}
+
+fn serialize_node_modern_ctx(node: &TemplateNode, source: &str, in_shadow_root: bool) -> Value {
     match node {
         TemplateNode::Text(t) => {
             json!({
@@ -1416,7 +1423,12 @@ fn serialize_node_modern(node: &TemplateNode, source: &str) -> Value {
             })
         }
         TemplateNode::Element(el) => {
-            let children: Vec<Value> = el.children.iter().map(|n| serialize_node_modern(n, source)).collect();
+            // Check if this is a <template shadowrootmode> element
+            let is_shadow = el.name == "template" && el.attributes.iter().any(|a| {
+                matches!(a, Attribute::NormalAttribute { name, .. } if name == "shadowrootmode")
+            });
+            let child_shadow = in_shadow_root || is_shadow;
+            let children: Vec<Value> = el.children.iter().map(|n| serialize_node_modern_ctx(n, source, child_shadow)).collect();
             let attributes: Vec<Value> = el.attributes.iter().map(|a| {
                 serialize_attribute_modern(a, source)
             }).collect();
@@ -1436,7 +1448,7 @@ fn serialize_node_modern(node: &TemplateNode, source: &str) -> Value {
                     "svelte:boundary" => "SvelteBoundary",
                     _ => "RegularElement",
                 }
-            } else if el.name == "slot" {
+            } else if el.name == "slot" && !in_shadow_root {
                 "SlotElement"
             } else {
                 "RegularElement"
@@ -1490,15 +1502,15 @@ fn serialize_node_modern(node: &TemplateNode, source: &str) -> Value {
             } else {
                 block.span.start
             };
-            let consequent = serialize_fragment_modern(&block.consequent, source);
+            let consequent = serialize_fragment_modern_ctx(&block.consequent, source, in_shadow_root);
             let alternate = block.alternate.as_ref().map(|alt| {
                 if let TemplateNode::IfBlock(alt_block) = alt.as_ref() {
                     if alt_block.test.is_empty() && !source[alt_block.span.start as usize..].starts_with("{:else if") {
                         // {:else} block → Fragment with children
-                        serialize_fragment_modern(&alt_block.consequent, source)
+                        serialize_fragment_modern_ctx(&alt_block.consequent, source, in_shadow_root)
                     } else {
                         // {:else if} → Fragment containing IfBlock with elseif:true
-                        let mut inner = serialize_node_modern(alt.as_ref(), source);
+                        let mut inner = serialize_node_modern_ctx(alt.as_ref(), source, in_shadow_root);
                         inner["elseif"] = json!(true);
                         // elseif IfBlock extends to the outer {/if}
                         inner["end"] = json!(block.span.end);
@@ -1523,7 +1535,7 @@ fn serialize_node_modern(node: &TemplateNode, source: &str) -> Value {
         }
         TemplateNode::EachBlock(block) => {
             let expr_start = block.span.start + 7;
-            let body = serialize_fragment_modern(&block.body, source);
+            let body = serialize_fragment_modern_ctx(&block.body, source, in_shadow_root);
             // Find context position
             let header = &source[block.span.start as usize..];
             let as_pos = header.find(" as ").map(|p| p + 4).unwrap_or(0);
@@ -1599,7 +1611,7 @@ fn serialize_node_modern(node: &TemplateNode, source: &str) -> Value {
         }
         TemplateNode::KeyBlock(block) => {
             let expr_start = block.span.start + 6;
-            let body = serialize_fragment_modern(&block.body, source);
+            let body = serialize_fragment_modern_ctx(&block.body, source, in_shadow_root);
             json!({
                 "type": "KeyBlock",
                 "start": block.span.start,
@@ -1609,7 +1621,7 @@ fn serialize_node_modern(node: &TemplateNode, source: &str) -> Value {
             })
         }
         TemplateNode::SnippetBlock(block) => {
-            let body = serialize_fragment_modern(&block.body, source);
+            let body = serialize_fragment_modern_ctx(&block.body, source, in_shadow_root);
             let actual_name = if let Some(angle) = block.name.find('<') { &block.name[..angle] } else { &block.name };
             let tag_text = &source[block.span.start as usize..];
             let name_start_rel = tag_text.find(actual_name).unwrap_or(10);
