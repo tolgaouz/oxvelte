@@ -502,6 +502,10 @@ impl<'a> TemplateParser<'a> {
                 || self.looking_at("/>")
                 || self.looking_at("</")
                 || self.looking_at("<")
+                || self.looking_at("{#")
+                || self.looking_at("{:")
+                || self.looking_at("{/")
+                || self.looking_at("{@")
             {
                 break;
             }
