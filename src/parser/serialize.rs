@@ -79,13 +79,12 @@ fn expression_to_estree(source: &str, expr_str: &str, expr_start: u32) -> Value 
     match result {
         Ok(expr) => estree_expr(&expr, source, expr_start),
         Err(_) => {
-            // Fallback: treat as raw identifier
+            // Fallback: empty identifier for invalid expressions (Svelte compiler behavior)
             json!({
                 "type": "Identifier",
                 "start": expr_start,
-                "end": expr_start + expr_str.len() as u32,
-                "loc": loc_json(source, expr_start, expr_start + expr_str.len() as u32),
-                "name": expr_str
+                "end": expr_start,
+                "name": ""
             })
         }
     }
