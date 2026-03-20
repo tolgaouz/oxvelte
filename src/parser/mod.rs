@@ -87,6 +87,14 @@ fn extract_regions<'a>(source: &'a str) -> Regions<'a> {
     }
 
     if let Some(open_start) = source.find("<style") {
+        // Skip <style> inside <svelte:head>
+        let before = &source[..open_start];
+        let in_svelte_head = before.rfind("<svelte:head").map(|head_start| {
+            !source[head_start..open_start].contains("</svelte:head")
+        }).unwrap_or(false);
+        if in_svelte_head {
+            return regions;
+        }
         let after_tag = &source[open_start + 6..];
         if let Some(open_end_rel) = after_tag.find('>') {
             let tag_attrs = &after_tag[..open_end_rel];

@@ -37,8 +37,8 @@ impl<'a> TemplateParser<'a> {
         let mut nodes = Vec::new();
 
         while self.pos < self.source.len() {
-            // Skip over <script> and <style> blocks entirely
-            if self.looking_at("<script") || self.looking_at("<style") {
+            // Skip over <script> and <style> blocks at top level only
+            if parent.is_none() && (self.looking_at("<script") || self.looking_at("<style")) {
                 self.skip_block()?;
                 continue;
             }
