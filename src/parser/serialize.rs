@@ -1579,6 +1579,28 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
         program["trailingComments"] = json!(comments);
     }
 
+    // Check for HTML comments before the script tag
+    let before_script = &source[..script.span.start as usize];
+    let mut leading = Vec::new();
+    let mut search_from = 0;
+    while let Some(start_pos) = before_script[search_from..].find("<!--") {
+        let abs_start = search_from + start_pos;
+        if let Some(end_rel) = before_script[abs_start + 4..].find("-->") {
+            let abs_end = abs_start + 4 + end_rel + 3;
+            let comment_data = &before_script[abs_start + 4..abs_start + 4 + end_rel];
+            leading.push(json!({
+                "type": "Line",
+                "value": comment_data
+            }));
+            search_from = abs_end;
+        } else {
+            break;
+        }
+    }
+    if !leading.is_empty() {
+        program["leadingComments"] = json!(leading);
+    }
+
     json!({
         "type": "Script",
         "start": script.span.start,
@@ -1603,17 +1625,40 @@ fn serialize_statement_legacy(stmt: &oxc::ast::ast::Statement<'_>, source: &str,
             let declarations: Vec<Value> = decl.declarations.iter().map(|d| {
                 let d_start = offset + d.span.start;
                 let d_end = offset + d.span.end;
-                let id = estree_binding_pat(&d.id, source, offset);
+                let mut id = estree_binding_pat(&d.id, source, offset);
                 let init = d.init.as_ref().map(|e| estree_expr(e, source, offset));
-                let mut obj = json!({
+                // Add typeAnnotation from VariableDeclarator to the id
+                if let Some(type_ann) = &d.type_annotation {
+                    if let Some(id_obj) = id.as_object_mut() {
+                        let ann_start = offset + type_ann.span.start;
+                        let ann_end = offset + type_ann.span.end;
+                        // Extend id end to include type annotation
+                        id_obj.insert("end".to_string(), json!(ann_end));
+                        let type_node = serialize_ts_type(&type_ann.type_annotation, source, offset);
+                        id_obj.insert("typeAnnotation".to_string(), json!({
+                            "type": "TSTypeAnnotation",
+                            "start": ann_start,
+                            "end": ann_end,
+                            "loc": loc_json(source, ann_start, ann_end),
+                            "typeAnnotation": type_node
+                        }));
+                        // Update loc end
+                        if let Some(loc) = id_obj.get_mut("loc") {
+                            if let Some(loc_obj) = loc.as_object_mut() {
+                                let (el, ec) = offset_to_loc(source, ann_end as usize);
+                                loc_obj.insert("end".to_string(), json!({"line": el, "column": ec}));
+                            }
+                        }
+                    }
+                }
+                json!({
                     "type": "VariableDeclarator",
                     "start": d_start,
                     "end": d_end,
                     "loc": loc_json(source, d_start, d_end),
                     "id": id,
                     "init": init
-                });
-                obj
+                })
             }).collect();
             json!({
                 "type": "VariableDeclaration",
