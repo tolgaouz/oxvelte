@@ -1510,15 +1510,45 @@ fn serialize_node_modern(node: &TemplateNode, source: &str) -> Value {
             let header = &source[block.span.start as usize..];
             let as_pos = header.find(" as ").map(|p| p + 4).unwrap_or(0);
             let ctx_start = block.span.start + as_pos as u32;
-            let context = if !block.context.is_empty() {
+            let context_str = &block.context;
+            let ctx_end = ctx_start + context_str.len() as u32;
+            let context = if context_str.is_empty() {
+                Value::Null
+            } else if context_str.starts_with('[') || context_str.starts_with('{') {
+                // Destructured pattern — parse with OXC
+                let wrapper = format!("var {} = x", context_str);
+                use oxc::allocator::Allocator;
+                use oxc::parser::Parser;
+                use oxc::span::SourceType;
+                let alloc = Allocator::default();
+                let result = Parser::new(&alloc, &wrapper, SourceType::mjs()).parse();
+                if let Some(stmt) = result.program.body.first() {
+                    if let oxc::ast::ast::Statement::VariableDeclaration(decl) = stmt {
+                        if let Some(declarator) = decl.declarations.first() {
+                            let mut pat = estree_binding_pat(&declarator.id, source, ctx_start - 4);
+                            // Add loc
+                            if let Some(obj) = pat.as_object_mut() {
+                                let s = obj.get("start").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                let e = obj.get("end").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                obj.insert("loc".to_string(), loc_json(source, s, e));
+                            }
+                            pat
+                        } else {
+                            json!({ "type": "Identifier", "name": context_str, "start": ctx_start, "end": ctx_end })
+                        }
+                    } else {
+                        json!({ "type": "Identifier", "name": context_str, "start": ctx_start, "end": ctx_end })
+                    }
+                } else {
+                    json!({ "type": "Identifier", "name": context_str, "start": ctx_start, "end": ctx_end })
+                }
+            } else {
                 json!({
                     "type": "Identifier",
-                    "name": block.context,
+                    "name": context_str,
                     "start": ctx_start,
-                    "end": ctx_start + block.context.len() as u32
+                    "end": ctx_end
                 })
-            } else {
-                Value::Null
             };
             let mut obj = json!({
                 "type": "EachBlock",
