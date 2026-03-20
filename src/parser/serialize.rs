@@ -1614,6 +1614,18 @@ fn serialize_attribute_legacy(attr: &Attribute, source: &str) -> Value {
             } else {
                 if let Some(expr) = expression {
                     obj["expression"] = expr;
+                } else if matches!(kind, DirectiveKind::Binding) {
+                    // Shorthand binding: bind:foo → expression is Identifier("foo")
+                    // Find the name position after the colon
+                    let colon_pos = attr_text.find(':').unwrap_or(0);
+                    let name_abs_start = span.start + colon_pos as u32 + 1;
+                    let name_abs_end = name_end;
+                    obj["expression"] = json!({
+                        "type": "Identifier",
+                        "start": name_abs_start,
+                        "end": name_abs_end,
+                        "name": name
+                    });
                 } else {
                     obj["expression"] = Value::Null;
                 }

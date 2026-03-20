@@ -394,18 +394,27 @@ impl<'a> TemplateParser<'a> {
             // Check if this is a directive
             if let Some(directive) = parse_directive_name(attr_name) {
                 // Check for value
+                let name_end = self.pos;
                 self.skip_whitespace();
                 if self.looking_at("=") {
                     self.eat("=")?;
                     self.skip_whitespace();
                     self.parse_attribute_value()?;
+                    attributes.push(Attribute::Directive {
+                        kind: directive.0,
+                        name: directive.1.to_string(),
+                        modifiers: directive.2.iter().map(|s| s.to_string()).collect(),
+                        span: Span::new(attr_start, self.pos as u32),
+                    });
+                } else {
+                    // No value — span ends at the directive name end
+                    attributes.push(Attribute::Directive {
+                        kind: directive.0,
+                        name: directive.1.to_string(),
+                        modifiers: directive.2.iter().map(|s| s.to_string()).collect(),
+                        span: Span::new(attr_start, name_end as u32),
+                    });
                 }
-                attributes.push(Attribute::Directive {
-                    kind: directive.0,
-                    name: directive.1.to_string(),
-                    modifiers: directive.2.iter().map(|s| s.to_string()).collect(),
-                    span: Span::new(attr_start, self.pos as u32),
-                });
                 continue;
             }
 
