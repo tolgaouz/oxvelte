@@ -35,6 +35,12 @@ mod shorthand_directive;
 mod no_reactive_literals;
 mod no_reactive_functions;
 mod no_useless_children_snippet;
+mod no_immutable_reactive_statements;
+mod no_dom_manipulating;
+mod no_reactive_reassign;
+mod no_store_async;
+mod prefer_class_directive;
+mod no_export_load_in_svelte_module_in_kit_pages;
 
 use super::Rule;
 
@@ -72,6 +78,12 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(no_reactive_literals::NoReactiveLiterals),
         Box::new(no_reactive_functions::NoReactiveFunctions),
         Box::new(no_useless_children_snippet::NoUselessChildrenSnippet),
+        Box::new(no_immutable_reactive_statements::NoImmutableReactiveStatements),
+        Box::new(no_dom_manipulating::NoDomManipulating),
+        Box::new(no_reactive_reassign::NoReactiveReassign),
+        Box::new(no_store_async::NoStoreAsync),
+        Box::new(prefer_class_directive::PreferClassDirective),
+        Box::new(no_export_load_in_svelte_module_in_kit_pages::NoExportLoadInSvelteModuleInKitPages),
     ]
 }
 
