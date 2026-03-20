@@ -28,6 +28,11 @@ impl<'a> TemplateParser<'a> {
 
     /// Parse the entire template into a fragment.
     fn parse_fragment(&mut self) -> Result<Fragment, OxcDiagnostic> {
+        self.parse_fragment_with_parent(None)
+    }
+
+    /// Parse a fragment, optionally with a parent element name for implicit closing.
+    fn parse_fragment_with_parent(&mut self, parent: Option<&str>) -> Result<Fragment, OxcDiagnostic> {
         let start = self.pos as u32;
         let mut nodes = Vec::new();
 
@@ -36,6 +41,16 @@ impl<'a> TemplateParser<'a> {
             if self.looking_at("<script") || self.looking_at("<style") {
                 self.skip_block()?;
                 continue;
+            }
+
+            // Check for implicit closing (e.g., <li> closes previous <li>)
+            if let Some(parent_name) = parent {
+                if self.looking_at("<") && !self.looking_at("</") && !self.looking_at("<!") {
+                    let peek_name = self.peek_tag_name();
+                    if should_implicitly_close(parent_name, &peek_name) {
+                        break;
+                    }
+                }
             }
 
             if self.looking_at("</") {
@@ -134,6 +149,15 @@ impl<'a> TemplateParser<'a> {
         {
             self.pos += 1;
         }
+    }
+
+    /// Peek at the next tag name without advancing the parser position.
+    fn peek_tag_name(&self) -> String {
+        let remaining = self.remaining();
+        if !remaining.starts_with('<') { return String::new(); }
+        let after_lt = &remaining[1..];
+        let end = after_lt.find(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_' && c != ':').unwrap_or(after_lt.len());
+        after_lt[..end].to_string()
     }
 
     /// Skip a `<script>` or `<style>` block entirely.
@@ -307,11 +331,10 @@ impl<'a> TemplateParser<'a> {
         let children = if self_closing || is_void {
             Vec::new()
         } else {
-            // Parse children until closing tag
-            let mut fragment = self.parse_fragment()?;
-            // Eat closing tag
-            let close_tag = format!("</{}>", name);
-            if self.looking_at(&format!("</{}",name)) {
+            // Parse children until closing tag (with implicit closing for li, p, etc.)
+            let fragment = self.parse_fragment_with_parent(Some(&name))?;
+            // Eat closing tag if present
+            if self.looking_at(&format!("</{}", name)) {
                 self.eat_until(">");
                 self.eat(">")?;
             }
@@ -796,6 +819,27 @@ fn parse_concat_value(value: &str) -> AttributeValue {
     }
 
     AttributeValue::Concat(parts)
+}
+
+/// Check if opening a new element should implicitly close the parent.
+fn should_implicitly_close(parent: &str, child: &str) -> bool {
+    match parent {
+        "li" => child == "li",
+        "dt" | "dd" => child == "dt" || child == "dd",
+        "p" => matches!(child, "address" | "article" | "aside" | "blockquote" | "details" | "div" |
+            "dl" | "fieldset" | "figcaption" | "figure" | "footer" | "form" | "h1" | "h2" |
+            "h3" | "h4" | "h5" | "h6" | "header" | "hgroup" | "hr" | "main" | "menu" | "nav" |
+            "ol" | "p" | "pre" | "section" | "table" | "ul"),
+        "rt" | "rp" => child == "rt" || child == "rp",
+        "optgroup" => child == "optgroup",
+        "option" => child == "option" || child == "optgroup",
+        "thead" => child == "tbody" || child == "tfoot",
+        "tbody" => child == "tbody" || child == "tfoot",
+        "tfoot" => child == "tbody",
+        "tr" => child == "tr",
+        "td" | "th" => child == "td" || child == "th" || child == "tr",
+        _ => false,
+    }
 }
 
 /// Check if an HTML element is a void element (self-closing by spec).
