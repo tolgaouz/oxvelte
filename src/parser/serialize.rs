@@ -1095,11 +1095,100 @@ fn serialize_statement_legacy(stmt: &oxc::ast::ast::Statement<'_>, source: &str,
         Statement::ImportDeclaration(imp) => {
             let start = offset + imp.span.start;
             let end = offset + imp.span.end;
+
+            let specifiers: Vec<Value> = imp.specifiers.as_ref().map(|specs| {
+                specs.iter().map(|spec| {
+                    use oxc::ast::ast::ImportDeclarationSpecifier;
+                    match spec {
+                        ImportDeclarationSpecifier::ImportSpecifier(s) => {
+                            let s_start = offset + s.span.start;
+                            let s_end = offset + s.span.end;
+                            let local_start = offset + s.local.span.start;
+                            let local_end = offset + s.local.span.end;
+                            let imported_span = match &s.imported {
+                                oxc::ast::ast::ModuleExportName::IdentifierName(id) => id.span,
+                                oxc::ast::ast::ModuleExportName::IdentifierReference(id) => id.span,
+                                oxc::ast::ast::ModuleExportName::StringLiteral(s) => s.span,
+                            };
+                            let imported_name = match &s.imported {
+                                oxc::ast::ast::ModuleExportName::IdentifierName(id) => id.name.as_str(),
+                                oxc::ast::ast::ModuleExportName::IdentifierReference(id) => id.name.as_str(),
+                                oxc::ast::ast::ModuleExportName::StringLiteral(s) => s.value.as_str(),
+                            };
+                            json!({
+                                "type": "ImportSpecifier",
+                                "start": s_start,
+                                "end": s_end,
+                                "loc": loc_json(source, s_start, s_end),
+                                "imported": {
+                                    "type": "Identifier",
+                                    "start": offset + imported_span.start,
+                                    "end": offset + imported_span.end,
+                                    "loc": loc_json(source, offset + imported_span.start, offset + imported_span.end),
+                                    "name": imported_name
+                                },
+                                "local": {
+                                    "type": "Identifier",
+                                    "start": local_start,
+                                    "end": local_end,
+                                    "loc": loc_json(source, local_start, local_end),
+                                    "name": s.local.name.as_str()
+                                }
+                            })
+                        }
+                        ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => {
+                            let s_start = offset + s.span.start;
+                            let s_end = offset + s.span.end;
+                            json!({
+                                "type": "ImportDefaultSpecifier",
+                                "start": s_start,
+                                "end": s_end,
+                                "loc": loc_json(source, s_start, s_end),
+                                "local": {
+                                    "type": "Identifier",
+                                    "start": offset + s.local.span.start,
+                                    "end": offset + s.local.span.end,
+                                    "name": s.local.name.as_str()
+                                }
+                            })
+                        }
+                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => {
+                            let s_start = offset + s.span.start;
+                            let s_end = offset + s.span.end;
+                            json!({
+                                "type": "ImportNamespaceSpecifier",
+                                "start": s_start,
+                                "end": s_end,
+                                "local": {
+                                    "type": "Identifier",
+                                    "start": offset + s.local.span.start,
+                                    "end": offset + s.local.span.end,
+                                    "name": s.local.name.as_str()
+                                }
+                            })
+                        }
+                    }
+                }).collect()
+            }).unwrap_or_default();
+
+            let s_start = offset + imp.source.span.start;
+            let s_end = offset + imp.source.span.end;
+            let source_val = json!({
+                "type": "Literal",
+                "start": s_start,
+                "end": s_end,
+                "loc": loc_json(source, s_start, s_end),
+                "value": imp.source.value.as_str(),
+                "raw": &source[s_start as usize..s_end as usize]
+            });
+
             json!({
                 "type": "ImportDeclaration",
                 "start": start,
                 "end": end,
-                "loc": loc_json(source, start, end)
+                "loc": loc_json(source, start, end),
+                "specifiers": specifiers,
+                "source": source_val
             })
         }
         Statement::ExportNamedDeclaration(exp) => {
