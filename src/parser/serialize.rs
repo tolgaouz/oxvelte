@@ -7,22 +7,45 @@
 use serde_json::{json, Value};
 use crate::ast::*;
 
+/// Convert a byte offset to a UTF-16 code unit offset (JavaScript string position).
+fn byte_to_char_offset(source: &str, byte_offset: usize) -> usize {
+    let mut utf16_offset = 0;
+    for ch in source[..byte_offset.min(source.len())].chars() {
+        utf16_offset += ch.len_utf16();
+    }
+    utf16_offset
+}
+
+/// Check if source contains multi-byte characters.
+fn has_multibyte(source: &str) -> bool {
+    source.len() != source.chars().count()
+}
+
 /// Compute line/column location info from a byte offset in source text.
 /// Line numbers are 1-based, columns are 0-based.
 fn offset_to_loc(source: &str, offset: usize) -> (usize, usize) {
     let mut line = 1;
-    let mut last_newline: isize = -1; // position of the last newline before offset
+    let mut col_utf16: usize = 0;
+    let mut last_newline_byte: isize = -1;
     for (i, ch) in source.char_indices() {
         if i >= offset {
             break;
         }
         if ch == '\n' {
             line += 1;
-            last_newline = i as isize;
+            last_newline_byte = i as isize;
+            col_utf16 = 0;
+        } else {
+            col_utf16 += ch.len_utf16();
         }
     }
-    let col = offset as isize - last_newline - 1;
-    (line, col.max(0) as usize)
+    // If source has multi-byte chars, use UTF-16 column; otherwise use byte column
+    if has_multibyte(source) {
+        (line, col_utf16)
+    } else {
+        let col = (offset as isize - last_newline_byte - 1).max(0) as usize;
+        (line, col)
+    }
 }
 
 fn loc_json(source: &str, start: u32, end: u32) -> Value {
@@ -925,6 +948,30 @@ fn decode_entities(s: &str) -> String {
     result
 }
 
+/// Convert byte offsets to character offsets in a JSON value tree.
+fn convert_byte_to_char_offsets(value: &mut Value, source: &str) {
+    match value {
+        Value::Object(map) => {
+            for key in &["start", "end", "character"] {
+                if let Some(v) = map.get_mut(*key) {
+                    if let Some(n) = v.as_u64() {
+                        *v = json!(byte_to_char_offset(source, n as usize));
+                    }
+                }
+            }
+            for (_, v) in map.iter_mut() {
+                convert_byte_to_char_offsets(v, source);
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                convert_byte_to_char_offsets(v, source);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Serialize a `SvelteAst` to the legacy Svelte JSON format.
 pub fn to_legacy_json(ast: &SvelteAst, source: &str) -> Value {
     let has_blocks = ast.css.is_some() || ast.instance.is_some() || ast.module.is_some();
@@ -984,6 +1031,11 @@ pub fn to_legacy_json(ast: &SvelteAst, source: &str) -> Value {
     }
     if !all_comments.is_empty() {
         root["_comments"] = json!(all_comments);
+    }
+
+    // Convert byte offsets to character offsets for sources with multi-byte characters
+    if has_multibyte(source) {
+        convert_byte_to_char_offsets(&mut root, source);
     }
 
     root
