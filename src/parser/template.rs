@@ -436,9 +436,13 @@ impl<'a> TemplateParser<'a> {
         let self_closing = if self.looking_at("/>") {
             self.eat("/>")?;
             true
-        } else {
+        } else if self.looking_at(">") {
             self.eat(">")?;
             false
+        } else {
+            // No > found — unclosed opening tag. Treat as self-closing.
+            // This handles cases like `<Comp foo={bar}` without closing >
+            true
         };
 
         let is_void = is_void_element(&name);
@@ -478,6 +482,8 @@ impl<'a> TemplateParser<'a> {
             if self.pos >= self.source.len()
                 || self.looking_at(">")
                 || self.looking_at("/>")
+                || self.looking_at("</")
+                || self.looking_at("<")
             {
                 break;
             }
