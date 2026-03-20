@@ -352,11 +352,12 @@ impl<'a> TemplateParser<'a> {
         let start = self.pos as u32;
         self.eat("<")?;
 
-        // Parse tag name
+        // Parse tag name (allow ! for <!doctype>)
         let name_start = self.pos;
         while self.pos < self.source.len() {
             let ch = self.source.as_bytes()[self.pos];
-            if ch.is_ascii_alphanumeric() || ch == b'-' || ch == b'_' || ch == b':' || ch == b'.' {
+            if ch.is_ascii_alphanumeric() || ch == b'-' || ch == b'_' || ch == b':' || ch == b'.'
+                || (ch == b'!' && self.pos == name_start) {
                 self.pos += 1;
             } else {
                 break;
@@ -542,15 +543,12 @@ impl<'a> TemplateParser<'a> {
                 Ok(AttributeValue::Static(value.to_string()))
             }
         } else {
-            // Unquoted value (read until whitespace or > or />)
+            // Unquoted value (read until whitespace or >)
+            // Note: / is allowed in unquoted values (e.g., href=/)
             let start = self.pos;
             while self.pos < self.source.len() {
                 let ch = self.source.as_bytes()[self.pos];
                 if ch.is_ascii_whitespace() || ch == b'>' {
-                    break;
-                }
-                // Only break on / if followed by > (self-closing)
-                if ch == b'/' && self.pos + 1 < self.source.len() && self.source.as_bytes()[self.pos + 1] == b'>' {
                     break;
                 }
                 self.pos += 1;
