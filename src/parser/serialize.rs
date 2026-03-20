@@ -894,6 +894,46 @@ pub fn to_legacy_json(ast: &SvelteAst, source: &str) -> Value {
         root["module"] = serialize_script_legacy(script, source, "module");
     }
 
+    // Collect all comments from scripts for root _comments field
+    let mut all_comments = Vec::new();
+    for script in [&ast.instance, &ast.module].into_iter().flatten() {
+        let tag_text = &source[script.span.start as usize..script.span.end as usize];
+        let content_start_rel = tag_text.find('>').map(|p| p + 1).unwrap_or(0);
+        let content_start = script.span.start + content_start_rel as u32;
+
+        use oxc::allocator::Allocator;
+        use oxc::parser::Parser;
+        use oxc::span::SourceType;
+        let alloc = Allocator::default();
+        let source_type = if script.lang.as_deref() == Some("ts") {
+            SourceType::ts()
+        } else {
+            SourceType::mjs()
+        };
+        let result = Parser::new(&alloc, &script.content, source_type).parse();
+        for c in result.program.comments.iter() {
+            let c_start = content_start + c.span.start;
+            let c_end = content_start + c.span.end;
+            let comment_type = if c.is_line() { "Line" } else { "Block" };
+            let value = &script.content[c.span.start as usize..c.span.end as usize];
+            let value = if c.is_line() {
+                value.strip_prefix("//").unwrap_or(value)
+            } else {
+                value.strip_prefix("/*").and_then(|v| v.strip_suffix("*/")).unwrap_or(value)
+            };
+            all_comments.push(json!({
+                "type": comment_type,
+                "value": value,
+                "start": c_start,
+                "end": c_end,
+                "loc": loc_json(source, c_start, c_end)
+            }));
+        }
+    }
+    if !all_comments.is_empty() {
+        root["_comments"] = json!(all_comments);
+    }
+
     root
 }
 
@@ -955,20 +995,48 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
         serialize_statement_legacy(stmt, source, content_start)
     }).collect();
 
-    json!({
+    // Serialize comments
+    let comments: Vec<Value> = result.program.comments.iter().map(|c| {
+        let c_start = content_start + c.span.start;
+        let c_end = content_start + c.span.end;
+        let comment_type = if c.is_line() { "Line" } else { "Block" };
+        let value = &script.content[c.span.start as usize..c.span.end as usize];
+        // Strip the comment delimiters
+        let value = if c.is_line() {
+            value.strip_prefix("//").unwrap_or(value)
+        } else {
+            value.strip_prefix("/*").and_then(|v| v.strip_suffix("*/")).unwrap_or(value)
+        };
+        json!({
+            "type": comment_type,
+            "value": value,
+            "start": c_start,
+            "end": c_end
+        })
+    }).collect();
+
+    let mut program = json!({
+        "type": "Program",
+        "start": content_start,
+        "end": program_end,
+        "loc": content_loc,
+        "body": body,
+        "sourceType": "module"
+    });
+
+    if !comments.is_empty() {
+        program["trailingComments"] = json!(comments);
+    }
+
+    let mut result_json = json!({
         "type": "Script",
         "start": script.span.start,
         "end": script.span.end,
         "context": context,
-        "content": {
-            "type": "Program",
-            "start": content_start,
-            "end": program_end,
-            "loc": content_loc,
-            "body": body,
-            "sourceType": "module"
-        }
-    })
+        "content": program
+    });
+
+    result_json
 }
 
 fn offset_to_loc_json(text: &str, offset: usize) -> Value {
