@@ -11,19 +11,18 @@ use crate::ast::*;
 /// Line numbers are 1-based, columns are 0-based.
 fn offset_to_loc(source: &str, offset: usize) -> (usize, usize) {
     let mut line = 1;
-    let mut col = 0;
+    let mut last_newline: isize = -1; // position of the last newline before offset
     for (i, ch) in source.char_indices() {
         if i >= offset {
             break;
         }
         if ch == '\n' {
             line += 1;
-            col = 0;
-        } else {
-            col += 1;
+            last_newline = i as isize;
         }
     }
-    (line, col)
+    let col = offset as isize - last_newline - 1;
+    (line, col.max(0) as usize)
 }
 
 fn loc_json(source: &str, start: u32, end: u32) -> Value {
