@@ -1823,12 +1823,14 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
 
             // value (then binding) — serialize as Identifier or null
             if let Some(binding) = &block.then_binding {
-                // Find binding position in source
+                // Find binding position in source (both {:then binding} and {#await expr then binding})
                 let src_text = &source[block.span.start as usize..block.span.end as usize];
-                if let Some(then_pos) = src_text.find(":then") {
-                    let after_then = &src_text[then_pos + 5..];
+                let then_keyword = src_text.find(":then").map(|p| (p, 5))
+                    .or_else(|| src_text.find(" then ").map(|p| (p + 1, 4)));
+                if let Some((then_pos, then_len)) = then_keyword {
+                    let after_then = &src_text[then_pos + then_len..];
                     let trimmed = after_then.trim_start();
-                    let binding_start = block.span.start + then_pos as u32 + 5
+                    let binding_start = block.span.start + then_pos as u32 + then_len as u32
                         + (after_then.len() - trimmed.len()) as u32;
                     let binding_end = binding_start + binding.len() as u32;
                     obj["value"] = json!({
@@ -1848,10 +1850,12 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
             // error (catch binding)
             if let Some(binding) = &block.catch_binding {
                 let src_text = &source[block.span.start as usize..block.span.end as usize];
-                if let Some(catch_pos) = src_text.find(":catch") {
-                    let after_catch = &src_text[catch_pos + 6..];
+                let catch_keyword = src_text.find(":catch").map(|p| (p, 6))
+                    .or_else(|| src_text.find(" catch ").map(|p| (p + 1, 5)));
+                if let Some((catch_pos, catch_len)) = catch_keyword {
+                    let after_catch = &src_text[catch_pos + catch_len..];
                     let trimmed = after_catch.trim_start();
-                    let binding_start = block.span.start + catch_pos as u32 + 6
+                    let binding_start = block.span.start + catch_pos as u32 + catch_len as u32
                         + (after_catch.len() - trimmed.len()) as u32;
                     let binding_end = binding_start + binding.len() as u32;
                     obj["error"] = json!({
