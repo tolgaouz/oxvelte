@@ -673,7 +673,36 @@ fn estree_property_key(key: &oxc::ast::ast::PropertyKey<'_>, source: &str, offse
 }
 
 fn estree_binding_pattern(pattern: &oxc::ast::ast::FormalParameter<'_>, source: &str, offset: u32) -> Value {
-    estree_binding_pat(&pattern.pattern, source, offset)
+    let mut result = estree_binding_pat(&pattern.pattern, source, offset);
+    // If the FormalParameter has a type annotation, use the FormalParameter's span
+    // and add typeAnnotation field
+    if let Some(type_ann) = &pattern.type_annotation {
+        let param_start = offset + pattern.span.start;
+        let param_end = offset + pattern.span.end;
+        // Update the end to include the type annotation
+        if let Some(obj) = result.as_object_mut() {
+            obj.insert("end".to_string(), json!(param_end));
+            if let Some(loc) = obj.get_mut("loc") {
+                if let Some(loc_obj) = loc.as_object_mut() {
+                    let (end_line, end_col) = offset_to_loc(source, param_end as usize);
+                    loc_obj.insert("end".to_string(), json!({"line": end_line, "column": end_col}));
+                }
+            }
+            // Add typeAnnotation with nested type
+            let ann_start = offset + type_ann.span.start;
+            let ann_end = offset + type_ann.span.end;
+            // Get the type keyword from the annotation
+            let type_node = serialize_ts_type(&type_ann.type_annotation, source, offset);
+            obj.insert("typeAnnotation".to_string(), json!({
+                "type": "TSTypeAnnotation",
+                "start": ann_start,
+                "end": ann_end,
+                "loc": loc_json(source, ann_start, ann_end),
+                "typeAnnotation": type_node
+            }));
+        }
+    }
+    result
 }
 
 fn estree_binding_pat(pat: &oxc::ast::ast::BindingPattern<'_>, source: &str, offset: u32) -> Value {
@@ -759,6 +788,38 @@ fn estree_binding_pat(pat: &oxc::ast::ast::BindingPattern<'_>, source: &str, off
             })
         }
     }
+}
+
+fn serialize_ts_type(ts_type: &oxc::ast::ast::TSType<'_>, source: &str, offset: u32) -> Value {
+    use oxc::ast::ast::TSType;
+    let span = match ts_type {
+        TSType::TSStringKeyword(t) => t.span,
+        TSType::TSNumberKeyword(t) => t.span,
+        TSType::TSBooleanKeyword(t) => t.span,
+        TSType::TSAnyKeyword(t) => t.span,
+        TSType::TSVoidKeyword(t) => t.span,
+        TSType::TSNullKeyword(t) => t.span,
+        TSType::TSUndefinedKeyword(t) => t.span,
+        _ => return json!({ "type": "TSUnknownType" }),
+    };
+    let start = offset + span.start;
+    let end = offset + span.end;
+    let type_name = match ts_type {
+        TSType::TSStringKeyword(_) => "TSStringKeyword",
+        TSType::TSNumberKeyword(_) => "TSNumberKeyword",
+        TSType::TSBooleanKeyword(_) => "TSBooleanKeyword",
+        TSType::TSAnyKeyword(_) => "TSAnyKeyword",
+        TSType::TSVoidKeyword(_) => "TSVoidKeyword",
+        TSType::TSNullKeyword(_) => "TSNullKeyword",
+        TSType::TSUndefinedKeyword(_) => "TSUndefinedKeyword",
+        _ => "TSUnknownType",
+    };
+    json!({
+        "type": type_name,
+        "start": start,
+        "end": end,
+        "loc": loc_json(source, start, end)
+    })
 }
 
 fn estree_assignment_target(target: &oxc::ast::ast::AssignmentTarget<'_>, source: &str, offset: u32) -> Value {
@@ -1039,11 +1100,13 @@ pub fn to_modern_json(ast: &SvelteAst, source: &str) -> Value {
                 let val_start = attr_start + eq_pos as u32 + 2;
                 let val_end = val_start + lang.len() as u32;
                 let attr_full_end = val_end + 1; // include closing quote
+                let name_end = attr_start + 4; // "lang" = 4 chars
                 attrs.push(json!({
                     "start": attr_start,
                     "end": attr_full_end,
                     "type": "Attribute",
                     "name": "lang",
+                    "name_loc": loc_json_with_char(source, attr_start, name_end),
                     "value": [{
                         "start": val_start,
                         "end": val_end,
@@ -1285,6 +1348,27 @@ fn serialize_node_modern(node: &TemplateNode, source: &str) -> Value {
             let name_start_rel = tag_text.find(actual_name).unwrap_or(10);
             let name_start = block.span.start + name_start_rel as u32;
             let name_end = name_start + actual_name.len() as u32;
+
+            // Parse parameters
+            let parameters = if !block.params.is_empty() {
+                let paren_start_rel = tag_text.find('(').unwrap_or(0);
+                let paren_start = block.span.start + paren_start_rel as u32;
+                let wrapper = format!("function f({}) {{}}", block.params);
+                use oxc::allocator::Allocator;
+                use oxc::parser::Parser;
+                use oxc::span::SourceType;
+                let alloc = Allocator::default();
+                let result = Parser::new(&alloc, &wrapper, SourceType::ts()).parse();
+                if let Some(stmt) = result.program.body.first() {
+                    if let oxc::ast::ast::Statement::FunctionDeclaration(func) = stmt {
+                        let params: Vec<Value> = func.params.items.iter().map(|p| {
+                            estree_binding_pattern(p, source, paren_start + 1 - 11)
+                        }).collect();
+                        json!(params)
+                    } else { json!([]) }
+                } else { json!([]) }
+            } else { json!([]) };
+
             json!({
                 "type": "SnippetBlock",
                 "start": block.span.start,
@@ -1293,8 +1377,10 @@ fn serialize_node_modern(node: &TemplateNode, source: &str) -> Value {
                     "type": "Identifier",
                     "name": actual_name,
                     "start": name_start,
-                    "end": name_end
+                    "end": name_end,
+                    "loc": loc_json_with_char(source, name_start, name_end)
                 },
+                "parameters": parameters,
                 "body": body
             })
         }
