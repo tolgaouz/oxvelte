@@ -1415,11 +1415,22 @@ fn serialize_fragment_legacy_root(fragment: &Fragment, source: &str, has_blocks:
     if end as usize == source.len() && source.ends_with('\n') {
         end -= 1;
     }
-    let start = filtered.iter()
-        .find(|n| !matches!(n, TemplateNode::Text(t) if t.data.chars().all(|c| c.is_ascii_whitespace())))
-        .map(|n| node_span_start(n))
-        .or_else(|| filtered.first().map(|n| node_span_start(n)))
-        .unwrap_or(fragment.span.start);
+    let has_non_whitespace = filtered.iter().any(|n| {
+        !matches!(n, TemplateNode::Text(t) if t.data.chars().all(|c| c.is_ascii_whitespace()))
+    });
+    let start;
+    if has_non_whitespace {
+        start = filtered.iter()
+            .find(|n| !matches!(n, TemplateNode::Text(t) if t.data.chars().all(|c| c.is_ascii_whitespace())))
+            .map(|n| node_span_start(n))
+            .unwrap_or(fragment.span.start);
+    } else if has_blocks && !filtered.is_empty() {
+        // Only whitespace between scripts — inverted range (Svelte compiler behavior)
+        start = filtered.last().map(|n| node_span_end(n)).unwrap_or(fragment.span.start);
+        end = filtered.first().map(|n| node_span_start(n)).unwrap_or(end);
+    } else {
+        start = filtered.first().map(|n| node_span_start(n)).unwrap_or(fragment.span.start);
+    }
     json!({
         "type": "Fragment",
         "start": start,
