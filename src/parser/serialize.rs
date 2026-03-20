@@ -1167,6 +1167,9 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
             // For svelte:component, extract the `this` attribute as `expression`
             let mut extra_fields = serde_json::Map::new();
             let mut filtered_attrs = el.attributes.clone();
+            // For svelte:element, the field name is "tag" instead of "expression"
+            let this_field_name = if el.name == "svelte:element" { "tag" } else { "expression" };
+
             if el.name == "svelte:component" || el.name == "svelte:element" {
                 if let Some(idx) = filtered_attrs.iter().position(|a| {
                     matches!(a, Attribute::NormalAttribute { name, .. } if name == "this")
@@ -1178,7 +1181,7 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
                                 let region = &source[span.start as usize..span.end as usize];
                                 let brace_pos = region.find('{').map(|p| p + 1).unwrap_or(0);
                                 let expr_start = span.start + brace_pos as u32;
-                                extra_fields.insert("expression".to_string(),
+                                extra_fields.insert(this_field_name.to_string(),
                                     expression_to_estree(source, expr.trim(), expr_start));
                             }
                             AttributeValue::Static(s) => {
@@ -1188,8 +1191,12 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
                                     let region = &source[span.start as usize..span.end as usize];
                                     let brace_pos = region.find('{').map(|p| p + 1).unwrap_or(0);
                                     let expr_start = span.start + brace_pos as u32;
-                                    extra_fields.insert("expression".to_string(),
+                                    extra_fields.insert(this_field_name.to_string(),
                                         expression_to_estree(source, expr_str.trim(), expr_start));
+                                } else {
+                                    // Plain string value: this="div"
+                                    extra_fields.insert(this_field_name.to_string(),
+                                        json!(inner));
                                 }
                             }
                             AttributeValue::Concat(parts) => {
@@ -1199,7 +1206,7 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
                                         let region = &source[span.start as usize..span.end as usize];
                                         let brace_pos = region.find('{').map(|p| p + 1).unwrap_or(0);
                                         let expr_start = span.start + brace_pos as u32;
-                                        extra_fields.insert("expression".to_string(),
+                                        extra_fields.insert(this_field_name.to_string(),
                                             expression_to_estree(source, expr.trim(), expr_start));
                                     }
                                 }
@@ -1216,7 +1223,7 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
                 match el.name.as_str() {
                     "svelte:self" => "InlineComponent",
                     "svelte:component" => "InlineComponent",
-                    "svelte:element" => "InlineComponent",
+                    "svelte:element" => "Element",
                     "svelte:window" => "Window",
                     "svelte:document" => "Document",
                     "svelte:body" => "Body",
