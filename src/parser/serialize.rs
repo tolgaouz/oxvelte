@@ -715,6 +715,34 @@ fn estree_binding_pattern(pattern: &oxc::ast::ast::FormalParameter<'_>, source: 
     result
 }
 
+/// Adjust all column values +1 in loc objects for multi-line destructured patterns.
+/// The Svelte compiler uses acorn which has a different column convention for patterns.
+fn adjust_binding_columns(value: &mut Value, source: &str) {
+    match value {
+        Value::Object(map) => {
+            // Check if this is a loc-like object with line/column
+            if map.contains_key("line") && map.contains_key("column") {
+                if let Some(line) = map.get("line").and_then(|v| v.as_u64()) {
+                    if line > 1 {
+                        if let Some(col) = map.get("column").and_then(|v| v.as_u64()) {
+                            map.insert("column".to_string(), json!(col + 1));
+                        }
+                    }
+                }
+            }
+            for (_, v) in map.iter_mut() {
+                adjust_binding_columns(v, source);
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                adjust_binding_columns(v, source);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn estree_binding_pat(pat: &oxc::ast::ast::BindingPattern<'_>, source: &str, offset: u32) -> Value {
     match pat {
         oxc::ast::ast::BindingPattern::BindingIdentifier(ident) => {
@@ -1760,12 +1788,13 @@ fn serialize_node_modern_ctx(node: &TemplateNode, source: &str, in_shadow_root: 
                     if let oxc::ast::ast::Statement::VariableDeclaration(decl) = stmt {
                         if let Some(declarator) = decl.declarations.first() {
                             let mut pat = estree_binding_pat(&declarator.id, source, ctx_start - 4);
-                            // Add loc
+                            // Add loc and adjust columns for destructured patterns
                             if let Some(obj) = pat.as_object_mut() {
                                 let s = obj.get("start").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                                 let e = obj.get("end").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                                 obj.insert("loc".to_string(), loc_json(source, s, e));
                             }
+                            adjust_binding_columns(&mut pat, source);
                             pat
                         } else {
                             json!({ "type": "Identifier", "name": context_str, "start": ctx_start, "end": ctx_end })
@@ -2728,7 +2757,9 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
                     if let oxc::ast::ast::Statement::VariableDeclaration(decl) = stmt {
                         if let Some(declarator) = decl.declarations.first() {
                             // Offset: ctx_start minus the "var " prefix (4 chars)
-                            estree_binding_pat(&declarator.id, source, ctx_start - 4)
+                            let mut pat = estree_binding_pat(&declarator.id, source, ctx_start - 4);
+                            adjust_binding_columns(&mut pat, source);
+                            pat
                         } else {
                             json!({ "type": "Identifier", "name": context_str, "start": ctx_start, "end": ctx_end })
                         }
