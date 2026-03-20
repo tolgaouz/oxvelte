@@ -1328,7 +1328,25 @@ fn convert_byte_to_char_offsets(value: &mut Value, source: &str) {
 /// Serialize a `SvelteAst` to the legacy Svelte JSON format.
 /// Serialize a `SvelteAst` to the modern Svelte 5 JSON format.
 pub fn to_modern_json(ast: &SvelteAst, source: &str) -> Value {
-    let fragment = serialize_fragment_modern(&ast.html, source);
+    let mut fragment = serialize_fragment_modern(&ast.html, source);
+
+    // Extract <svelte:options> from fragment and put in root.options
+    let mut options_val = Value::Null;
+    if let Some(nodes) = fragment.get_mut("nodes") {
+        if let Some(arr) = nodes.as_array_mut() {
+            if let Some(idx) = arr.iter().position(|n| {
+                n.get("type").and_then(|t| t.as_str()) == Some("SvelteOptionsRaw")
+            }) {
+                let options_node = arr.remove(idx);
+                // Build options from the SvelteOptionsRaw element
+                options_val = json!({
+                    "start": options_node.get("start"),
+                    "end": options_node.get("end"),
+                    "attributes": options_node.get("attributes").cloned().unwrap_or(json!([]))
+                });
+            }
+        }
+    }
 
     // Strip trailing whitespace from fragment nodes
     let source_len = source.len() as u32;
@@ -1411,11 +1429,18 @@ pub fn to_modern_json(ast: &SvelteAst, source: &str) -> Value {
         "end": end,
         "type": "Root",
         "fragment": fragment,
-        "options": null
+        "options": options_val
     });
 
     if ast.instance.is_some() {
         root["instance"] = instance_val;
+    }
+
+    // Add module script in modern format
+    if let Some(module) = &ast.module {
+        let mut m = serialize_script_legacy(module, source, "module");
+        m["attributes"] = json!([]);
+        root["module"] = m;
     }
 
     if has_multibyte(source) {
