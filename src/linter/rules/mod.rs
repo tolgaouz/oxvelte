@@ -8,12 +8,19 @@ mod no_at_html_tags;
 mod no_at_debug_tags;
 mod no_dupe_else_if_blocks;
 mod no_dupe_style_properties;
+mod no_dupe_use_directives;
+mod no_dupe_on_directives;
 mod require_each_key;
 mod no_object_in_text_mustaches;
 mod no_useless_mustaches;
 mod no_target_blank;
 mod button_has_type;
 mod no_raw_special_elements;
+mod no_inspect;
+mod no_svelte_internal;
+mod no_inline_styles;
+mod valid_each_key;
+mod no_not_function_handler;
 
 use super::Rule;
 
@@ -24,12 +31,19 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(no_at_debug_tags::NoAtDebugTags),
         Box::new(no_dupe_else_if_blocks::NoDupeElseIfBlocks),
         Box::new(no_dupe_style_properties::NoDupeStyleProperties),
+        Box::new(no_dupe_use_directives::NoDupeUseDirectives),
+        Box::new(no_dupe_on_directives::NoDupeOnDirectives),
         Box::new(require_each_key::RequireEachKey),
         Box::new(no_object_in_text_mustaches::NoObjectInTextMustaches),
         Box::new(no_useless_mustaches::NoUselessMustaches),
         Box::new(no_target_blank::NoTargetBlank),
         Box::new(button_has_type::ButtonHasType),
         Box::new(no_raw_special_elements::NoRawSpecialElements),
+        Box::new(no_inspect::NoInspect),
+        Box::new(no_svelte_internal::NoSvelteInternal),
+        Box::new(no_inline_styles::NoInlineStyles),
+        Box::new(valid_each_key::ValidEachKey),
+        Box::new(no_not_function_handler::NoNotFunctionHandler),
     ]
 }
 
