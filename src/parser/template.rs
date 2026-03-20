@@ -547,6 +547,30 @@ impl<'a> TemplateParser<'a> {
         loop {
             self.skip_whitespace();
 
+            // Skip JS-style comments between attributes
+            loop {
+                if self.looking_at("//") {
+                    // Line comment: skip to end of line
+                    while self.pos < self.source.len() && self.source.as_bytes()[self.pos] != b'\n' {
+                        self.pos += 1;
+                    }
+                    self.skip_whitespace();
+                } else if self.looking_at("/*") {
+                    // Block comment: skip to */
+                    self.pos += 2;
+                    while self.pos + 1 < self.source.len() {
+                        if self.source.as_bytes()[self.pos] == b'*' && self.source.as_bytes()[self.pos + 1] == b'/' {
+                            self.pos += 2;
+                            break;
+                        }
+                        self.pos += 1;
+                    }
+                    self.skip_whitespace();
+                } else {
+                    break;
+                }
+            }
+
             if self.pos >= self.source.len()
                 || self.looking_at(">")
                 || self.looking_at("/>")
