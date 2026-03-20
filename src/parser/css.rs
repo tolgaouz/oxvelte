@@ -425,14 +425,24 @@ impl<'a> CssParser<'a> {
         self.pos += 1; // skip :
         self.skip_whitespace();
 
-        // Read value
+        // Read value (skip quoted strings)
         let val_start = self.pos;
         while self.pos < self.source.len() {
             let ch = self.source.as_bytes()[self.pos];
             if ch == b';' || ch == b'}' {
                 break;
             }
-            self.pos += 1;
+            if ch == b'"' || ch == b'\'' {
+                let q = ch;
+                self.pos += 1;
+                while self.pos < self.source.len() && self.source.as_bytes()[self.pos] != q {
+                    if self.source.as_bytes()[self.pos] == b'\\' { self.pos += 1; }
+                    self.pos += 1;
+                }
+                if self.pos < self.source.len() { self.pos += 1; }
+            } else {
+                self.pos += 1;
+            }
         }
 
         let value = self.source[val_start..self.pos].trim();
@@ -462,14 +472,46 @@ impl<'a> CssParser<'a> {
 
         self.skip_whitespace();
 
-        // Read prelude until { or ;
+        // Read prelude until { or ; (skip quoted strings)
         let prelude_start = self.pos;
         while self.pos < self.source.len() {
             let ch = self.source.as_bytes()[self.pos];
             if ch == b'{' || ch == b';' {
                 break;
             }
-            self.pos += 1;
+            if ch == b'"' || ch == b'\'' {
+                // Skip quoted string
+                let quote = ch;
+                self.pos += 1;
+                while self.pos < self.source.len() && self.source.as_bytes()[self.pos] != quote {
+                    if self.source.as_bytes()[self.pos] == b'\\' { self.pos += 1; }
+                    self.pos += 1;
+                }
+                if self.pos < self.source.len() { self.pos += 1; } // skip closing quote
+            } else if ch == b'(' {
+                // Skip parenthesized content (for url(...))
+                self.pos += 1;
+                let mut depth = 1;
+                while self.pos < self.source.len() && depth > 0 {
+                    match self.source.as_bytes()[self.pos] {
+                        b'(' => depth += 1,
+                        b')' => depth -= 1,
+                        b'"' | b'\'' => {
+                            let q = self.source.as_bytes()[self.pos];
+                            self.pos += 1;
+                            while self.pos < self.source.len() && self.source.as_bytes()[self.pos] != q {
+                                if self.source.as_bytes()[self.pos] == b'\\' { self.pos += 1; }
+                                self.pos += 1;
+                            }
+                        }
+                        _ => {}
+                    }
+                    if depth > 0 { self.pos += 1; }
+                }
+                if self.pos < self.source.len() { self.pos += 1; }
+            } else {
+                self.pos += 1;
+            }
         }
         let prelude = self.source[prelude_start..self.pos].trim().to_string();
 
