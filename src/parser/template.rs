@@ -803,14 +803,50 @@ impl<'a> TemplateParser<'a> {
         let start = self.pos as u32;
         self.eat("{#await")?;
         self.skip_whitespace();
-        let expression = self.eat_until("}").trim().to_string();
+        let header = self.eat_until("}").trim().to_string();
         self.eat("}")?;
 
-        let pending = Some(self.parse_fragment()?);
-        let mut then = None;
-        let mut then_binding = None;
-        let mut catch = None;
-        let mut catch_binding = None;
+        // Check for shorthand: {#await expr then name} or {#await expr catch name}
+        let (expression, mut then, mut then_binding, mut catch, mut catch_binding, pending);
+
+        if let Some(then_pos) = header.find(" then ") {
+            expression = header[..then_pos].trim().to_string();
+            let binding = header[then_pos + 6..].trim().to_string();
+            if !binding.is_empty() { then_binding = Some(binding); } else { then_binding = None; }
+            pending = None;
+            then = Some(self.parse_fragment()?);
+            catch = None;
+            catch_binding = None;
+        } else if header.ends_with(" then") {
+            expression = header[..header.len() - 5].trim().to_string();
+            then_binding = None;
+            pending = None;
+            then = Some(self.parse_fragment()?);
+            catch = None;
+            catch_binding = None;
+        } else if let Some(catch_pos) = header.find(" catch ") {
+            expression = header[..catch_pos].trim().to_string();
+            let binding = header[catch_pos + 7..].trim().to_string();
+            if !binding.is_empty() { catch_binding = Some(binding); } else { catch_binding = None; }
+            pending = None;
+            then = None;
+            then_binding = None;
+            catch = Some(self.parse_fragment()?);
+        } else if header.ends_with(" catch") {
+            expression = header[..header.len() - 6].trim().to_string();
+            catch_binding = None;
+            pending = None;
+            then = None;
+            then_binding = None;
+            catch = Some(self.parse_fragment()?);
+        } else {
+            expression = header;
+            pending = Some(self.parse_fragment()?);
+            then = None;
+            then_binding = None;
+            catch = None;
+            catch_binding = None;
+        };
 
         if self.looking_at("{:then") {
             let then_tag_start = self.pos as u32;

@@ -77,13 +77,14 @@ fn expression_to_estree(source: &str, expr_str: &str, expr_start: u32) -> Value 
     let result = Parser::new(&alloc, expr_str, source_type).parse_expression();
 
     match result {
-        Ok(expr) => estree_expr(&expr, source, expr_start),
-        Err(_) => {
+        Ok(expr) if !expr_str.ends_with('.') => estree_expr(&expr, source, expr_start),
+        _ => {
             // Fallback: empty identifier for invalid expressions (Svelte compiler behavior)
+            let expr_end = expr_start + expr_str.len() as u32;
             json!({
                 "type": "Identifier",
                 "start": expr_start,
-                "end": expr_start,
+                "end": expr_end,
                 "name": ""
             })
         }
