@@ -876,7 +876,8 @@ fn decode_entities(s: &str) -> String {
 
 /// Serialize a `SvelteAst` to the legacy Svelte JSON format.
 pub fn to_legacy_json(ast: &SvelteAst, source: &str) -> Value {
-    let html = serialize_fragment_legacy(&ast.html, source);
+    let has_blocks = ast.css.is_some() || ast.instance.is_some() || ast.module.is_some();
+    let html = serialize_fragment_legacy_root(&ast.html, source, has_blocks);
     let mut root = json!({ "html": html });
 
     // Add css if present
@@ -1275,6 +1276,34 @@ fn serialize_statement_legacy_from_decl(decl: &oxc::ast::ast::Declaration<'_>, s
         }
         _ => json!({ "type": "UnknownDeclaration" })
     }
+}
+
+fn serialize_fragment_legacy_root(fragment: &Fragment, source: &str, has_blocks: bool) -> Value {
+    // For root with script/style blocks: keep all nodes (including trailing whitespace before blocks)
+    // For root without blocks: strip trailing whitespace
+    let filtered = if has_blocks {
+        fragment.nodes.iter().collect::<Vec<_>>()
+    } else {
+        strip_trailing_whitespace(&fragment.nodes)
+    };
+    let children: Vec<Value> = filtered.iter().map(|n| serialize_node_legacy(n, source)).collect();
+    // Fragment end: use the last NON-whitespace child's end
+    let end = filtered.iter().rev()
+        .find(|n| !matches!(n, TemplateNode::Text(t) if t.data.chars().all(|c| c.is_ascii_whitespace())))
+        .map(|n| node_span_end(n))
+        .or_else(|| filtered.last().map(|n| node_span_end(n)))
+        .unwrap_or(fragment.span.end);
+    let start = filtered.iter()
+        .find(|n| !matches!(n, TemplateNode::Text(t) if t.data.chars().all(|c| c.is_ascii_whitespace())))
+        .map(|n| node_span_start(n))
+        .or_else(|| filtered.first().map(|n| node_span_start(n)))
+        .unwrap_or(fragment.span.start);
+    json!({
+        "type": "Fragment",
+        "start": start,
+        "end": end,
+        "children": children
+    })
 }
 
 fn serialize_fragment_legacy(fragment: &Fragment, source: &str) -> Value {
