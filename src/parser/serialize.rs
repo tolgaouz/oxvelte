@@ -1021,6 +1021,118 @@ fn decode_entities(s: &str) -> String {
     result
 }
 
+fn serialize_attribute_modern(attr: &Attribute, source: &str) -> Value {
+    match attr {
+        Attribute::NormalAttribute { name, value, span } => {
+            if name == "@attach" {
+                // AttachTag
+                if let AttributeValue::Expression(expr) = value {
+                    let region = &source[span.start as usize..span.end as usize];
+                    let brace_pos = region.find(expr.chars().next().unwrap_or('(')).unwrap_or(9);
+                    let expr_start = span.start + brace_pos as u32;
+                    return json!({
+                        "type": "AttachTag",
+                        "start": span.start,
+                        "end": span.end,
+                        "expression": expression_to_estree(source, expr.trim(), expr_start)
+                    });
+                }
+            }
+            // Regular attribute
+            let tag_region = &source[span.start as usize..span.end as usize];
+            let name_offset = tag_region.find(name.as_str()).unwrap_or(0);
+            let n_start = span.start + name_offset as u32;
+            let n_end = n_start + name.len() as u32;
+            let value_json = serialize_attr_value_legacy(value, source, span);
+            json!({
+                "type": "Attribute",
+                "start": span.start,
+                "end": span.end,
+                "name": name,
+                "name_loc": loc_json_with_char(source, n_start, n_end),
+                "value": value_json
+            })
+        }
+        Attribute::Spread { span } => {
+            let region = &source[span.start as usize..span.end as usize];
+            let expr_str = region.trim_start_matches('{').trim_start_matches("...").trim_end_matches('}');
+            let expr_start_offset = region.find("...").map(|p| p + 3).unwrap_or(1);
+            let expr_start = span.start + expr_start_offset as u32;
+            json!({
+                "type": "SpreadAttribute",
+                "start": span.start,
+                "end": span.end,
+                "expression": expression_to_estree(source, expr_str.trim(), expr_start)
+            })
+        }
+        Attribute::Directive { kind, name, modifiers, span } => {
+            let type_name = match kind {
+                DirectiveKind::EventHandler => "OnDirective",
+                DirectiveKind::Binding => "BindDirective",
+                DirectiveKind::Class => "ClassDirective",
+                DirectiveKind::StyleDirective => "StyleDirective",
+                DirectiveKind::Use => "UseDirective",
+                DirectiveKind::Transition => "TransitionDirective",
+                DirectiveKind::In => "TransitionDirective",
+                DirectiveKind::Out => "TransitionDirective",
+                DirectiveKind::Animate => "AnimateDirective",
+                DirectiveKind::Let => "LetDirective",
+            };
+
+            let attr_text = &source[span.start as usize..span.end as usize];
+
+            // Parse expression from directive value
+            let expression = if let Some(eq_pos) = attr_text.find('=') {
+                let value_part = attr_text[eq_pos + 1..].trim_start();
+                if value_part.starts_with('{') && value_part.ends_with('}') {
+                    let expr_str = &value_part[1..value_part.len()-1];
+                    let brace_pos = attr_text[eq_pos..].find('{').unwrap_or(1);
+                    let expr_start = span.start + eq_pos as u32 + brace_pos as u32 + 1;
+                    Some(expression_to_estree(source, expr_str.trim(), expr_start))
+                } else if (value_part.starts_with('"') || value_part.starts_with('\'')) && value_part.len() > 2 {
+                    let inner = &value_part[1..value_part.len()-1];
+                    if inner.starts_with('{') && inner.ends_with('}') {
+                        let expr_str = &inner[1..inner.len()-1];
+                        let brace_pos = attr_text[eq_pos..].find('{').unwrap_or(2);
+                        let expr_start = span.start + eq_pos as u32 + brace_pos as u32 + 1;
+                        Some(expression_to_estree(source, expr_str.trim(), expr_start))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let mut obj = json!({
+                "type": type_name,
+                "start": span.start,
+                "end": span.end,
+                "name": name,
+                "modifiers": modifiers
+            });
+
+            if let Some(expr) = expression {
+                obj["expression"] = expr;
+            } else {
+                obj["expression"] = Value::Null;
+            }
+
+            // Add intro/outro for transitions
+            match kind {
+                DirectiveKind::Transition => { obj["intro"] = json!(true); obj["outro"] = json!(true); }
+                DirectiveKind::In => { obj["intro"] = json!(true); obj["outro"] = json!(false); }
+                DirectiveKind::Out => { obj["intro"] = json!(false); obj["outro"] = json!(true); }
+                _ => {}
+            }
+
+            obj
+        }
+    }
+}
+
 /// Convert legacy CSS AST to modern format (Selector → ComplexSelector/RelativeSelector).
 fn convert_css_to_modern(children: &[Value]) -> Vec<Value> {
     children.iter().map(|child| {
@@ -1281,26 +1393,7 @@ fn serialize_node_modern(node: &TemplateNode, source: &str) -> Value {
         TemplateNode::Element(el) => {
             let children: Vec<Value> = el.children.iter().map(|n| serialize_node_modern(n, source)).collect();
             let attributes: Vec<Value> = el.attributes.iter().map(|a| {
-                match a {
-                    Attribute::NormalAttribute { name, value, span } if name == "@attach" => {
-                        // AttachTag
-                        if let AttributeValue::Expression(expr) = value {
-                            let region = &source[span.start as usize..span.end as usize];
-                            let expr_start_rel = region.find(|c: char| c != '{' && c != '@' && c != 'a' && c != 't' && c != 'c' && c != 'h' && c != ' ').unwrap_or(10);
-                            let brace_pos = region.find(expr.chars().next().unwrap_or('(')).unwrap_or(9);
-                            let expr_start = span.start + brace_pos as u32;
-                            json!({
-                                "type": "AttachTag",
-                                "start": span.start,
-                                "end": span.end,
-                                "expression": expression_to_estree(source, expr.trim(), expr_start)
-                            })
-                        } else {
-                            json!({})
-                        }
-                    }
-                    _ => json!({})
-                }
+                serialize_attribute_modern(a, source)
             }).collect();
             let el_type = if el.name.starts_with(|c: char| c.is_uppercase()) || el.name.contains('.') {
                 "Component"
@@ -1318,6 +1411,8 @@ fn serialize_node_modern(node: &TemplateNode, source: &str) -> Value {
                     "svelte:boundary" => "SvelteBoundary",
                     _ => "RegularElement",
                 }
+            } else if el.name == "slot" {
+                "SlotElement"
             } else {
                 "RegularElement"
             };
