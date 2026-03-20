@@ -1182,16 +1182,30 @@ fn serialize_node_modern(node: &TemplateNode, source: &str) -> Value {
         TemplateNode::IfBlock(block) => {
             let src_at = &source[block.span.start as usize..];
             let is_real_if = src_at.starts_with("{#if");
-            let expr_start = if is_real_if { block.span.start + 5 } else { block.span.start };
+            let is_else_if = src_at.starts_with("{:else if");
+            let expr_start = if is_real_if {
+                block.span.start + 5 // skip "{#if "
+            } else if is_else_if {
+                block.span.start + 10 // skip "{:else if "
+            } else {
+                block.span.start
+            };
             let consequent = serialize_fragment_modern(&block.consequent, source);
             let alternate = block.alternate.as_ref().map(|alt| {
                 if let TemplateNode::IfBlock(alt_block) = alt.as_ref() {
                     if alt_block.test.is_empty() && !source[alt_block.span.start as usize..].starts_with("{:else if") {
-                        // {:else} block → Fragment
+                        // {:else} block → Fragment with children
                         serialize_fragment_modern(&alt_block.consequent, source)
                     } else {
-                        // {:else if} → nested IfBlock
-                        serialize_node_modern(alt.as_ref(), source)
+                        // {:else if} → Fragment containing IfBlock with elseif:true
+                        let mut inner = serialize_node_modern(alt.as_ref(), source);
+                        inner["elseif"] = json!(true);
+                        // elseif IfBlock extends to the outer {/if}
+                        inner["end"] = json!(block.span.end);
+                        json!({
+                            "type": "Fragment",
+                            "nodes": [inner]
+                        })
                     }
                 } else {
                     json!(null)
