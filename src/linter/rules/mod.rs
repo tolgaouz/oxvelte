@@ -97,6 +97,19 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(no_store_async::NoStoreAsync),
         Box::new(prefer_class_directive::PreferClassDirective),
         Box::new(no_export_load_in_svelte_module_in_kit_pages::NoExportLoadInSvelteModuleInKitPages),
+        Box::new(infinite_reactive_loop::InfiniteReactiveLoop),
+        Box::new(no_unnecessary_state_wrap::NoUnnecessaryStateWrap),
+        Box::new(no_unused_props::NoUnusedProps),
+        Box::new(prefer_writable_derived::PreferWritableDerived),
+        Box::new(require_stores_init::RequireStoresInit),
+        Box::new(no_add_event_listener::NoAddEventListener),
+        Box::new(block_lang::BlockLang),
+        Box::new(max_lines_per_block::MaxLinesPerBlock),
+        Box::new(require_optimized_style_attribute::RequireOptimizedStyleAttribute),
+        Box::new(prefer_style_directive::PreferStyleDirective),
+        Box::new(no_spaces_around_equal_signs_in_attribute::NoSpacesAroundEqualSignsInAttribute),
+        Box::new(no_restricted_html_elements::NoRestrictedHtmlElements),
+        Box::new(no_extra_reactive_curlies::NoExtraReactiveCurlies),
     ]
 }
 

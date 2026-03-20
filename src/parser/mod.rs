@@ -77,6 +77,7 @@ fn extract_regions<'a>(source: &'a str) -> Regions<'a> {
         let lang = extract_attr(tag_attrs, "lang");
         let is_module = tag_attrs.contains("context=\"module\"")
             || tag_attrs.contains("context='module'")
+            || tag_attrs.contains("context=module")
             || tag_attrs.split_whitespace().any(|a| a == "module");
 
         let region = Region { content, lang, span: Span::new(open_start as u32, block_end as u32) };

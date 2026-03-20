@@ -935,11 +935,11 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
 
     let program_end = content_start + script.content.len() as u32;
 
-    // Compute loc: start is {line:1, column:0} (script-relative convention)
-    // End uses full source coordinates for the closing </script> position
+    // Compute loc using the actual source line of the <script> tag
+    let (start_line, _) = offset_to_loc(source, script.span.start as usize);
     let (end_line, end_col) = offset_to_loc(source, script.span.end as usize);
     let content_loc = json!({
-        "start": { "line": 1, "column": 0 },
+        "start": { "line": start_line, "column": 0 },
         "end": { "line": end_line, "column": end_col }
     });
 
