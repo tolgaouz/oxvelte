@@ -1043,7 +1043,25 @@ fn serialize_attribute_modern(attr: &Attribute, source: &str) -> Value {
             let name_offset = tag_region.find(name.as_str()).unwrap_or(0);
             let n_start = span.start + name_offset as u32;
             let n_end = n_start + name.len() as u32;
-            let value_json = serialize_attr_value_legacy(value, source, span);
+            // Modern attribute value: Expression → ExpressionTag, not array
+            let value_json = match value {
+                AttributeValue::Expression(expr) => {
+                    let region = &source[span.start as usize..span.end as usize];
+                    let brace_pos = region.find('{').unwrap_or(0);
+                    let close_brace = region.rfind('}').map(|p| p + 1).unwrap_or(region.len());
+                    let expr_start = span.start + brace_pos as u32 + 1;
+                    let mustache_start = span.start + brace_pos as u32;
+                    let mustache_end = span.start + close_brace as u32;
+                    json!({
+                        "type": "ExpressionTag",
+                        "start": mustache_start,
+                        "end": mustache_end,
+                        "expression": expression_to_estree(source, expr.trim(), expr_start)
+                    })
+                }
+                AttributeValue::True => json!(true),
+                _ => serialize_attr_value_legacy(value, source, span),
+            };
             json!({
                 "type": "Attribute",
                 "start": span.start,
