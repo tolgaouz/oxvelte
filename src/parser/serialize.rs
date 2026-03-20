@@ -1192,7 +1192,8 @@ fn serialize_statement_legacy(stmt: &oxc::ast::ast::Statement<'_>, source: &str,
                 "end": end,
                 "loc": loc_json(source, start, end),
                 "specifiers": specifiers,
-                "source": source_val
+                "source": source_val,
+                "attributes": []
             })
         }
         Statement::ExportNamedDeclaration(exp) => {
@@ -1208,7 +1209,8 @@ fn serialize_statement_legacy(stmt: &oxc::ast::ast::Statement<'_>, source: &str,
                 "loc": loc_json(source, start, end),
                 "declaration": declaration,
                 "specifiers": [],
-                "source": null
+                "source": null,
+                "attributes": []
             })
         }
         _ => {
