@@ -784,18 +784,94 @@ fn serialize_filtered_children(nodes: &[TemplateNode], source: &str, default_end
 }
 
 /// Decode HTML entities in text.
+/// Only decodes entities with proper semicolons (e.g., &amp; but not &amp without semicolon).
 fn decode_entities(s: &str) -> String {
-    s.replace("&amp;", "&")
-     .replace("&lt;", "<")
-     .replace("&gt;", ">")
-     .replace("&quot;", "\"")
-     .replace("&#39;", "'")
-     .replace("&apos;", "'")
-     .replace("&nbsp;", "\u{00A0}")
-     .replace("&#x27;", "'")
-     .replace("&#x2F;", "/")
-     .replace("&#60;", "<")
-     .replace("&#62;", ">")
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '&' {
+            // Collect the entity name
+            let mut entity = String::new();
+            entity.push('&');
+            let mut found_semi = false;
+            while let Some(&next) = chars.peek() {
+                entity.push(next);
+                chars.next();
+                if next == ';' {
+                    found_semi = true;
+                    break;
+                }
+                if !next.is_alphanumeric() && next != '#' && next != 'x' && next != 'X' {
+                    break;
+                }
+                if entity.len() > 10 {
+                    break;
+                }
+            }
+            if found_semi {
+                match entity.as_str() {
+                    "&amp;" => result.push('&'),
+                    "&lt;" => result.push('<'),
+                    "&gt;" => result.push('>'),
+                    "&quot;" => result.push('"'),
+                    "&#39;" => result.push('\''),
+                    "&apos;" => result.push('\''),
+                    "&nbsp;" => result.push('\u{00A0}'),
+                    "&#x27;" => result.push('\''),
+                    "&#x2F;" => result.push('/'),
+                    "&#60;" => result.push('<'),
+                    "&#62;" => result.push('>'),
+                    _ => result.push_str(&entity),
+                }
+            } else {
+                // Try to decode without semicolon (legacy HTML behavior)
+                // Decode known named entities if the collected text exactly matches
+                let entity_name = &entity[1..]; // strip leading &
+                match entity_name {
+                    "amp" | "lt" | "gt" | "quot" | "apos" | "nbsp" => {
+                        match entity_name {
+                            "amp" => result.push('&'),
+                            "lt" => result.push('<'),
+                            "gt" => result.push('>'),
+                            "quot" => result.push('"'),
+                            "apos" => result.push('\''),
+                            "nbsp" => result.push('\u{00A0}'),
+                            _ => unreachable!(),
+                        }
+                    }
+                    _ => {
+                        // Check if entity starts with a known name followed by non-alnum
+                        let mut decoded = false;
+                        for known in &["amp", "lt", "gt", "quot", "apos", "nbsp"] {
+                            if entity_name.starts_with(known) {
+                                let rest = &entity_name[known.len()..];
+                                if !rest.is_empty() && !rest.starts_with(|c: char| c.is_alphanumeric()) {
+                                    match *known {
+                                        "amp" => result.push('&'),
+                                        "lt" => result.push('<'),
+                                        "gt" => result.push('>'),
+                                        "quot" => result.push('"'),
+                                        "apos" => result.push('\''),
+                                        "nbsp" => result.push('\u{00A0}'),
+                                        _ => {}
+                                    }
+                                    result.push_str(rest);
+                                    decoded = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if !decoded {
+                            result.push_str(&entity);
+                        }
+                    }
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    result
 }
 
 /// Serialize a `SvelteAst` to the legacy Svelte JSON format.
@@ -907,12 +983,22 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
             })
         }
         TemplateNode::Comment(c) => {
+            // Parse svelte-ignore directives from comment text
+            let ignores: Vec<&str> = if c.data.trim_start().starts_with("svelte-ignore") {
+                let after_prefix = c.data.trim_start().strip_prefix("svelte-ignore").unwrap_or("");
+                after_prefix.split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            } else {
+                Vec::new()
+            };
             json!({
                 "type": "Comment",
                 "start": c.span.start,
                 "end": c.span.end,
                 "data": c.data,
-                "ignores": []
+                "ignores": ignores
             })
         }
         TemplateNode::Element(el) => {
@@ -1408,7 +1494,7 @@ fn serialize_attr_value_legacy(value: &AttributeValue, source: &str, attr_span: 
                 "end": val_end,
                 "type": "Text",
                 "raw": s,
-                "data": s
+                "data": decode_entities(s)
             }])
         }
         AttributeValue::Expression(expr) => {
@@ -1432,7 +1518,7 @@ fn serialize_attr_value_legacy(value: &AttributeValue, source: &str, attr_span: 
                     AttributeValuePart::Static(s) => json!({
                         "type": "Text",
                         "raw": s,
-                        "data": s
+                        "data": decode_entities(s)
                     }),
                     AttributeValuePart::Expression(expr) => json!({
                         "type": "MustacheTag",
