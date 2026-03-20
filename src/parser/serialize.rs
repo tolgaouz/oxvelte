@@ -1334,22 +1334,13 @@ fn serialize_statement_legacy_from_decl(decl: &oxc::ast::ast::Declaration<'_>, s
 }
 
 fn serialize_fragment_legacy_root(fragment: &Fragment, source: &str, has_blocks: bool) -> Value {
-    // If the fragment has no non-whitespace, non-script/style content, return null start/end
-    let has_content = fragment.nodes.iter().any(|n| {
-        match n {
-            TemplateNode::Text(t) => !t.data.chars().all(|c| c.is_ascii_whitespace()),
-            _ => true,
-        }
-    });
-    if !has_content && has_blocks {
-        // Only whitespace — set start/end to null but keep children
-        let filtered: Vec<&TemplateNode> = fragment.nodes.iter().collect();
-        let children: Vec<Value> = filtered.iter().map(|n| serialize_node_legacy(n, source)).collect();
+    // If the fragment has no nodes at all (script-only file with no whitespace between blocks)
+    if fragment.nodes.is_empty() && has_blocks {
         return json!({
             "type": "Fragment",
             "start": null,
             "end": null,
-            "children": children
+            "children": []
         });
     }
 
