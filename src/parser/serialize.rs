@@ -1559,7 +1559,7 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
                 }
             }
 
-            let el_type = if el.name.starts_with(|c: char| c.is_uppercase()) {
+            let el_type = if el.name.starts_with(|c: char| c.is_uppercase()) || el.name.contains('.') {
                 "InlineComponent"
             } else if el.name.starts_with("svelte:") {
                 match el.name.as_str() {
