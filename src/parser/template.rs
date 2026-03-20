@@ -464,11 +464,15 @@ impl<'a> TemplateParser<'a> {
                 Ok(AttributeValue::Static(value.to_string()))
             }
         } else {
-            // Unquoted value (read until whitespace or >)
+            // Unquoted value (read until whitespace or > or />)
             let start = self.pos;
             while self.pos < self.source.len() {
                 let ch = self.source.as_bytes()[self.pos];
-                if ch.is_ascii_whitespace() || ch == b'>' || ch == b'/' {
+                if ch.is_ascii_whitespace() || ch == b'>' {
+                    break;
+                }
+                // Only break on / if followed by > (self-closing)
+                if ch == b'/' && self.pos + 1 < self.source.len() && self.source.as_bytes()[self.pos + 1] == b'>' {
                     break;
                 }
                 self.pos += 1;

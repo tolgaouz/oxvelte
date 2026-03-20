@@ -1482,23 +1482,51 @@ fn serialize_elseif_block(block: &IfBlock, source: &str, content_start: u32, out
 fn serialize_attribute_legacy(attr: &Attribute, source: &str) -> Value {
     match attr {
         Attribute::NormalAttribute { name, value, span } => {
-            let name_start = span.start + 1; // rough estimate
-            // Try to find the actual name position
+            // Check for shorthand attribute: {name}
             let tag_region = &source[span.start as usize..span.end as usize];
-            let name_offset = tag_region.find(name.as_str()).unwrap_or(0);
-            let n_start = span.start + name_offset as u32;
-            let n_end = n_start + name.len() as u32;
+            let is_shorthand = tag_region.starts_with('{') && tag_region.ends_with('}')
+                && matches!(value, AttributeValue::Expression(e) if e == name);
 
-            let value_json = serialize_attr_value_legacy(value, source, span);
+            if is_shorthand {
+                // Shorthand: {id} → Attribute with AttributeShorthand value
+                let expr_start = span.start + 1; // after {
+                let expr_end = span.end - 1; // before }
+                let name_loc = loc_json_with_char(source, expr_start, expr_end);
+                json!({
+                    "type": "Attribute",
+                    "start": span.start,
+                    "end": span.end,
+                    "name": name,
+                    "name_loc": name_loc,
+                    "value": [{
+                        "type": "AttributeShorthand",
+                        "start": expr_start,
+                        "end": expr_end,
+                        "expression": {
+                            "type": "Identifier",
+                            "name": name,
+                            "start": expr_start,
+                            "end": expr_end,
+                            "loc": loc_json_with_char(source, expr_start, expr_end)
+                        }
+                    }]
+                })
+            } else {
+                let name_offset = tag_region.find(name.as_str()).unwrap_or(0);
+                let n_start = span.start + name_offset as u32;
+                let n_end = n_start + name.len() as u32;
 
-            json!({
-                "type": "Attribute",
-                "start": span.start,
-                "end": span.end,
-                "name": name,
-                "name_loc": loc_json_with_char(source, n_start, n_end),
-                "value": value_json
-            })
+                let value_json = serialize_attr_value_legacy(value, source, span);
+
+                json!({
+                    "type": "Attribute",
+                    "start": span.start,
+                    "end": span.end,
+                    "name": name,
+                    "name_loc": loc_json_with_char(source, n_start, n_end),
+                    "value": value_json
+                })
+            }
         }
         Attribute::Spread { span } => {
             // The spread expression is between {... and }
@@ -1659,16 +1687,29 @@ fn serialize_attr_value_legacy(value: &AttributeValue, source: &str, attr_span: 
         AttributeValue::Static(s) => {
             // Find the value position in source
             let region = &source[attr_span.start as usize..attr_span.end as usize];
-            let val_start_rel = region.find(s.as_str()).unwrap_or(0);
-            let val_start = attr_span.start + val_start_rel as u32;
-            let val_end = val_start + s.len() as u32;
-            json!([{
-                "start": val_start,
-                "end": val_end,
-                "type": "Text",
-                "raw": s,
-                "data": decode_entities(s)
-            }])
+            if s.is_empty() {
+                // Empty string: ="", position between the quotes
+                let quote_pos = region.rfind(|c: char| c == '"' || c == '\'').unwrap_or(region.len());
+                let val_pos = attr_span.start + quote_pos as u32;
+                json!([{
+                    "start": val_pos,
+                    "end": val_pos,
+                    "type": "Text",
+                    "raw": "",
+                    "data": ""
+                }])
+            } else {
+                let val_start_rel = region.find(s.as_str()).unwrap_or(0);
+                let val_start = attr_span.start + val_start_rel as u32;
+                let val_end = val_start + s.len() as u32;
+                json!([{
+                    "start": val_start,
+                    "end": val_end,
+                    "type": "Text",
+                    "raw": s,
+                    "data": decode_entities(s)
+                }])
+            }
         }
         AttributeValue::Expression(expr) => {
             // Find expression position - after ={
