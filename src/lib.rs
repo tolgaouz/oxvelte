@@ -993,6 +993,26 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- no-store-async tests ---
+
+    #[test]
+    fn test_no_store_async_readable() {
+        let s = "<script>\n\timport { readable } from 'svelte/store';\n\treadable(null, async (set) => { set(await fetch('/api')); });\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-store-async"),
+            "Should flag async readable callback");
+    }
+
+    #[test]
+    fn test_no_store_async_sync_ok() {
+        let s = "<script>\n\timport { readable } from 'svelte/store';\n\treadable(null, (set) => { set(42); return () => {}; });\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-store-async"),
+            "Should NOT flag sync readable callback");
+    }
+
     // --- CSS parser tests ---
 
     #[test]
