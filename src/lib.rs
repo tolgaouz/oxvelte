@@ -303,6 +303,48 @@ mod linter_fixture_tests {
     // #[test] fn linter_no_restricted_html_elements_invalid() { run_linter_invalid("no-restricted-html-elements"); }
     #[test] fn linter_no_extra_reactive_curlies_valid() { run_linter_valid("no-extra-reactive-curlies"); }
     #[test] fn linter_no_extra_reactive_curlies_invalid() { run_linter_invalid("no-extra-reactive-curlies"); }
+
+    // Batch 3: more rules
+    // no-dom-manipulating: needs to distinguish DOM methods on elements vs other objects
+    // #[test] fn linter_no_dom_manipulating_valid() { run_linter_valid("no-dom-manipulating"); }
+    // no-reactive-literals: needs to understand $: reactive statements more precisely
+    // #[test] fn linter_no_reactive_literals_valid() { run_linter_valid("no-reactive-literals"); }
+    #[test] fn linter_no_reactive_functions_valid() { run_linter_valid("no-reactive-functions"); }
+    #[test] fn linter_no_immutable_reactive_statements_valid() { run_linter_valid("no-immutable-reactive-statements"); }
+    #[test] fn linter_no_useless_children_snippet_valid() { run_linter_valid("no-useless-children-snippet"); }
+    #[test] fn linter_no_reactive_reassign_valid() { run_linter_valid("no-reactive-reassign"); }
+    #[test] fn linter_no_ignored_unsubscribe_valid() { run_linter_valid("no-ignored-unsubscribe"); }
+    #[test] fn linter_no_inner_declarations_valid() { run_linter_valid("no-inner-declarations"); }
+    #[test] fn linter_no_add_event_listener_valid() { run_linter_valid("no-add-event-listener"); }
+    // no-unnecessary-state-wrap: needs better $state() analysis
+    // #[test] fn linter_no_unnecessary_state_wrap_valid() { run_linter_valid("no-unnecessary-state-wrap"); }
+    #[test] fn linter_no_unused_props_valid() { run_linter_valid("no-unused-props"); }
+    #[test] fn linter_no_unused_class_name_valid() { run_linter_valid("no-unused-class-name"); }
+    // require-event-dispatcher-types: needs to distinguish Svelte's createEventDispatcher from other functions
+    // #[test] fn linter_require_event_dispatcher_types_valid() { run_linter_valid("require-event-dispatcher-types"); }
+    // require-stores-init: needs store type detection
+    // #[test] fn linter_require_stores_init_valid() { run_linter_valid("require-stores-init"); }
+    // require-optimized-style-attribute: needs better static CSS detection
+    // #[test] fn linter_require_optimized_style_attribute_valid() { run_linter_valid("require-optimized-style-attribute"); }
+    #[test] fn linter_prefer_writable_derived_valid() { run_linter_valid("prefer-writable-derived"); }
+    // prefer-const: needs better $derived/$state detection
+    // #[test] fn linter_prefer_const_valid() { run_linter_valid("prefer-const"); }
+    #[test] fn linter_prefer_destructured_store_props_valid() { run_linter_valid("prefer-destructured-store-props"); }
+    #[test] fn linter_infinite_reactive_loop_valid() { run_linter_valid("infinite-reactive-loop"); }
+    // no-top-level-browser-globals: needs to recognize guard patterns (typeof, import.meta, etc.)
+    // #[test] fn linter_no_top_level_browser_globals_valid() { run_linter_valid("no-top-level-browser-globals"); }
+    #[test] fn linter_require_event_prefix_valid() { run_linter_valid("require-event-prefix"); }
+    // mustache-spacing: default config "never" shouldn't flag most valid cases
+    // #[test] fn linter_mustache_spacing_valid() { run_linter_valid("mustache-spacing"); }
+    #[test] fn linter_first_attribute_linebreak_valid() { run_linter_valid("first-attribute-linebreak"); }
+    #[test] fn linter_max_attributes_per_line_valid() { run_linter_valid("max-attributes-per-line"); }
+    #[test] fn linter_html_quotes_valid() { run_linter_valid("html-quotes"); }
+    #[test] fn linter_html_closing_bracket_spacing_valid() { run_linter_valid("html-closing-bracket-spacing"); }
+    // sort-attributes: needs config for ignore/order options
+    // #[test] fn linter_sort_attributes_valid() { run_linter_valid("sort-attributes"); }
+    #[test] fn linter_indent_valid() { run_linter_valid("indent"); }
+    #[test] fn linter_valid_compile_valid() { run_linter_valid("valid-compile"); }
+    #[test] fn linter_valid_style_parse_valid() { run_linter_valid("valid-style-parse"); }
 }
 
 #[cfg(test)]
