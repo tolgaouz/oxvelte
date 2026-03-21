@@ -100,11 +100,11 @@ impl<'a> CssParser<'a> {
     }
 
     fn parse_selector_list(&mut self) -> Option<Value> {
+        self.skip_ws_and_comments();
         let start = self.pos;
         let mut selectors = Vec::new();
 
         loop {
-            self.skip_ws_and_comments();
             if self.pos >= self.source.len() || self.source[self.pos..].starts_with('{') {
                 break;
             }
@@ -115,6 +115,7 @@ impl<'a> CssParser<'a> {
             self.skip_ws_and_comments();
             if self.pos < self.source.len() && self.source.as_bytes()[self.pos] == b',' {
                 self.pos += 1; // skip comma
+                self.skip_ws_and_comments(); // skip whitespace/comments after comma
             } else {
                 break;
             }
