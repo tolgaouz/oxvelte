@@ -321,6 +321,8 @@ mod linter_fixture_tests {
     // #[test] fn linter_require_event_prefix_invalid() { run_linter_invalid("require-event-prefix"); }
     #[test] fn linter_no_add_event_listener_invalid() { run_linter_invalid("no-add-event-listener"); }
 
+    #[test] fn linter_max_lines_per_block_valid() { run_linter_valid("max-lines-per-block"); }
+
     // Batch 6: additional valid tests not in batch 3
     #[test] fn linter_experimental_require_slot_types_valid() { run_linter_valid("experimental-require-slot-types"); }
     #[test] fn linter_experimental_require_strict_events_valid() { run_linter_valid("experimental-require-strict-events"); }
