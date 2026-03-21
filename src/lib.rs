@@ -993,6 +993,56 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- error handling tests ---
+
+    #[test]
+    fn test_parse_unclosed_tag_graceful() {
+        let s = "<div><p>unclosed";
+        let r = parser::parse(s);
+        // Parser should handle gracefully (may have errors but shouldn't panic)
+        let _ = r.ast.html.nodes.len();
+    }
+
+    #[test]
+    fn test_parse_invalid_mustache_graceful() {
+        let s = "<p>{ }</p>";
+        let r = parser::parse(s);
+        let _ = r.ast.html.nodes.len();
+    }
+
+    #[test]
+    fn test_parse_multiple_root_elements() {
+        let s = "<h1>Title</h1>\n<p>Paragraph</p>\n<footer>Footer</footer>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        assert!(r.ast.html.nodes.len() >= 3);
+    }
+
+    #[test]
+    fn test_parse_html_comment() {
+        let s = "<!-- This is a comment -->\n<p>text</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        assert!(r.ast.html.nodes.iter().any(|n| matches!(n, ast::TemplateNode::Comment(_))));
+    }
+
+    #[test]
+    fn test_parse_text_with_entities() {
+        let s = "<p>&amp; &lt;tag&gt; &quot;text&quot;</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_self_closing_html() {
+        let s = "<div />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::Element(el) = &r.ast.html.nodes[0] {
+            assert!(el.self_closing);
+        }
+    }
+
     #[test]
     fn test_parse_complex_template_expressions() {
         let s = "<p>{@html `<strong>${name}</strong>`}</p>\n{@debug name, count}\n{@const doubled = count * 2}\n<p>{doubled}</p>";
