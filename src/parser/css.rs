@@ -286,36 +286,47 @@ impl<'a> CssParser<'a> {
                             } else {
                                 (trimmed, None)
                             };
-                            let nth_start = inner_offset;
-                            let nth_end = inner_offset + inner.trim_end().len() as u32;
-                            let mut nth_node = json!({
+                            let leading_ws = inner.len() - inner.trim_start().len();
+                            let nth_start = inner_offset + leading_ws as u32;
+                            let nth_val_end = nth_start + nth_val.len() as u32;
+                            let nth_node = json!({
                                 "type": "Nth",
                                 "value": nth_val,
                                 "start": nth_start,
-                                "end": nth_end
+                                "end": nth_val_end
                             });
+                            // Build selectors array: Nth + optional selector entries
+                            let mut selectors_arr = vec![nth_node];
+                            let mut rel_end = nth_val_end;
                             if let Some(sel_str) = of_sel {
                                 let sel_offset = inner_offset + (trimmed.len() - sel_str.len()) as u32;
                                 let mut ip = CssParser::new(sel_str, sel_offset);
-                                if let Some(sl) = ip.parse_selector_list() {
-                                    nth_node["selector"] = sl;
+                                // Parse individual simple selectors (not full selector list)
+                                while ip.pos < ip.source.len() {
+                                    ip.skip_ws_and_comments();
+                                    if ip.pos >= ip.source.len() { break; }
+                                    if let Some(sel) = ip.parse_simple_selector() {
+                                        rel_end = sel.get("end").and_then(|e| e.as_u64()).unwrap_or(0) as u32;
+                                        selectors_arr.push(sel);
+                                    } else { break; }
                                 }
                             }
-                            // Wrap Nth in a SelectorList → ComplexSelector → RelativeSelector
+                            let full_end = inner_offset + inner.trim_end().len() as u32;
+                            // Wrap in SelectorList → ComplexSelector → RelativeSelector
                             Some(json!({
                                 "type": "SelectorList",
                                 "start": nth_start,
-                                "end": nth_end,
+                                "end": full_end,
                                 "children": [{
                                     "type": "ComplexSelector",
                                     "start": nth_start,
-                                    "end": nth_end,
+                                    "end": full_end,
                                     "children": [{
                                         "type": "RelativeSelector",
                                         "combinator": null,
                                         "start": nth_start,
-                                        "end": nth_end,
-                                        "selectors": [nth_node]
+                                        "end": full_end,
+                                        "selectors": selectors_arr
                                     }]
                                 }]
                             }))
