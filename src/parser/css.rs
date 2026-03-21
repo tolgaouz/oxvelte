@@ -236,16 +236,17 @@ impl<'a> CssParser<'a> {
                     let name_start = self.pos;
                     self.read_ident();
                     let name = &self.source[name_start..self.pos];
-                    let name_end_pos = self.pos;
-                    // Check for args in parens — skip them but don't include in element end
+                    let name_end = self.pos;
+                    // Check for args in parens
                     if self.pos < self.source.len() && self.source.as_bytes()[self.pos] == b'(' {
                         self.skip_parens();
                     }
+                    // PseudoElementSelector end at name, but parser pos past parens
                     Some(json!({
                         "type": "PseudoElementSelector",
                         "name": name,
                         "start": self.abs(start),
-                        "end": self.abs(name_end_pos)
+                        "end": self.abs(name_end)
                     }))
                 } else {
                     // Pseudo-class
