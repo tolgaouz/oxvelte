@@ -1198,8 +1198,10 @@ fn serialize_attribute_modern(attr: &Attribute, source: &str) -> Value {
                 if value_part.starts_with('{') && value_part.ends_with('}') {
                     let expr_str = &value_part[1..value_part.len()-1];
                     let brace_pos = attr_text[eq_pos..].find('{').unwrap_or(1);
-                    let expr_start = span.start + eq_pos as u32 + brace_pos as u32 + 1;
-                    Some(expression_to_estree(source, expr_str.trim(), expr_start))
+                    let trimmed = expr_str.trim();
+                    let leading_trim = expr_str.len() - expr_str.trim_start().len();
+                    let expr_start = span.start + eq_pos as u32 + brace_pos as u32 + 1 + leading_trim as u32;
+                    Some(expression_to_estree(source, trimmed, expr_start))
                 } else if (value_part.starts_with('"') || value_part.starts_with('\'')) && value_part.len() > 2 {
                     let inner = &value_part[1..value_part.len()-1];
                     if inner.starts_with('{') && inner.ends_with('}') {
