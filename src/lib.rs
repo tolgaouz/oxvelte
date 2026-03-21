@@ -841,6 +841,82 @@ mod tests {
             "Should flag store without initial value");
     }
 
+    // --- comprehensive parser tests ---
+
+    #[test]
+    fn test_parse_spread_attribute() {
+        let s = "<div {...props}>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::Element(el) = &r.ast.html.nodes[0] {
+            assert!(el.attributes.iter().any(|a| matches!(a, ast::Attribute::Spread { .. })));
+        }
+    }
+
+    #[test]
+    fn test_parse_let_directive() {
+        let s = "<Comp let:item>{item}</Comp>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_multiple_scripts() {
+        let s = "<script context=\"module\">\n\texport const prerender = true;\n</script>\n<script>\n\tlet count = 0;\n</script>\n<p>{count}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        assert!(r.ast.module.is_some());
+        assert!(r.ast.instance.is_some());
+    }
+
+    #[test]
+    fn test_parse_svelte5_module_script() {
+        let s = "<script module>\n\texport const prerender = true;\n</script>\n<script>\n\tlet count = 0;\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        assert!(r.ast.module.is_some());
+    }
+
+    #[test]
+    fn test_parse_void_elements() {
+        let s = "<br><hr><img src=\"test.png\"><input type=\"text\">";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        assert_eq!(r.ast.html.nodes.len(), 4);
+    }
+
+    #[test]
+    fn test_parse_nested_if_else() {
+        let s = "{#if a}\n\t{#if b}\n\t\tx\n\t{:else}\n\t\ty\n\t{/if}\n{:else if c}\n\tz\n{:else}\n\tw\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_with_index() {
+        let s = "{#each items as item, index (item.id)}\n\t<p>{index}: {item}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::EachBlock(block) = &r.ast.html.nodes[0] {
+            assert!(block.index.is_some());
+            assert!(block.key.is_some());
+        }
+    }
+
+    #[test]
+    fn test_parse_each_destructured() {
+        let s = "{#each items as { id, name } (id)}\n\t<p>{name}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_await_shorthand() {
+        let s = "{#await promise then value}\n\t<p>{value}</p>\n{/await}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- unused class name unit tests ---
 
     #[test]
