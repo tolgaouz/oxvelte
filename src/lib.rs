@@ -993,6 +993,50 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- CSS parser tests ---
+
+    #[test]
+    fn test_css_parser_nested_selectors() {
+        let s = "<style>\n\t.parent > .child + .sibling ~ .general { color: red; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_css_parser_pseudo_classes() {
+        let s = "<style>\n\ta:hover { color: blue; }\n\tp:first-child { margin: 0; }\n\tdiv:nth-child(2n+1) { background: gray; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_css_parser_media_query() {
+        let s = "<style>\n\t@media (max-width: 768px) {\n\t\t.container { width: 100%; }\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_css_parser_keyframes() {
+        let s = "<style>\n\t@keyframes fade {\n\t\tfrom { opacity: 1; }\n\t\tto { opacity: 0; }\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_css_parser_custom_properties() {
+        let s = "<style>\n\t:root { --primary: blue; }\n\tp { color: var(--primary); }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_css_parser_attribute_selector() {
+        let s = "<style>\n\tinput[type=\"text\"] { border: 1px solid; }\n\t[data-active] { display: block; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- rule-specific regression tests ---
 
     #[test]
