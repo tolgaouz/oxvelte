@@ -993,6 +993,44 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- no-immutable-reactive-statements tests ---
+
+    #[test]
+    fn test_immutable_reactive_const_string() {
+        let s = "<script>\n\tconst x = 'hello';\n\t$: y = x;\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-immutable-reactive-statements"),
+            "Should flag reactive stmt with immutable const string");
+    }
+
+    #[test]
+    fn test_immutable_reactive_mutable_ok() {
+        let s = "<script>\n\tlet x = 'hello';\n</script>\n<input bind:value={x} />";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-immutable-reactive-statements"),
+            "Should NOT flag when no reactive statements");
+    }
+
+    #[test]
+    fn test_immutable_reactive_import() {
+        let s = "<script>\n\timport val from './mod';\n\t$: console.log(val);\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-immutable-reactive-statements"),
+            "Should flag reactive stmt with import");
+    }
+
+    #[test]
+    fn test_immutable_reactive_mutable_let_ok() {
+        let s = "<script>\n\tlet count = 0;\n\t$: doubled = count * 2;\n</script>\n<input bind:value={count} />";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-immutable-reactive-statements"),
+            "Should NOT flag reactive stmt with mutable let");
+    }
+
     // --- HTML element edge cases ---
 
     #[test]
