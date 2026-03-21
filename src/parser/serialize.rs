@@ -1365,7 +1365,7 @@ fn convert_selector_to_complex(selector: &Value) -> Value {
                         current_selectors = Vec::new();
                     }
                     current_combinator = child.clone();
-                    rel_start = child.get("end").cloned().unwrap_or(json!(0));
+                    rel_start = child.get("start").cloned().unwrap_or(json!(0));
                 } else {
                     // Recursively convert args in PseudoClassSelectors
                     let mut c = child.clone();
