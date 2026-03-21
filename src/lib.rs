@@ -422,11 +422,63 @@ mod tests {
         let r = parser::parse(s);
         assert!(r.errors.is_empty());
         if let ast::TemplateNode::EachBlock(block) = &r.ast.html.nodes[0] {
-            eprintln!("context='{}' key={:?}", block.context, block.key);
             assert_eq!(block.context.trim(), "thing");
-            assert!(block.key.as_ref().unwrap().contains("thing"),
-                "Key should contain 'thing', got: {:?}", block.key);
+            assert_eq!(block.key.as_ref().unwrap(), "fn(thing)");
         }
+    }
+
+    #[test]
+    fn test_valid_each_key_outside_var() {
+        let s = "<script>\n\tconst foo = 'x';\n</script>\n{#each items as item (foo)}\n\t{item}\n{/each}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/valid-each-key"),
+            "Should flag key that doesn't use iteration variable");
+    }
+
+    #[test]
+    fn test_valid_each_key_item_prop_ok() {
+        let s = "{#each items as item (item.id)}\n\t{item}\n{/each}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/valid-each-key"),
+            "Should NOT flag key that uses item property");
+    }
+
+    #[test]
+    fn test_html_closing_bracket_newline_singleline() {
+        let s = "<div\n></div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/html-closing-bracket-new-line"),
+            "Should flag singleline element with line break before >");
+    }
+
+    #[test]
+    fn test_html_closing_bracket_newline_multiline_ok() {
+        let s = "<div\n\tclass=\"foo\"\n></div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/html-closing-bracket-new-line"),
+            "Should NOT flag multiline element with 1 line break before >");
+    }
+
+    #[test]
+    fn test_css_parser_invalid_detection() {
+        let s = "<style>\n\t.x { invalid-prop name: red; }\n</style>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/valid-style-parse"),
+            "Should flag CSS with spaces in property name");
+    }
+
+    #[test]
+    fn test_scss_valid_ok() {
+        let s = "<style lang=\"scss\">\n\t.container { .child { color: red; } }\n</style>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/valid-style-parse"),
+            "Should NOT flag valid SCSS");
     }
 
     // --- no-dom-manipulating unit tests ---
