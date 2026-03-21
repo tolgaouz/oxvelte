@@ -242,6 +242,62 @@ mod tests {
         let diags = Linter::all().lint(&r.ast, s);
         assert!(diags.iter().any(|d| d.rule_name == "svelte/no-dynamic-slot-name"));
     }
+
+    #[test]
+    fn test_no_raw_special_elements() {
+        let s = "<head></head>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-raw-special-elements"));
+    }
+
+    #[test]
+    fn test_no_goto_without_base() {
+        let s = "<script>\nimport { goto } from '$app/navigation';\ngoto('/foo');\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-goto-without-base"));
+    }
+
+    #[test]
+    fn test_require_stores_init() {
+        let s = "<script>\nimport { writable } from 'svelte/store';\nconst w = writable();\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/require-stores-init"));
+    }
+
+    #[test]
+    fn test_no_useless_children_snippet() {
+        let s = "<Comp>\n{#snippet children()}\nHello\n{/snippet}\n</Comp>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-useless-children-snippet"));
+    }
+
+    #[test]
+    fn test_no_object_in_text_mustaches() {
+        let s = "{{ a }}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-object-in-text-mustaches"));
+    }
+
+    #[test]
+    fn test_parse_legacy_json() {
+        let s = "<div>hello</div>";
+        let r = parser::parse(s);
+        let json = parser::serialize::to_legacy_json(&r.ast, s);
+        assert!(json.get("html").is_some());
+    }
+
+    #[test]
+    fn test_parse_modern_json() {
+        let s = "<div>hello</div>";
+        let r = parser::parse(s);
+        let json = parser::serialize::to_modern_json(&r.ast, s);
+        assert!(json.get("fragment").is_some());
+    }
 }
 
 #[cfg(test)]
