@@ -2253,7 +2253,15 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
                 }
             }
         } else {
-            // Trailing comment: find the statement that ends just before this comment
+            // Trailing comment: only attach to a statement if attached_to is AT or AFTER the statement end
+            // (not inside the statement body)
+            let is_inside_stmt = body.iter().any(|stmt| {
+                let s = stmt.get("start").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let e = stmt.get("end").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                attached_abs > s && attached_abs < e
+            });
+            if is_inside_stmt { continue; } // skip — comment belongs to a nested node
+
             let mut best_idx = None;
             let mut best_dist = u32::MAX;
             for (i, stmt) in body.iter().enumerate() {
