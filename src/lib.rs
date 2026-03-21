@@ -684,6 +684,88 @@ mod tests {
             "Should NOT flag fragment URL");
     }
 
+    // --- no-inline-styles unit tests ---
+
+    #[test]
+    fn test_no_inline_styles_static() {
+        let s = "<div style=\"color: red;\">hi</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-inline-styles"),
+            "Should flag static inline style");
+    }
+
+    #[test]
+    fn test_no_inline_styles_no_style_ok() {
+        let s = "<div class=\"red\">hi</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-inline-styles"),
+            "Should NOT flag element without style");
+    }
+
+    // --- no-trailing-spaces unit tests ---
+
+    #[test]
+    fn test_no_trailing_spaces() {
+        let s = "<p>hello</p>   \n<p>world</p>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-trailing-spaces"),
+            "Should flag trailing spaces");
+    }
+
+    #[test]
+    fn test_no_trailing_spaces_clean_ok() {
+        let s = "<p>hello</p>\n<p>world</p>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-trailing-spaces"),
+            "Should NOT flag clean lines");
+    }
+
+    // --- prefer-style-directive unit tests ---
+
+    #[test]
+    fn test_prefer_style_directive() {
+        let s = "<div style=\"color: {active ? 'red' : 'blue'}\">hi</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/prefer-style-directive"),
+            "Should flag dynamic inline style");
+    }
+
+    // --- no-svelte-internal unit tests ---
+
+    #[test]
+    fn test_no_svelte_internal() {
+        let s = "<script>\n\timport { internal } from 'svelte/internal';\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-svelte-internal"),
+            "Should flag svelte/internal import");
+    }
+
+    #[test]
+    fn test_no_svelte_internal_ok() {
+        let s = "<script>\n\timport { onMount } from 'svelte';\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-svelte-internal"),
+            "Should NOT flag svelte import");
+    }
+
+    // --- no-inspect unit tests ---
+
+    #[test]
+    fn test_no_inspect() {
+        let s = "<script>\n\t$inspect(count);\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-inspect"),
+            "Should flag $inspect");
+    }
+
     // --- block-lang unit tests ---
 
     #[test]
