@@ -71,6 +71,10 @@ impl Linter {
         Self { rules: rules::all_rules() }
     }
 
+    pub fn rules(&self) -> &[Box<dyn Rule>] {
+        &self.rules
+    }
+
     pub fn lint(&self, ast: &SvelteAst, source: &str) -> Vec<LintDiagnostic> {
         let mut ctx = LintContext::new(ast, source);
         for rule in &self.rules {

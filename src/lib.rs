@@ -193,6 +193,55 @@ mod tests {
         let diags = Linter::all().lint(&r.ast, s);
         assert!(diags.iter().any(|d| d.rule_name == "svelte/valid-each-key"));
     }
+
+    #[test]
+    fn test_recommended_vs_all() {
+        let rec = Linter::recommended();
+        let all = Linter::all();
+        // All rules should be a superset of recommended
+        assert!(all.rules().len() >= rec.rules().len());
+        assert!(rec.rules().len() > 0);
+    }
+
+    #[test]
+    fn test_no_reactive_functions() {
+        let s = "<script>\n$: arrow = () => {}\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-reactive-functions"));
+    }
+
+    #[test]
+    fn test_no_reactive_literals() {
+        let s = "<script>\n$: foo = \"foo\";\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-reactive-literals"));
+    }
+
+    #[test]
+    fn test_no_ignored_unsubscribe() {
+        let s = "<script>\nimport { writable } from 'svelte/store';\nconst foo = writable(0);\nfoo.subscribe(() => {});\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-ignored-unsubscribe"));
+    }
+
+    #[test]
+    fn test_html_self_closing_void() {
+        let s = "<img>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/html-self-closing"));
+    }
+
+    #[test]
+    fn test_no_dynamic_slot_name() {
+        let s = "<slot name={dynamicName} />";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-dynamic-slot-name"));
+    }
 }
 
 #[cfg(test)]
