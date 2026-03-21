@@ -336,8 +336,10 @@ mod linter_fixture_tests {
     // no-goto-without-base invalid needs base prefix position analysis
     // #[test] fn linter_no_goto_without_base_invalid() { run_linter_invalid("no-goto-without-base"); }
 
+    #[test] fn linter_no_reactive_functions_invalid() { run_linter_invalid("no-reactive-functions"); }
+
     // These invalid tests need more rule implementation work:
-    // no-reactive-functions, no-navigation-without-resolve, no-goto-without-base,
+    // no-navigation-without-resolve, no-goto-without-base,
     // no-navigation-without-base, no-dynamic-slot-name, require-event-dispatcher-types
 
     // Batch 7: additional valid tests not in batch 3
