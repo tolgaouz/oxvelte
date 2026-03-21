@@ -993,6 +993,90 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- comprehensive rule coverage ---
+
+    #[test]
+    fn test_prefer_class_directive_ternary() {
+        let s = "<div class={active ? 'active' : ''}>text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/prefer-class-directive"),
+            "Should suggest class directive for ternary");
+    }
+
+    #[test]
+    fn test_no_raw_special_elements_head() {
+        let s = "<svelte:head>{@html '<meta>'}</svelte:head>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-raw-special-elements"
+            || d.rule_name == "svelte/no-at-html-tags"),
+            "Should flag @html in special element");
+    }
+
+    #[test]
+    fn test_no_unknown_style_directive_prop() {
+        let s = "<div style:colr=\"red\">text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-unknown-style-directive-property"),
+            "Should flag unknown style directive property");
+    }
+
+    #[test]
+    fn test_no_unknown_style_directive_ok() {
+        let s = "<div style:color=\"red\">text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-unknown-style-directive-property"),
+            "Should NOT flag known style directive property");
+    }
+
+    #[test]
+    fn test_require_event_dispatcher_types_ts() {
+        let s = "<script lang=\"ts\">\n\timport { createEventDispatcher } from 'svelte';\n\tconst dispatch = createEventDispatcher();\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/require-event-dispatcher-types"),
+            "Should flag untyped createEventDispatcher");
+    }
+
+    #[test]
+    fn test_require_event_dispatcher_typed_ok() {
+        let s = "<script lang=\"ts\">\n\timport { createEventDispatcher } from 'svelte';\n\tconst dispatch = createEventDispatcher<{ click: MouseEvent }>();\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/require-event-dispatcher-types"),
+            "Should NOT flag typed createEventDispatcher");
+    }
+
+    #[test]
+    fn test_html_self_close_empty_comp() {
+        let s = "<Component></Component>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/html-self-closing"),
+            "Should flag component that could be self-closing");
+    }
+
+    #[test]
+    fn test_html_self_close_comp_ok() {
+        let s = "<Component />";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/html-self-closing"),
+            "Should NOT flag self-closing component");
+    }
+
+    #[test]
+    fn test_no_reactive_reassign_increment() {
+        let s = "<script>\n\tlet v = 0;\n\t$: r = v * 2;\n\tfunction click() { r++; }\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-reactive-reassign"),
+            "Should flag reactive var increment");
+    }
+
     // --- cross-cutting linter tests ---
 
     #[test]
