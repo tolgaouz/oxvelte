@@ -993,6 +993,88 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- final batch tests ---
+
+    #[test]
+    fn test_empty_blocks() {
+        let sources = [
+            "{#if x}{/if}",
+            "{#each items as item}{/each}",
+            "{#await p}{:then}{:catch}{/await}",
+            "{#key k}{/key}",
+            "{#snippet s()}{/snippet}",
+        ];
+        for s in &sources {
+            let r = parser::parse(s);
+            assert!(r.errors.is_empty(), "Failed: {}", s);
+        }
+    }
+
+    #[test]
+    fn test_nested_components() {
+        let s = "<Outer>\n\t<Middle>\n\t\t<Inner prop={val}>\n\t\t\t<p>deep content</p>\n\t\t</Inner>\n\t</Middle>\n</Outer>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_event_forwarding() {
+        let s = "<button on:click>Forward click</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_style_global_selector() {
+        let s = "<style>\n\t:global(body) { margin: 0; }\n\t.local :global(.external) { color: blue; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_variables() {
+        let s = "<div style:--theme-color=\"blue\" style:--gap=\"1rem\">styled</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_slot_prop() {
+        let s = "<List items={data} let:item let:index>\n\t<p>{index}: {item.name}</p>\n</List>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_await_then_only() {
+        let s = "{#await promise then data}\n\t<p>{data}</p>\n{/await}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_onclick_with_arg() {
+        let s = "<button onclick={(e) => { e.preventDefault(); handle(e); }}>click</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_multiple_text_and_elements() {
+        let s = "before <span>middle</span> after";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        assert!(r.ast.html.nodes.len() >= 3);
+    }
+
+    #[test]
+    fn test_parse_doctype() {
+        let s = "<!DOCTYPE html>\n<html><body>content</body></html>";
+        let r = parser::parse(s);
+        // Doctype handling varies but shouldn't panic
+        let _ = r.ast.html.nodes.len();
+    }
+
     // --- complete component tests ---
 
     #[test]
