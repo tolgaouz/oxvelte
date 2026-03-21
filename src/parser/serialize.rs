@@ -67,48 +67,51 @@ fn loc_json_with_char(source: &str, start: u32, end: u32) -> Value {
 }
 
 /// Parse a JS expression string with oxc and serialize to estree JSON.
+/// Also handles comment attachment within the expression.
 fn expression_to_estree(source: &str, expr_str: &str, expr_start: u32) -> Value {
     use oxc::allocator::Allocator;
     use oxc::parser::Parser;
     use oxc::span::SourceType;
 
-    // Try JS first, then TypeScript
+    let has_comments = expr_str.contains("//") || expr_str.contains("/*");
+
+    // If expression contains comments and expr_start is large enough for the wrapper approach,
+    // use Parser::parse() with a wrapper to get full comment information
+    if has_comments && expr_start >= 7 {
+        let wrapper = format!("void (\n{}\n)", expr_str);
+        let alloc = Allocator::default();
+        let parse_result = Parser::new(&alloc, &wrapper, SourceType::mjs()).parse();
+
+        if !parse_result.program.body.is_empty() && parse_result.errors.is_empty() {
+            if let Some(oxc::ast::ast::Statement::ExpressionStatement(es)) = parse_result.program.body.first() {
+                if let oxc::ast::ast::Expression::UnaryExpression(unary) = &es.expression {
+                    if let oxc::ast::ast::Expression::ParenthesizedExpression(paren) = &unary.argument {
+                        let inner_expr = &paren.expression;
+                        let wrapper_prefix_len = 7u32; // "void (\n"
+                        let offset = expr_start - wrapper_prefix_len;
+                        let mut result = estree_expr(inner_expr, source, offset);
+
+                        let comments = &parse_result.program.comments;
+                        if !comments.is_empty() {
+                            attach_expression_comments(&mut result, comments, expr_str, expr_start, wrapper_prefix_len, source);
+                        }
+
+                        return result;
+                    }
+                }
+            }
+        }
+    }
+
+    // Standard path: use parse_expression directly
     let alloc = Allocator::default();
     let js_result = Parser::new(&alloc, expr_str, SourceType::mjs()).parse_expression();
 
     if let Ok(expr) = &js_result {
         if !expr_str.ends_with('.') {
             let mut result = estree_expr(expr, source, expr_start);
-            // Check for leading block comments in the expression text
-            let trimmed = expr_str.trim_start();
-            if trimmed.starts_with("/*") {
-                if let Some(end_pos) = trimmed.find("*/") {
-                    let comment_text = &trimmed[2..end_pos];
-                    let comment_start = expr_start;
-                    let comment_end = expr_start + end_pos as u32 + 2;
-                    if let Some(obj) = result.as_object_mut() {
-                        obj.insert("leadingComments".to_string(), json!([{
-                            "type": "Block",
-                            "value": comment_text,
-                            "start": comment_start,
-                            "end": comment_end
-                        }]));
-                    }
-                }
-            } else if trimmed.starts_with("//") {
-                if let Some(nl_pos) = trimmed.find('\n') {
-                    let comment_text = &trimmed[2..nl_pos];
-                    let comment_start = expr_start;
-                    let comment_end = expr_start + nl_pos as u32;
-                    if let Some(obj) = result.as_object_mut() {
-                        obj.insert("leadingComments".to_string(), json!([{
-                            "type": "Line",
-                            "value": comment_text,
-                            "start": comment_start,
-                            "end": comment_end
-                        }]));
-                    }
-                }
+            if has_comments {
+                add_leading_comment_from_text(&mut result, expr_str, expr_start);
             }
             return result;
         }
@@ -131,6 +134,94 @@ fn expression_to_estree(source: &str, expr_str: &str, expr_start: u32) -> Value 
         "end": expr_end,
         "name": ""
     })
+}
+
+/// Add leading comment from expression text (for the fallback path).
+fn add_leading_comment_from_text(result: &mut Value, expr_str: &str, expr_start: u32) {
+    let trimmed = expr_str.trim_start();
+    if trimmed.starts_with("/*") {
+        if let Some(end_pos) = trimmed.find("*/") {
+            let comment_text = &trimmed[2..end_pos];
+            let ws_offset = (expr_str.len() - trimmed.len()) as u32;
+            let comment_start = expr_start + ws_offset;
+            let comment_end = comment_start + end_pos as u32 + 2;
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("leadingComments".to_string(), json!([{
+                    "type": "Block",
+                    "value": comment_text,
+                    "start": comment_start,
+                    "end": comment_end
+                }]));
+            }
+        }
+    } else if trimmed.starts_with("//") {
+        if let Some(nl_pos) = trimmed.find('\n') {
+            let comment_text = &trimmed[2..nl_pos];
+            let ws_offset = (expr_str.len() - trimmed.len()) as u32;
+            let comment_start = expr_start + ws_offset;
+            let comment_end = comment_start + nl_pos as u32;
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("leadingComments".to_string(), json!([{
+                    "type": "Line",
+                    "value": comment_text,
+                    "start": comment_start,
+                    "end": comment_end
+                }]));
+            }
+        }
+    }
+}
+
+/// Attach comments from a full parse result to an expression's estree JSON.
+fn attach_expression_comments(
+    result: &mut Value,
+    comments: &[oxc::ast::ast::Comment],
+    expr_str: &str,
+    expr_start: u32,
+    wrapper_prefix_len: u32,
+    source: &str,
+) {
+    for c in comments.iter() {
+        // Adjust comment positions from wrapper coords to source coords
+        let c_start_in_expr = c.span.start.saturating_sub(wrapper_prefix_len);
+        let c_end_in_expr = c.span.end.saturating_sub(wrapper_prefix_len);
+
+        // Skip comments that are outside the expression range
+        if c_start_in_expr > expr_str.len() as u32 { continue; }
+
+        let c_start = expr_start + c_start_in_expr;
+        let c_end = expr_start + c_end_in_expr;
+
+        let comment_type = if c.is_line() { "Line" } else { "Block" };
+        let raw = &expr_str[c_start_in_expr as usize..std::cmp::min(c_end_in_expr as usize, expr_str.len())];
+        let value = if c.is_line() {
+            raw.strip_prefix("//").unwrap_or(raw)
+        } else {
+            raw.strip_prefix("/*").and_then(|v| v.strip_suffix("*/")).unwrap_or(raw)
+        };
+
+        let comment_json = json!({
+            "type": comment_type,
+            "value": value,
+            "start": c_start,
+            "end": c_end
+        });
+
+        let attached_in_expr = c.attached_to.saturating_sub(wrapper_prefix_len);
+        let attached_abs = expr_start + attached_in_expr;
+
+        // Try to attach to the expression tree recursively
+        if !attach_comment_recursive(result, &comment_json, attached_abs, c_start, source) {
+            // Fallback: if the comment is after the expression (trailing), attach to the root
+            let root_end = result.get("end").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            if c_start >= root_end {
+                if let Some(obj) = result.as_object_mut() {
+                    let arr = obj.entry("trailingComments").or_insert(json!([]));
+                    if let Some(a) = arr.as_array_mut() { a.push(comment_json); }
+                }
+            }
+        }
+    }
 }
 
 /// Convert an oxc Expression AST node to estree JSON.
@@ -753,9 +844,8 @@ fn attach_comment_recursive(node: &mut Value, comment: &Value, attached_to: u32,
         let node_start = obj.get("start").and_then(|v| v.as_u64()).unwrap_or(u64::MAX) as u32;
         let node_end = obj.get("end").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
 
-        // Check if this node is the target
+        // Check if this node is the leading target (attached_to matches node start)
         if node_start == attached_to {
-            // Check if it's a trailing comment (comment is AFTER the node on the same line)
             let node_end_line = offset_to_loc(source, node_end as usize).0;
             let comment_line = offset_to_loc(source, comment_start as usize).0;
             let field = if comment_line == node_end_line && comment_start >= node_end {
@@ -769,8 +859,11 @@ fn attach_comment_recursive(node: &mut Value, comment: &Value, attached_to: u32,
         }
 
         // If comment position is within this node's range, recurse into children
-        if comment_start >= node_start && comment_start < node_end {
-            for (_, v) in obj.iter_mut() {
+        if comment_start >= node_start && comment_start <= node_end {
+            // First, try to find exact match in children
+            for (key, v) in obj.iter_mut() {
+                // Skip comment-related fields
+                if key == "leadingComments" || key == "trailingComments" { continue; }
                 match v {
                     Value::Object(_) => {
                         if attach_comment_recursive(v, comment, attached_to, comment_start, source) {
@@ -778,6 +871,8 @@ fn attach_comment_recursive(node: &mut Value, comment: &Value, attached_to: u32,
                         }
                     }
                     Value::Array(arr) => {
+                        // For array children (like body, elements, properties),
+                        // also check if the comment trails a specific element
                         for item in arr.iter_mut() {
                             if attach_comment_recursive(item, comment, attached_to, comment_start, source) {
                                 return true;
@@ -785,6 +880,40 @@ fn attach_comment_recursive(node: &mut Value, comment: &Value, attached_to: u32,
                         }
                     }
                     _ => {}
+                }
+            }
+
+            // Try trailing attachment: find the last array element that ends before the comment.
+            // This handles cases like:
+            //   [1, // trailing comment 1
+            //    /* trailing comment 2 */]
+            // where comment 2 is on a different line but still trails element 1.
+            for (key, v) in obj.iter_mut() {
+                if key == "leadingComments" || key == "trailingComments" { continue; }
+                if let Value::Array(arr) = v {
+                    // Find the last element whose end is before the comment
+                    let mut last_before_idx: Option<usize> = None;
+                    for (i, item) in arr.iter().enumerate() {
+                        let item_end = item.get("end").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        if item_end <= comment_start {
+                            last_before_idx = Some(i);
+                        }
+                    }
+                    if let Some(idx) = last_before_idx {
+                        // Check that no other element starts between this element's end and the comment
+                        let item_end = arr[idx].get("end").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        let no_other_after = arr.iter().skip(idx + 1).all(|item| {
+                            let s = item.get("start").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                            s > comment_start
+                        });
+                        if no_other_after && item_end <= comment_start {
+                            if let Some(item_obj) = arr[idx].as_object_mut() {
+                                let entry = item_obj.entry("trailingComments").or_insert(json!([]));
+                                if let Some(a) = entry.as_array_mut() { a.push(comment.clone()); }
+                                return true;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2342,10 +2471,12 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
             "end": c_end
         });
 
-        // Find the statement this comment is attached to
+        // Find the node this comment is attached to
         let attached_abs = content_start + c.attached_to;
         if c.is_leading() {
-            // Leading comment: attached_to points to the statement start
+            // Leading comment: attached_to points to the target node's start
+            // First try top-level body statements
+            let mut found = false;
             for stmt in body.iter_mut() {
                 let stmt_start = stmt.get("start").and_then(|s| s.as_u64()).unwrap_or(0) as u32;
                 if stmt_start == attached_abs {
@@ -2353,21 +2484,25 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
                         let arr = obj.entry("leadingComments").or_insert(json!([]));
                         if let Some(a) = arr.as_array_mut() { a.push(comment_json.clone()); }
                     }
+                    found = true;
                     break;
                 }
             }
+            // If not found at top level, recursively search nested nodes
+            if !found {
+                for stmt in body.iter_mut() {
+                    if attach_comment_recursive(stmt, &comment_json, attached_abs, c_start, source) {
+                        break;
+                    }
+                }
+            }
         } else {
-            // Trailing comment: use attached_to to find the owning statement
-            // Only attach if attached_to matches a statement's start (the NEXT token)
-            // The actual "trailing" attachment is on the previous statement
+            // Trailing comment: find the statement that ends just before this comment on the same line
             let mut found = false;
+            // First try top-level body statements
             for (i, stmt) in body.iter().enumerate() {
-                let stmt_start = stmt.get("start").and_then(|s| s.as_u64()).unwrap_or(0) as u32;
                 let stmt_end = stmt.get("end").and_then(|s| s.as_u64()).unwrap_or(0) as u32;
-                // Trailing comment: attached_to is the NEXT token. Find the statement
-                // that ENDS just before this comment and that the comment is on the same line
                 if stmt_end <= c_start && (c_start - stmt_end) <= 2 {
-                    // Only attach if comment is on the same line as statement end
                     let stmt_end_line = offset_to_loc(source, stmt_end as usize).0;
                     let comment_line = offset_to_loc(source, c_start as usize).0;
                     if stmt_end_line == comment_line {
@@ -2382,23 +2517,9 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
             }
             if found { continue; }
             // Try to attach to nested nodes by walking the body tree
-            let mut attached = false;
             for stmt in body.iter_mut() {
                 if attach_comment_recursive(stmt, &comment_json, attached_abs, c_start, source) {
-                    attached = true;
                     break;
-                }
-            }
-            if attached { continue; }
-            #[allow(unreachable_code)]
-            let mut best_idx: Option<usize> = None;
-            let best_dist = 0u32;
-            for (_i, _stmt) in body.iter().enumerate() {
-            }
-            if let Some(idx) = best_idx {
-                if let Some(obj) = body[idx].as_object_mut() {
-                    let arr = obj.entry("trailingComments").or_insert(json!([]));
-                    if let Some(a) = arr.as_array_mut() { a.push(comment_json.clone()); }
                 }
             }
         }
