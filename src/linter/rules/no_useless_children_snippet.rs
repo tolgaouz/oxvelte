@@ -22,9 +22,10 @@ impl Rule for NoUselessChildrenSnippet {
                 if el.name.starts_with(|c: char| c.is_uppercase()) {
                     for child in &el.children {
                         if let TemplateNode::SnippetBlock(snippet) = child {
-                            if snippet.name == "children" && snippet.body.nodes.is_empty() {
+                            if snippet.name == "children" && snippet.params.trim().is_empty() {
+                                // A {#snippet children()} without parameters is useless
                                 ctx.diagnostic(
-                                    "Useless children snippet — remove it or add content.",
+                                    "Useless `{#snippet children()}` — place content directly as children of the component.",
                                     snippet.span,
                                 );
                             }

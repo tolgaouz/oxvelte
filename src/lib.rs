@@ -338,6 +338,8 @@ mod linter_fixture_tests {
 
     #[test] fn linter_no_reactive_functions_invalid() { run_linter_invalid("no-reactive-functions"); }
 
+    #[test] fn linter_no_useless_children_snippet_invalid() { run_linter_invalid("no-useless-children-snippet"); }
+
     // These invalid tests need more rule implementation work:
     // no-navigation-without-resolve, no-goto-without-base,
     // no-navigation-without-base, no-dynamic-slot-name, require-event-dispatcher-types
