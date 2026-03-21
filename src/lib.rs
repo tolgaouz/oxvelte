@@ -993,6 +993,34 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- linter rule combination tests ---
+
+    #[test]
+    fn test_multiple_rules_on_one_file() {
+        let s = "<script>\n\t$: x = 42;\n\t$inspect(x);\n</script>\n{@html danger}\n{@debug x}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let has_rule = |name: &str| diags.iter().any(|d| d.rule_name == name);
+        assert!(has_rule("svelte/no-at-html-tags"), "Should flag @html");
+        assert!(has_rule("svelte/no-at-debug-tags"), "Should flag @debug");
+        assert!(has_rule("svelte/no-inspect"), "Should flag $inspect");
+        assert!(has_rule("svelte/no-reactive-literals"), "Should flag $: x = 42");
+    }
+
+    #[test]
+    fn test_no_false_positives_clean() {
+        let s = "<script lang=\"ts\">\n\timport { onMount } from 'svelte';\n\texport let data: { name: string };\n\tlet count = 0;\n\tconst increment = () => count++;\n\tonMount(() => {\n\t\tconsole.log('mounted');\n\t});\n</script>\n\n{#each items as item (item.id)}\n\t<p>{item}</p>\n{/each}\n\n<button on:click={increment}>Count: {count}</button>\n\n<style>\n\tp { color: blue; }\n\tbutton { font-size: 1em; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty(), "Parse should succeed");
+        let diags = Linter::recommended().lint(&r.ast, s);
+        // Filter out block-lang (we're using lang=ts for script but not style)
+        let filtered: Vec<_> = diags.iter()
+            .filter(|d| d.rule_name != "svelte/block-lang" && d.rule_name != "svelte/no-unused-class-name")
+            .collect();
+        assert!(filtered.is_empty(), "Clean Svelte 4 component should have no warnings, got: {:?}",
+            filtered.iter().map(|d| format!("{}: {}", d.rule_name, d.message)).collect::<Vec<_>>());
+    }
+
     // --- error handling tests ---
 
     #[test]
