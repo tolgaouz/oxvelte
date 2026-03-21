@@ -305,8 +305,7 @@ mod linter_fixture_tests {
     #[test] fn linter_no_extra_reactive_curlies_invalid() { run_linter_invalid("no-extra-reactive-curlies"); }
 
     // Batch 3: more rules
-    // no-dom-manipulating: needs to distinguish DOM methods on elements vs other objects
-    // #[test] fn linter_no_dom_manipulating_valid() { run_linter_valid("no-dom-manipulating"); }
+    #[test] fn linter_no_dom_manipulating_valid() { run_linter_valid("no-dom-manipulating"); }
     #[test] fn linter_no_reactive_literals_valid() { run_linter_valid("no-reactive-literals"); }
     #[test] fn linter_no_reactive_functions_valid() { run_linter_valid("no-reactive-functions"); }
     #[test] fn linter_no_immutable_reactive_statements_valid() { run_linter_valid("no-immutable-reactive-statements"); }
@@ -315,8 +314,7 @@ mod linter_fixture_tests {
     #[test] fn linter_no_ignored_unsubscribe_valid() { run_linter_valid("no-ignored-unsubscribe"); }
     #[test] fn linter_no_inner_declarations_valid() { run_linter_valid("no-inner-declarations"); }
     #[test] fn linter_no_add_event_listener_valid() { run_linter_valid("no-add-event-listener"); }
-    // no-unnecessary-state-wrap: needs better $state() analysis
-    // #[test] fn linter_no_unnecessary_state_wrap_valid() { run_linter_valid("no-unnecessary-state-wrap"); }
+    #[test] fn linter_no_unnecessary_state_wrap_valid() { run_linter_valid("no-unnecessary-state-wrap"); }
     #[test] fn linter_no_unused_props_valid() { run_linter_valid("no-unused-props"); }
     #[test] fn linter_no_unused_class_name_valid() { run_linter_valid("no-unused-class-name"); }
     // require-event-dispatcher-types: needs to distinguish Svelte's createEventDispatcher from other functions

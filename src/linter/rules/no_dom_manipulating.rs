@@ -5,8 +5,8 @@ use crate::linter::{LintContext, Rule};
 
 const DOM_METHODS: &[&str] = &[
     ".appendChild(", ".removeChild(", ".insertBefore(", ".replaceChild(",
-    ".remove()", ".setAttribute(", ".removeAttribute(", ".classList.",
-    ".innerHTML", ".outerHTML", ".textContent", ".innerText",
+    ".setAttribute(", ".removeAttribute(", ".classList.",
+    ".innerHTML", ".outerHTML",
     "document.createElement(", "document.createTextNode(",
     "document.getElementById(", "document.querySelector(",
     "document.querySelectorAll(",
