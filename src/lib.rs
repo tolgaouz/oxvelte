@@ -993,6 +993,79 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- Svelte 4 legacy syntax tests ---
+
+    #[test]
+    fn test_parse_on_directive_legacy() {
+        let s = "<button on:click={handler}>click</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::Element(el) = &r.ast.html.nodes[0] {
+            assert!(el.attributes.iter().any(|a| matches!(a,
+                ast::Attribute::Directive { kind: ast::DirectiveKind::EventHandler, name, .. } if name == "click"
+            )));
+        }
+    }
+
+    #[test]
+    fn test_parse_context_module_legacy() {
+        let s = "<script context=\"module\">\n\texport const x = 1;\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        assert!(r.ast.module.is_some());
+        assert!(r.ast.module.as_ref().unwrap().module);
+    }
+
+    #[test]
+    fn test_parse_reactive_declaration() {
+        let s = "<script>\n\tlet count = 0;\n\t$: doubled = count * 2;\n\t$: if (count > 10) console.log('big');\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_export_let_with_default() {
+        let s = "<script>\n\texport let name = 'World';\n\texport let count = 0;\n</script>\n<p>Hello {name}! ({count})</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_no_store_async_writable() {
+        let s = "<script>\n\timport { writable } from 'svelte/store';\n\twritable(0, async (set) => { set(1); });\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-store-async"),
+            "Should flag async writable callback");
+    }
+
+    #[test]
+    fn test_no_store_async_derived() {
+        let s = "<script>\n\timport { derived } from 'svelte/store';\n\tconst d = derived(count, async ($c) => await transform($c));\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-store-async"),
+            "Should flag async derived callback");
+    }
+
+    #[test]
+    fn test_dom_manipulating_chained() {
+        let s = "<script>\n\tlet div;\n\tconst update = () => { div?.remove(); };\n</script>\n<div bind:this={div}>text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-dom-manipulating"),
+            "Should flag optional chain DOM manipulation");
+    }
+
+    #[test]
+    fn test_dom_manipulating_inner_html() {
+        let s = "<script>\n\tlet el;\n\tconst update = () => { el.innerHTML = '<p>bad</p>'; };\n</script>\n<div bind:this={el}>text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-dom-manipulating"),
+            "Should flag innerHTML assignment");
+    }
+
     // --- no-immutable-reactive-statements tests ---
 
     #[test]
