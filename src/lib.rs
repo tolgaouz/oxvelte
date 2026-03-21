@@ -993,6 +993,125 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- linter false-positive regression ---
+
+    #[test]
+    fn test_no_false_positive_if_block() {
+        let s = "{#if condition}\n\t<p>visible</p>\n{/if}";
+        let r = parser::parse(s);
+        let diags = Linter::recommended().lint(&r.ast, s);
+        assert!(diags.is_empty(), "Simple if block should have no warnings: {:?}",
+            diags.iter().map(|d| &d.rule_name).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_no_false_positive_each_with_key() {
+        let s = "{#each items as item (item.id)}\n\t<p>{item.name}</p>\n{/each}";
+        let r = parser::parse(s);
+        let diags = Linter::recommended().lint(&r.ast, s);
+        assert!(diags.is_empty(), "Each with key should have no warnings: {:?}",
+            diags.iter().map(|d| &d.rule_name).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_no_false_positive_component() {
+        let s = "<Widget prop={value} on:click={handler}>\n\t<span>child</span>\n</Widget>";
+        let r = parser::parse(s);
+        let diags = Linter::recommended().lint(&r.ast, s);
+        assert!(diags.is_empty(), "Component usage should have no warnings: {:?}",
+            diags.iter().map(|d| &d.rule_name).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_no_false_positive_svelte_window() {
+        let s = "<svelte:window on:keydown={handler} />";
+        let r = parser::parse(s);
+        let diags = Linter::recommended().lint(&r.ast, s);
+        assert!(diags.is_empty(), "svelte:window should have no warnings");
+    }
+
+    #[test]
+    fn test_no_false_positive_mustache() {
+        let s = "<p>{value}</p>";
+        let r = parser::parse(s);
+        let diags = Linter::recommended().lint(&r.ast, s);
+        assert!(diags.is_empty(), "Simple mustache should have no warnings");
+    }
+
+    #[test]
+    fn test_no_false_positive_html_comment() {
+        let s = "<!-- This is a comment -->";
+        let r = parser::parse(s);
+        let diags = Linter::recommended().lint(&r.ast, s);
+        assert!(diags.is_empty(), "Spaced comment should have no warnings");
+    }
+
+    // --- parser stress tests ---
+
+    #[test]
+    fn test_parse_many_elements() {
+        let mut s = String::new();
+        for i in 0..50 {
+            s.push_str(&format!("<div class=\"item-{}\">text {}</div>\n", i, i));
+        }
+        let r = parser::parse(&s);
+        assert!(r.errors.is_empty());
+        assert!(r.ast.html.nodes.len() >= 50);
+    }
+
+    #[test]
+    fn test_parse_many_attributes() {
+        let s = "<div a=\"1\" b=\"2\" c=\"3\" d=\"4\" e=\"5\" f=\"6\" g=\"7\" h=\"8\" i=\"9\" j=\"10\">text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_deeply_nested_elements() {
+        let s = "<div><div><div><div><div><div><div><div><div><div>deep</div></div></div></div></div></div></div></div></div></div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_long_text() {
+        let s = format!("<p>{}</p>", "x".repeat(10000));
+        let r = parser::parse(&s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_many_mustaches() {
+        let mut s = String::from("<p>");
+        for i in 0..20 {
+            s.push_str(&format!("{{val{}}} ", i));
+        }
+        s.push_str("</p>");
+        let r = parser::parse(&s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_complex_each() {
+        let s = "{#each Object.entries(data).filter(([k, v]) => v > 0).sort((a, b) => a[1] - b[1]) as [key, value] (key)}\n\t<div>{key}: {value}</div>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_complex_if_condition() {
+        let s = "{#if typeof window !== 'undefined' && window.innerWidth > 768 && !isMobile}\n\t<p>desktop</p>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_template_literal_expression() {
+        let s = "<p>{`Hello ${name}, you have ${count} item${count === 1 ? '' : 's'}`}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- edge case attribute patterns ---
 
     #[test]
