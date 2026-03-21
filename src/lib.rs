@@ -314,7 +314,14 @@ mod linter_fixture_tests {
     // html-closing-bracket-new-line invalid needs more bracket analysis
     // #[test] fn linter_html_closing_bracket_new_line_invalid() { run_linter_invalid("html-closing-bracket-new-line"); }
 
-    // Batch 5: additional valid tests not in batch 3
+    // Batch 5: more invalid tests
+    // no-dom-manipulating invalid needs type/scope analysis for .remove()
+    // #[test] fn linter_no_dom_manipulating_invalid() { run_linter_invalid("no-dom-manipulating"); }
+    // require-event-prefix invalid needs $props type analysis
+    // #[test] fn linter_require_event_prefix_invalid() { run_linter_invalid("require-event-prefix"); }
+    #[test] fn linter_no_add_event_listener_invalid() { run_linter_invalid("no-add-event-listener"); }
+
+    // Batch 6: additional valid tests not in batch 3
     #[test] fn linter_experimental_require_slot_types_valid() { run_linter_valid("experimental-require-slot-types"); }
     #[test] fn linter_experimental_require_strict_events_valid() { run_linter_valid("experimental-require-strict-events"); }
     #[test] fn linter_html_closing_bracket_new_line_valid() { run_linter_valid("html-closing-bracket-new-line"); }

@@ -37,7 +37,7 @@ impl Rule for NoDomManipulating {
                     if let Some(gt) = tag_text.find('>') {
                         let source_pos = tag_start + gt + 1 + abs_content_pos;
                         ctx.diagnostic(
-                            format!("Avoid direct DOM manipulation. Use Svelte's reactive declarations instead."),
+                            "Avoid direct DOM manipulation. Use Svelte's reactive declarations instead.",
                             oxc::span::Span::new(source_pos as u32, (source_pos + method.len()) as u32),
                         );
                     }
