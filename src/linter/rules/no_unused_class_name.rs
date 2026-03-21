@@ -1,9 +1,9 @@
-//! `svelte/no-unused-class-name` — disallow class names in `<style>` that are not
-//! used in the template markup.
+//! `svelte/no-unused-class-name` — disallow class names in the template that are not
+//! defined in the `<style>` block.
 
 use crate::linter::{walk_template_nodes, LintContext, Rule};
-use crate::ast::{TemplateNode, Attribute, AttributeValue};
-use oxc::span::Span;
+use crate::ast::{TemplateNode, Attribute, AttributeValue, DirectiveKind};
+use std::collections::HashSet;
 
 pub struct NoUnusedClassName;
 
@@ -13,61 +13,65 @@ impl Rule for NoUnusedClassName {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let style = match &ctx.ast.css {
-            Some(s) => s,
-            None => return,
-        };
+        // Step 1: Extract all class selectors from the CSS content
+        let mut css_classes = HashSet::new();
+        if let Some(style) = &ctx.ast.css {
+            let css = &style.content;
+            let bytes = css.as_bytes();
+            let mut i = 0;
+            while i < bytes.len() {
+                if bytes[i] == b'.' {
+                    let start = i + 1;
+                    let mut end = start;
+                    while end < bytes.len()
+                        && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'-' || bytes[end] == b'_')
+                    {
+                        end += 1;
+                    }
+                    if end > start {
+                        let class_name = &css[start..end];
+                        css_classes.insert(class_name.to_string());
+                    }
+                    i = end;
+                } else {
+                    i += 1;
+                }
+            }
+        }
 
-        // Collect class names used in the template.
-        let mut used_classes: Vec<String> = Vec::new();
+        // Step 2: Collect all template classes and check if they're defined in CSS
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
+                let mut element_classes = Vec::new();
+
                 for attr in &el.attributes {
-                    if let Attribute::NormalAttribute { name, value, .. } = attr {
-                        if name == "class" {
+                    match attr {
+                        Attribute::NormalAttribute { name, value, .. } if name == "class" => {
                             if let AttributeValue::Static(val) = value {
                                 for cls in val.split_whitespace() {
-                                    used_classes.push(cls.to_string());
+                                    if !cls.is_empty() {
+                                        element_classes.push(cls.to_string());
+                                    }
                                 }
                             }
                         }
+                        Attribute::Directive { kind: DirectiveKind::Class, name: cls_name, .. } => {
+                            element_classes.push(cls_name.clone());
+                        }
+                        _ => {}
                     }
-                    if let Attribute::Directive { kind: crate::ast::DirectiveKind::Class, name: cls_name, .. } = attr {
-                        used_classes.push(cls_name.clone());
+                }
+
+                // Report template classes not found in CSS
+                for cls in &element_classes {
+                    if !css_classes.contains(cls.as_str()) {
+                        ctx.diagnostic(
+                            format!("Unused class \"{}\".", cls),
+                            el.span,
+                        );
                     }
                 }
             }
         });
-
-        // Extract class selectors from CSS content (simple heuristic).
-        let css = &style.content;
-        let base = style.span.start as usize;
-        let mut i = 0;
-        let bytes = css.as_bytes();
-        while i < bytes.len() {
-            if bytes[i] == b'.' {
-                let start = i + 1;
-                let mut end = start;
-                while end < bytes.len()
-                    && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'-' || bytes[end] == b'_')
-                {
-                    end += 1;
-                }
-                if end > start {
-                    let class_name = &css[start..end];
-                    if !used_classes.iter().any(|c| c == class_name) {
-                        let span_start = (base + i) as u32;
-                        let span_end = (base + end) as u32;
-                        ctx.diagnostic(
-                            format!("Class `.{}` is defined in `<style>` but not used in the template.", class_name),
-                            Span::new(span_start, span_end),
-                        );
-                    }
-                }
-                i = end;
-            } else {
-                i += 1;
-            }
-        }
     }
 }

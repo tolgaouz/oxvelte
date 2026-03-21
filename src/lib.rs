@@ -1267,6 +1267,7 @@ mod linter_fixture_tests {
     #[test] fn linter_no_unnecessary_state_wrap_valid() { run_linter_valid("no-unnecessary-state-wrap"); }
     #[test] fn linter_no_unused_props_valid() { run_linter_valid("no-unused-props"); }
     #[test] fn linter_no_unused_class_name_valid() { run_linter_valid("no-unused-class-name"); }
+    #[test] fn linter_no_unused_class_name_invalid() { run_linter_invalid("no-unused-class-name"); }
     #[test] fn linter_require_event_dispatcher_types_valid() { run_linter_valid("require-event-dispatcher-types"); }
     #[test] fn linter_require_event_dispatcher_types_invalid() { run_linter_invalid("require-event-dispatcher-types"); }
     #[test] fn linter_require_stores_init_valid() { run_linter_valid("require-stores-init"); }
