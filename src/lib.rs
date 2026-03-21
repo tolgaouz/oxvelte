@@ -993,6 +993,26 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- shorthand directive tests ---
+
+    #[test]
+    fn test_shorthand_directive_bind() {
+        let s = "<input bind:value={value} />";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/shorthand-directive"),
+            "Should flag non-shorthand bind:value");
+    }
+
+    #[test]
+    fn test_shorthand_directive_bind_ok() {
+        let s = "<input bind:value />";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/shorthand-directive"),
+            "Should NOT flag shorthand bind:value");
+    }
+
     // --- more linter positive/negative tests ---
 
     #[test]
