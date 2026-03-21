@@ -342,6 +342,7 @@ mod linter_fixture_tests {
     #[test] fn linter_no_useless_children_snippet_invalid() { run_linter_invalid("no-useless-children-snippet"); }
     #[test] fn linter_no_ignored_unsubscribe_invalid() { run_linter_invalid("no-ignored-unsubscribe"); }
     #[test] fn linter_no_reactive_literals_invalid() { run_linter_invalid("no-reactive-literals"); }
+    #[test] fn linter_require_stores_init_invalid() { run_linter_invalid("require-stores-init"); }
     // valid-style-parse invalid: CSS parser is too tolerant of malformed CSS
     // #[test] fn linter_valid_style_parse_invalid() { run_linter_invalid("valid-style-parse"); }
 
