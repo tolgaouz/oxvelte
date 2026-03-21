@@ -320,8 +320,7 @@ mod linter_fixture_tests {
     #[test] fn linter_require_event_dispatcher_types_valid() { run_linter_valid("require-event-dispatcher-types"); }
     // require-stores-init: needs store type detection
     // #[test] fn linter_require_stores_init_valid() { run_linter_valid("require-stores-init"); }
-    // require-optimized-style-attribute: needs better static CSS detection
-    // #[test] fn linter_require_optimized_style_attribute_valid() { run_linter_valid("require-optimized-style-attribute"); }
+    #[test] fn linter_require_optimized_style_attribute_valid() { run_linter_valid("require-optimized-style-attribute"); }
     #[test] fn linter_prefer_writable_derived_valid() { run_linter_valid("prefer-writable-derived"); }
     #[test] fn linter_prefer_const_valid() { run_linter_valid("prefer-const"); }
     #[test] fn linter_prefer_destructured_store_props_valid() { run_linter_valid("prefer-destructured-store-props"); }
