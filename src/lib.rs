@@ -841,6 +841,165 @@ mod tests {
             "Should flag store without initial value");
     }
 
+    // --- svelte 5 runes tests ---
+
+    #[test]
+    fn test_parse_state_rune() {
+        let s = "<script>\n\tlet count = $state(0);\n</script>\n<p>{count}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        assert!(r.ast.instance.as_ref().unwrap().content.contains("$state"));
+    }
+
+    #[test]
+    fn test_parse_derived_rune() {
+        let s = "<script>\n\tlet count = $state(0);\n\tlet doubled = $derived(count * 2);\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_effect_rune() {
+        let s = "<script>\n\tlet count = $state(0);\n\t$effect(() => { console.log(count); });\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_props_rune() {
+        let s = "<script>\n\tlet { name, age = 0 } = $props();\n</script>\n<p>{name} is {age}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_bindable_rune() {
+        let s = "<script>\n\tlet { value = $bindable() } = $props();\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_inspect_rune() {
+        let s = "<script>\n\tlet count = $state(0);\n\t$inspect(count);\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    // --- event handler tests ---
+
+    #[test]
+    fn test_parse_svelte5_onclick() {
+        let s = "<button onclick={() => console.log('hi')}>click</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_on_directive_with_modifiers() {
+        let s = "<button on:click|preventDefault|stopPropagation={handler}>click</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    // --- attribute edge cases ---
+
+    #[test]
+    fn test_parse_bind_group() {
+        let s = "<input type=\"radio\" bind:group={selected} value=\"a\" />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_in_out_transition() {
+        let s = "<div in:fly={{y: 200}} out:fade>content</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_shorthand_binding() {
+        let s = "<input bind:value />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    // --- complex template tests ---
+
+    #[test]
+    fn test_parse_slot_element() {
+        let s = "<slot name=\"header\">Default</slot>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte_options() {
+        let s = "<svelte:options immutable />\n<p>content</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte_window() {
+        let s = "<svelte:window on:keydown={handler} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte_body() {
+        let s = "<svelte:body on:click={handler} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte_document() {
+        let s = "<svelte:document on:visibilitychange={handler} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte_fragment() {
+        let s = "<svelte:fragment slot=\"header\"><h1>Title</h1></svelte:fragment>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    // --- CSS style tests ---
+
+    #[test]
+    fn test_parse_style_with_scss() {
+        let s = "<style lang=\"scss\">\n\t.parent {\n\t\t.child { color: red; }\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        assert!(r.ast.css.as_ref().unwrap().lang.as_deref() == Some("scss"));
+    }
+
+    #[test]
+    fn test_parse_style_with_less() {
+        let s = "<style lang=\"less\">\n\t.parent { color: red; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_empty_style() {
+        let s = "<style></style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_complex_template_expressions() {
+        let s = "<p>{@html `<strong>${name}</strong>`}</p>\n{@debug name, count}\n{@const doubled = count * 2}\n<p>{doubled}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- linter integration tests ---
 
     #[test]
