@@ -777,6 +777,24 @@ mod tests {
     }
 
     #[test]
+    fn test_useless_children_snip_in_component() {
+        let s = "<Component>\n\t{#snippet children()}\n\t\t<p>content</p>\n\t{/snippet}\n</Component>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-useless-children-snippet"),
+            "Should flag useless snippet children() inside component");
+    }
+
+    #[test]
+    fn test_useless_children_snip_with_params_ok() {
+        let s = "<Component>\n\t{#snippet children(item)}\n\t\t<p>{item}</p>\n\t{/snippet}\n</Component>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-useless-children-snippet"),
+            "Should NOT flag snippet children(item) with params");
+    }
+
+    #[test]
     fn test_prefer_const_let() {
         let s = "<script>\n\tlet x = 42;\n</script>\n<p>{x}</p>";
         let r = parser::parse(s);
