@@ -2146,6 +2146,65 @@ pub fn to_legacy_json(ast: &SvelteAst, source: &str) -> Value {
             }));
         }
     }
+    // Also collect JS comments from template expressions (inside { })
+    let tmpl_script_ranges: Vec<(usize, usize)> = [&ast.instance, &ast.module].iter()
+        .filter_map(|s| s.as_ref())
+        .map(|s| (s.span.start as usize, s.span.end as usize))
+        .chain(ast.css.as_ref().map(|s| (s.span.start as usize, s.span.end as usize)))
+        .collect();
+    {
+        let bytes = source.as_bytes();
+        let mut i = 0;
+        let mut brace_depth = 0i32;
+        while i < source.len() {
+            // Skip script/style blocks
+            if tmpl_script_ranges.iter().any(|(s, e)| i >= *s && i < *e) { i += 1; continue; }
+            if bytes[i] == b'{' { brace_depth += 1; i += 1; continue; }
+            if bytes[i] == b'}' { brace_depth -= 1; i += 1; continue; }
+            // Only look for comments INSIDE expressions
+            if brace_depth > 0 {
+                if i + 1 < source.len() && bytes[i] == b'/' && bytes[i + 1] == b'/' {
+                    let start = i as u32; i += 2;
+                    let value_start = i;
+                    while i < source.len() && bytes[i] != b'\n' { i += 1; }
+                    let value = &source[value_start..i];
+                    all_comments.push(json!({
+                        "type": "Line", "value": value, "start": start, "end": i as u32,
+                        "loc": loc_json(source, start, i as u32)
+                    }));
+                    continue;
+                } else if i + 1 < source.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+                    let start = i as u32; i += 2;
+                    let value_start = i;
+                    while i + 1 < source.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') { i += 1; }
+                    let value = &source[value_start..i]; i += 2;
+                    all_comments.push(json!({
+                        "type": "Block", "value": value, "start": start, "end": i as u32,
+                        "loc": loc_json(source, start, i as u32)
+                    }));
+                    continue;
+                }
+            }
+            // Skip strings
+            if bytes[i] == b'"' || bytes[i] == b'\'' || bytes[i] == b'`' {
+                let q = bytes[i]; i += 1;
+                while i < source.len() && bytes[i] != q {
+                    if bytes[i] == b'\\' { i += 1; }
+                    i += 1;
+                }
+                if i < source.len() { i += 1; }
+                continue;
+            }
+            i += 1;
+        }
+    }
+    // Sort all_comments by start position
+    all_comments.sort_by(|a, b| {
+        let a_start = a.get("start").and_then(|v| v.as_u64()).unwrap_or(0);
+        let b_start = b.get("start").and_then(|v| v.as_u64()).unwrap_or(0);
+        a_start.cmp(&b_start)
+    });
+
     if !all_comments.is_empty() {
         root["_comments"] = json!(all_comments);
     }
