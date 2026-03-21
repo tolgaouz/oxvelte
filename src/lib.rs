@@ -195,6 +195,58 @@ mod tests {
 }
 
 #[cfg(test)]
+mod linter_fixture_tests {
+    use crate::parser;
+    use crate::linter::Linter;
+
+    fn run_linter_valid(rule_name: &str) {
+        let valid_dir = format!("fixtures/linter/{}/valid", rule_name);
+        if let Ok(entries) = std::fs::read_dir(&valid_dir) {
+            let lint = Linter::all();
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map(|e| e == "svelte").unwrap_or(false) {
+                    let source = std::fs::read_to_string(&path).unwrap();
+                    let result = parser::parse(&source);
+                    let diags = lint.lint(&result.ast, &source);
+                    let rule_diags: Vec<_> = diags.iter().filter(|d| d.rule_name == format!("svelte/{}", rule_name)).collect();
+                    assert!(rule_diags.is_empty(), "Rule {} should not fire on valid file {}: {:?}",
+                        rule_name, path.display(), rule_diags.iter().map(|d| &d.message).collect::<Vec<_>>());
+                }
+            }
+        }
+    }
+
+    fn run_linter_invalid(rule_name: &str) {
+        let invalid_dir = format!("fixtures/linter/{}/invalid", rule_name);
+        if let Ok(entries) = std::fs::read_dir(&invalid_dir) {
+            let lint = Linter::all();
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map(|e| e == "svelte").unwrap_or(false) {
+                    let source = std::fs::read_to_string(&path).unwrap();
+                    let result = parser::parse(&source);
+                    let diags = lint.lint(&result.ast, &source);
+                    let rule_diags: Vec<_> = diags.iter().filter(|d| d.rule_name == format!("svelte/{}", rule_name)).collect();
+                    assert!(!rule_diags.is_empty(), "Rule {} should fire on invalid file {}", rule_name, path.display());
+                }
+            }
+        }
+    }
+
+    #[test] fn linter_no_at_html_tags_valid() { run_linter_valid("no-at-html-tags"); }
+    #[test] fn linter_no_at_html_tags_invalid() { run_linter_invalid("no-at-html-tags"); }
+    #[test] fn linter_no_at_debug_tags_valid() { run_linter_valid("no-at-debug-tags"); }
+    #[test] fn linter_no_at_debug_tags_invalid() { run_linter_invalid("no-at-debug-tags"); }
+    #[test] fn linter_button_has_type_valid() { run_linter_valid("button-has-type"); }
+    #[test] fn linter_button_has_type_invalid() { run_linter_invalid("button-has-type"); }
+    #[test] fn linter_no_target_blank_valid() { run_linter_valid("no-target-blank"); }
+    #[test] fn linter_no_target_blank_invalid() { run_linter_invalid("no-target-blank"); }
+    #[test] fn linter_require_each_key_valid() { run_linter_valid("require-each-key"); }
+    #[test] fn linter_require_each_key_invalid() { run_linter_invalid("require-each-key"); }
+}
+
+#[cfg(test)]
 mod parser_fixture_tests {
     use crate::parser;
     use crate::parser::serialize::to_legacy_json;

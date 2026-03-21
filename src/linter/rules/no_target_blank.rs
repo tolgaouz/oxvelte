@@ -32,6 +32,21 @@ impl Rule for NoTargetBlank {
                     return;
                 }
 
+                // Only flag external URLs (http, https, //)
+                let href = el.attributes.iter().find_map(|attr| {
+                    if let Attribute::NormalAttribute { name, value: AttributeValue::Static(v), .. } = attr {
+                        if name == "href" { Some(v.as_str()) } else { None }
+                    } else { None }
+                });
+                let is_external = href.map(|h| h.starts_with("http:") || h.starts_with("https:") || h.starts_with("//"))
+                    .unwrap_or(false);
+                let is_dynamic = el.attributes.iter().any(|attr| {
+                    matches!(attr, Attribute::NormalAttribute { name, value: AttributeValue::Expression(_), .. } if name == "href")
+                });
+                if !is_external && !is_dynamic {
+                    return;
+                }
+
                 let has_rel_noopener = el.attributes.iter().any(|attr| {
                     matches!(
                         attr,
