@@ -269,8 +269,51 @@ impl<'a> CssParser<'a> {
                         }
                         let inner = &self.source[inner_start..self.pos];
                         let inner_offset = self.abs(inner_start);
-                        // Parse inner as selector list
-                        let args = {
+                        // For :nth-* pseudo-classes, parse as Nth value
+                        let is_nth = name.starts_with("nth-");
+                        let args = if is_nth {
+                            let trimmed = inner.trim();
+                            // Check for "of <selector>" suffix
+                            let (nth_val, of_sel) = if let Some(of_pos) = trimmed.find(" of ") {
+                                (&trimmed[..of_pos], Some(&trimmed[of_pos + 4..]))
+                            } else {
+                                (trimmed, None)
+                            };
+                            let nth_start = inner_offset;
+                            let nth_end = inner_offset + inner.trim_end().len() as u32;
+                            let mut nth_node = json!({
+                                "type": "Nth",
+                                "value": nth_val,
+                                "start": nth_start,
+                                "end": nth_end
+                            });
+                            if let Some(sel_str) = of_sel {
+                                let sel_offset = inner_offset + (trimmed.len() - sel_str.len()) as u32;
+                                let mut ip = CssParser::new(sel_str, sel_offset);
+                                if let Some(sl) = ip.parse_selector_list() {
+                                    nth_node["selector"] = sl;
+                                }
+                            }
+                            // Wrap Nth in a SelectorList → ComplexSelector → RelativeSelector
+                            Some(json!({
+                                "type": "SelectorList",
+                                "start": nth_start,
+                                "end": nth_end,
+                                "children": [{
+                                    "type": "ComplexSelector",
+                                    "start": nth_start,
+                                    "end": nth_end,
+                                    "children": [{
+                                        "type": "RelativeSelector",
+                                        "combinator": null,
+                                        "start": nth_start,
+                                        "end": nth_end,
+                                        "selectors": [nth_node]
+                                    }]
+                                }]
+                            }))
+                        } else {
+                            // Parse inner as selector list
                             let mut inner_parser = CssParser::new(inner, inner_offset);
                             inner_parser.parse_selector_list()
                         };
