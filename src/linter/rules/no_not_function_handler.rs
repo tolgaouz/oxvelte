@@ -35,6 +35,8 @@ impl Rule for NoNotFunctionHandler {
                                     || (expr.starts_with('\'') && expr.ends_with('\''))
                                     || (expr.starts_with('[') && expr.ends_with(']'))
                                     || (expr.starts_with('{') && expr.ends_with('}'))
+                                    || expr.starts_with("class ")
+                                    || expr.starts_with("new ")
                                 {
                                     ctx.diagnostic(
                                         format!("Expected a function as event handler, got '{}'.", expr),
