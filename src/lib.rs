@@ -993,6 +993,15 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    #[test]
+    fn test_prefer_writable_derived_effect_pre() {
+        let s = "<script>\n\tconst { x } = $props();\n\tlet y = $state(x);\n\t$effect.pre(() => {\n\t\ty = x;\n\t});\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/prefer-writable-derived"),
+            "Should flag $state + $effect.pre pattern");
+    }
+
     // --- navigation + SvelteKit tests ---
 
     #[test]
@@ -3463,6 +3472,7 @@ mod linter_fixture_tests {
     #[test] fn linter_require_optimized_style_attribute_valid() { run_linter_valid("require-optimized-style-attribute"); }
     #[test] fn linter_require_optimized_style_attribute_invalid() { run_linter_invalid("require-optimized-style-attribute"); }
     #[test] fn linter_prefer_writable_derived_valid() { run_linter_valid("prefer-writable-derived"); }
+    #[test] fn linter_prefer_writable_derived_invalid() { run_linter_invalid("prefer-writable-derived"); }
     #[test] fn linter_prefer_const_valid() { run_linter_valid("prefer-const"); }
     #[test] fn linter_prefer_const_invalid() { run_linter_invalid("prefer-const"); }
     #[test] fn linter_prefer_destructured_store_props_valid() { run_linter_valid("prefer-destructured-store-props"); }
