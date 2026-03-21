@@ -993,6 +993,89 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- CSS feature tests ---
+
+    #[test]
+    fn test_css_container_queries() {
+        let s = "<style>\n\t@container (min-width: 700px) {\n\t\t.card { flex-direction: row; }\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_css_layers() {
+        let s = "<style>\n\t@layer base {\n\t\tp { margin: 0; }\n\t}\n\t@layer theme {\n\t\tp { color: blue; }\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_css_nesting() {
+        let s = "<style>\n\t.parent {\n\t\tcolor: red;\n\t\t& .child { color: blue; }\n\t\t&:hover { color: green; }\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_css_supports() {
+        let s = "<style>\n\t@supports (display: grid) {\n\t\t.grid { display: grid; }\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_css_has_selector() {
+        let s = "<style>\n\tdiv:has(> p) { margin: 1rem; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    // --- linter coverage expansion ---
+
+    #[test]
+    fn test_multiple_event_handlers() {
+        let s = "<div on:mouseenter={enter} on:mouseleave={leave} on:click={click}>hover me</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-dupe-on-directives"),
+            "Different events should not be flagged as duplicates");
+    }
+
+    #[test]
+    fn test_style_directive_with_fallback() {
+        let s = "<div style:color={theme} style:background-color=\"white\">text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_each_without_key_nested() {
+        let s = "{#each items as item}\n\t{#each item.children as child}\n\t\t<p>{child}</p>\n\t{/each}\n{/each}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let key_diags: Vec<_> = diags.iter().filter(|d| d.rule_name == "svelte/require-each-key").collect();
+        assert!(key_diags.len() >= 2, "Should flag both each blocks without keys");
+    }
+
+    #[test]
+    fn test_no_nav_without_base_absolute_ok() {
+        let s = "<a href=\"https://svelte.dev\">Svelte</a>\n<a href=\"mailto:test@test.com\">Email</a>\n<a href=\"tel:+1234567890\">Call</a>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-navigation-without-base"),
+            "Should NOT flag absolute URLs, mailto, tel");
+    }
+
+    #[test]
+    fn test_class_directive_not_in_css() {
+        let s = "<div class:missing-class={true}>text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-unused-class-name"),
+            "Should flag class directive class not in CSS");
+    }
+
     // --- final batch tests ---
 
     #[test]
