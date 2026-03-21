@@ -298,6 +298,102 @@ mod tests {
         let json = parser::serialize::to_modern_json(&r.ast, s);
         assert!(json.get("fragment").is_some());
     }
+
+    #[test]
+    fn test_css_parsing() {
+        let s = "<style>div { color: red; }</style>";
+        let r = parser::parse(s);
+        assert!(r.ast.css.is_some());
+        let css = r.ast.css.unwrap();
+        assert!(css.content.contains("color: red"));
+    }
+
+    #[test]
+    fn test_script_lang_detection() {
+        let s = r#"<script lang="ts">let x: number = 1;</script>"#;
+        let r = parser::parse(s);
+        assert_eq!(r.ast.instance.as_ref().unwrap().lang.as_deref(), Some("ts"));
+    }
+
+    #[test]
+    fn test_module_context() {
+        let s = r#"<script context="module">export const foo = 1;</script>"#;
+        let r = parser::parse(s);
+        assert!(r.ast.module.is_some());
+        assert!(r.ast.instance.is_none());
+    }
+
+    #[test]
+    fn test_svelte5_module() {
+        let s = "<script module>export const foo = 1;</script>";
+        let r = parser::parse(s);
+        assert!(r.ast.module.is_some());
+    }
+
+    #[test]
+    fn test_void_element_parsing() {
+        let s = "<br><hr><img src='test.png'>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        assert_eq!(r.ast.html.nodes.len(), 3);
+    }
+
+    #[test]
+    fn test_if_block_with_else() {
+        let s = "{#if condition}yes{:else}no{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::IfBlock(block) = &r.ast.html.nodes[0] {
+            assert!(block.alternate.is_some());
+        } else {
+            panic!("Expected IfBlock");
+        }
+    }
+
+    #[test]
+    fn test_each_block_with_key() {
+        let s = "{#each items as item (item.id)}\n{item.name}\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::EachBlock(block) = &r.ast.html.nodes[0] {
+            assert!(block.key.is_some());
+        } else {
+            panic!("Expected EachBlock");
+        }
+    }
+
+    #[test]
+    fn test_snippet_block() {
+        let s = "{#snippet greeting(name)}\n<p>Hello {name}!</p>\n{/snippet}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::SnippetBlock(block) = &r.ast.html.nodes[0] {
+            assert_eq!(block.name, "greeting");
+        } else {
+            panic!("Expected SnippetBlock");
+        }
+    }
+
+    #[test]
+    fn test_render_tag() {
+        let s = "{@render greeting('world')}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_const_tag() {
+        let s = "{@const x = 42}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_html_entities() {
+        let s = "<p>&amp; &lt; &gt;</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
 }
 
 #[cfg(test)]
