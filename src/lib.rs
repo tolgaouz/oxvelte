@@ -841,6 +841,68 @@ mod tests {
             "Should flag store without initial value");
     }
 
+    // --- linter integration tests ---
+
+    #[test]
+    fn test_full_component_all_rules() {
+        let s = "<script lang=\"ts\">\n\timport { onMount } from 'svelte';\n\tlet count = $state(0);\n\tconst increment = () => count++;\n\tonMount(() => { console.log('mounted'); });\n</script>\n\n<button onclick={increment}>\n\tClicks: {count}\n</button>\n\n<style>\n\tbutton { font-size: 1.2em; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        let diags = Linter::recommended().lint(&r.ast, s);
+        // Should have minimal warnings for well-written component
+        let serious: Vec<_> = diags.iter().filter(|d|
+            d.rule_name != "svelte/no-useless-mustaches"
+            && d.rule_name != "svelte/require-each-key"
+        ).collect();
+        assert!(serious.len() <= 2, "Well-written component should have few warnings, got: {:?}",
+            serious.iter().map(|d| &d.rule_name).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_linter_rules_count() {
+        let linter = Linter::all();
+        let count = linter.rules().len();
+        assert!(count >= 79, "Should have at least 79 rules, got {}", count);
+    }
+
+    #[test]
+    fn test_recommended_subset() {
+        let all = Linter::all();
+        let rec = Linter::recommended();
+        assert!(rec.rules().len() < all.rules().len(),
+            "Recommended should be subset of all rules");
+    }
+
+    #[test]
+    fn test_parse_empty_component() {
+        let r = parser::parse("");
+        assert!(r.errors.is_empty());
+        assert!(r.ast.instance.is_none());
+        assert!(r.ast.css.is_none());
+    }
+
+    #[test]
+    fn test_parse_only_text() {
+        let r = parser::parse("Hello World!");
+        assert!(r.errors.is_empty());
+        assert_eq!(r.ast.html.nodes.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_nested_components() {
+        let s = "<Parent>\n\t<Child>\n\t\t<GrandChild />\n\t</Child>\n</Parent>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_script_with_ts() {
+        let s = "<script lang=\"ts\">\n\tlet count: number = 0;\n\tconst fn = (x: string): boolean => true;\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        assert!(r.ast.instance.as_ref().unwrap().lang.as_deref() == Some("ts"));
+    }
+
     // --- comprehensive parser tests ---
 
     #[test]
