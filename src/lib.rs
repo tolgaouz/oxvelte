@@ -993,6 +993,59 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- complete component tests ---
+
+    #[test]
+    fn test_complete_counter_app() {
+        let s = "<script>\n\tlet count = 0;\n\t$: doubled = count * 2;\n\t$: quadrupled = doubled * 2;\n\tconst inc = () => count += 1;\n\tconst dec = () => count -= 1;\n\tconst reset = () => count = 0;\n</script>\n\n<h1>Counter</h1>\n<p>{count} × 2 = {doubled}</p>\n<p>{count} × 4 = {quadrupled}</p>\n<div>\n\t<button on:click={dec}>-</button>\n\t<button on:click={reset}>Reset</button>\n\t<button on:click={inc}>+</button>\n</div>\n\n<style>\n\th1 { text-align: center; }\n\tdiv { display: flex; gap: 0.5rem; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        assert!(r.ast.instance.is_some());
+        assert!(r.ast.css.is_some());
+    }
+
+    #[test]
+    fn test_complete_todo_svelte5() {
+        let s = "<script lang=\"ts\">\n\tinterface Todo { id: number; text: string; done: boolean; }\n\tlet todos = $state<Todo[]>([]);\n\tlet input = $state('');\n\tlet remaining = $derived(todos.filter(t => !t.done).length);\n\tconst add = () => {\n\t\tif (!input.trim()) return;\n\t\ttodos.push({ id: Date.now(), text: input, done: false });\n\t\tinput = '';\n\t};\n</script>\n\n<h1>Todos ({remaining})</h1>\n<form onsubmit={(e) => { e.preventDefault(); add(); }}>\n\t<input bind:value={input} />\n\t<button type=\"submit\">Add</button>\n</form>\n{#each todos as todo (todo.id)}\n\t<label>\n\t\t<input type=\"checkbox\" bind:checked={todo.done} />\n\t\t<span class:done={todo.done}>{todo.text}</span>\n\t</label>\n{/each}\n\n<style>\n\t.done { text-decoration: line-through; opacity: 0.5; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_complete_layout() {
+        let s = "<script>\n\texport let data;\n</script>\n\n<header>\n\t<nav>\n\t\t<a href=\"/\">Home</a>\n\t\t<a href=\"/about\">About</a>\n\t</nav>\n</header>\n\n<main>\n\t<slot />\n</main>\n\n<footer>\n\t<p>&copy; 2024</p>\n</footer>\n\n<style>\n\theader { background: #333; padding: 1rem; }\n\tnav { display: flex; gap: 1rem; }\n\tnav a { color: white; text-decoration: none; }\n\tmain { min-height: 80vh; padding: 1rem; }\n\tfooter { text-align: center; padding: 1rem; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_complete_store_example() {
+        let s = "<script>\n\timport { writable, derived } from 'svelte/store';\n\timport { onDestroy } from 'svelte';\n\n\tconst items = writable([1, 2, 3]);\n\tconst total = derived(items, ($items) => $items.reduce((a, b) => a + b, 0));\n\tconst count = derived(items, ($items) => $items.length);\n\n\tlet unsubTotal;\n\tlet currentTotal = 0;\n\tunsubTotal = total.subscribe(v => currentTotal = v);\n\tonDestroy(() => unsubTotal?.());\n</script>\n\n<p>Items: {$count}</p>\n<p>Total: {$total} (also {currentTotal})</p>\n<button on:click={() => $items = [...$items, $items.length + 1]}>Add</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_complete_animation() {
+        let s = "<script>\n\timport { fade, fly, slide, scale } from 'svelte/transition';\n\timport { flip } from 'svelte/animate';\n\tlet visible = true;\n\tlet items = [1, 2, 3];\n</script>\n\n<button on:click={() => visible = !visible}>Toggle</button>\n\n{#if visible}\n\t<div transition:fade>Fade</div>\n\t<div in:fly={{y: 200}} out:scale>Fly in, scale out</div>\n\t<div transition:slide>Slide</div>\n{/if}\n\n<ul>\n\t{#each items as item (item)}\n\t\t<li animate:flip={{duration: 300}}>{item}</li>\n\t{/each}\n</ul>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_complete_context_api() {
+        let s = "<script>\n\timport { setContext, getContext } from 'svelte';\n\timport { writable } from 'svelte/store';\n\n\tconst theme = writable('light');\n\tsetContext('theme', theme);\n\n\tconst userTheme = getContext('theme');\n</script>\n\n<div class=\"app\">\n\t<slot />\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_complete_dynamic_component() {
+        let s = "<script>\n\timport Red from './Red.svelte';\n\timport Blue from './Blue.svelte';\n\tlet selected = Red;\n\tconst options = [{ component: Red, name: 'Red' }, { component: Blue, name: 'Blue' }];\n</script>\n\n{#each options as opt}\n\t<button on:click={() => selected = opt.component}>{opt.name}</button>\n{/each}\n\n<svelte:component this={selected} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- comprehensive edge cases ---
 
     #[test]
