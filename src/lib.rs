@@ -993,6 +993,53 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- rule-specific regression tests ---
+
+    #[test]
+    fn test_no_useless_mustaches_variable_ok() {
+        let s = "<p>{variable}</p>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-useless-mustaches"),
+            "Should NOT flag variable in mustache");
+    }
+
+    #[test]
+    fn test_shorthand_attribute_different_names_ok() {
+        let s = "<div class={myClass}>text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/shorthand-attribute"),
+            "Should NOT flag attribute with different name and value");
+    }
+
+    #[test]
+    fn test_no_reactive_literal_string() {
+        let s = "<script>\n\t$: x = 'hello';\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-reactive-literals"),
+            "Should flag reactive string literal");
+    }
+
+    #[test]
+    fn test_no_reactive_literal_expr_ok() {
+        let s = "<script>\n\tlet y = 0;\n\t$: x = y * 2;\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-reactive-literals"),
+            "Should NOT flag reactive expression");
+    }
+
+    #[test]
+    fn test_store_callback_writable_no_set() {
+        let s = "<script>\n\timport { writable } from 'svelte/store';\n\twritable(0, () => {});\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/require-store-callbacks-use-set-param"),
+            "Should flag writable callback without set");
+    }
+
     // --- error recovery tests ---
 
     #[test]
