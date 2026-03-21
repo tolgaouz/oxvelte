@@ -1128,22 +1128,41 @@ fn parse_each_header(header: &str) -> (String, String, Option<String>, Option<St
         return (header.to_string(), String::new(), None, None);
     };
 
-    // Check for (key) at the end — only match top-level (not inside nested brackets)
+    // Check for (key) at the end — only match top-level (not inside nested brackets/parens)
     let (rest, key) = {
-        // Find the last top-level ( that contains the key expression
+        // Find the last top-level ( that contains the key expression.
+        // Track ( depth separately to find the OUTERMOST ( at depth 0.
         let mut depth = 0i32;
         let mut last_top_paren = None;
         for (i, ch) in rest.char_indices() {
             match ch {
                 '[' | '{' => depth += 1,
                 ']' | '}' => depth -= 1,
-                '(' if depth == 0 => last_top_paren = Some(i),
-                ')' if depth == 0 => { /* matching close */ }
+                '(' if depth == 0 => {
+                    last_top_paren = Some(i);
+                    depth += 1;
+                }
+                '(' => depth += 1,
+                ')' => depth -= 1,
                 _ => {}
             }
         }
         if let Some(paren_start) = last_top_paren {
-            let key = rest[paren_start + 1..].trim_end_matches(')').trim().to_string();
+            // Find the matching closing paren
+            let inner = &rest[paren_start + 1..];
+            let mut d = 1i32;
+            let mut close_pos = inner.len();
+            for (i, ch) in inner.char_indices() {
+                match ch {
+                    '(' | '[' | '{' => d += 1,
+                    ')' | ']' | '}' => {
+                        d -= 1;
+                        if d == 0 { close_pos = i; break; }
+                    }
+                    _ => {}
+                }
+            }
+            let key = inner[..close_pos].trim().to_string();
             if !key.is_empty() {
                 (rest[..paren_start].trim(), Some(key))
             } else {

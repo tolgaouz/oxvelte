@@ -18,41 +18,114 @@ impl Rule for HtmlClosingBracketNewLine {
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         walk_template_nodes(&ctx.ast.html, &mut |node| {
-            if let TemplateNode::Element(el) = node {
-                if el.attributes.is_empty() { return; }
-                let tag_text = &ctx.source[el.span.start as usize..el.span.end as usize];
-                // Find the closing bracket (> or />)
-                // For multiline elements, the closing bracket should be on the same line as the last attribute
-                // or on its own line (not separated by empty lines)
-                let open_end = tag_text.find('>').unwrap_or(tag_text.len());
-                let before_bracket = &tag_text[..open_end];
+            let (span, attrs_count, source) = match node {
+                TemplateNode::Element(el) => (el.span, el.attributes.len(), ctx.source),
+                _ => return,
+            };
 
-                // Check if there's an empty line between the last non-whitespace content and the bracket
-                let lines: Vec<&str> = before_bracket.lines().collect();
-                if lines.len() > 1 {
-                    // Check for empty lines before the closing bracket
-                    let mut found_empty = false;
-                    let mut i = lines.len() - 1;
-                    while i > 0 {
-                        let line = lines[i].trim();
-                        if line.is_empty() {
-                            found_empty = true;
-                        } else if line == "/" || line == "/>" {
-                            // This is the closing bracket line, check if there were empty lines before it
-                            if found_empty {
-                                let bracket_start = el.span.start + before_bracket.rfind(line).unwrap_or(0) as u32;
-                                ctx.diagnostic(
-                                    "Unexpected empty line before closing bracket.",
-                                    oxc::span::Span::new(bracket_start, bracket_start + line.len() as u32),
-                                );
-                            }
-                            break;
-                        } else {
-                            break;
-                        }
-                        if i == 0 { break; }
-                        i -= 1;
+            let tag_text = &source[span.start as usize..span.end as usize];
+
+            // Find the opening tag end (first > or />)
+            let mut depth = 0;
+            let mut open_bracket_end = None;
+            let bytes = tag_text.as_bytes();
+            let mut i = 0;
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'"' | b'\'' => {
+                        let q = bytes[i];
+                        i += 1;
+                        while i < bytes.len() && bytes[i] != q { i += 1; }
                     }
+                    b'{' => depth += 1,
+                    b'}' => depth -= 1,
+                    b'>' if depth == 0 => {
+                        open_bracket_end = Some(i);
+                        break;
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+
+            let bracket_pos = match open_bracket_end {
+                Some(p) => p,
+                None => return,
+            };
+
+            // Determine if self-closing
+            let is_self_closing = bracket_pos > 0 && bytes[bracket_pos - 1] == b'/';
+
+            // The bracket is `>` or `/>`. Find the actual bracket start
+            let bracket_start = if is_self_closing { bracket_pos - 1 } else { bracket_pos };
+
+            // Find the content before the bracket (between tag name/last attr and bracket)
+            let before_bracket = &tag_text[..bracket_start];
+
+            // Count line breaks between the last non-whitespace content and the bracket
+            let last_content_pos = before_bracket.rfind(|c: char| !c.is_whitespace()).unwrap_or(0);
+            let between = &before_bracket[last_content_pos + 1..];
+            let line_breaks = between.chars().filter(|&c| c == '\n').count();
+
+            // Determine if the element is multiline (has attributes and they span multiple lines)
+            let first_line_end = tag_text.find('\n').unwrap_or(tag_text.len());
+            let is_multiline = attrs_count > 0 && first_line_end < bracket_start;
+
+            // Also check closing tags like </div\n\n\n  >
+            // Find closing tag if present
+            let close_tag_start = if !is_self_closing {
+                // Find the closing tag </name>
+                let tag_name_end = tag_text[1..].find(|c: char| !c.is_alphanumeric() && c != '-' && c != '_' && c != ':' && c != '.')
+                    .map(|p| p + 1).unwrap_or(1);
+                let name = &tag_text[1..tag_name_end];
+                let close_pattern = format!("</{}", name);
+                tag_text.rfind(&close_pattern)
+            } else { None };
+
+            if let Some(close_start) = close_tag_start {
+                // Check closing tag for line breaks: </name ... >
+                let close_text = &tag_text[close_start..];
+                let close_name_end = close_text.find('>').unwrap_or(close_text.len());
+                let close_before_bracket = &close_text[..close_name_end];
+                let close_line_breaks = close_before_bracket.chars().filter(|&c| c == '\n').count();
+                if close_line_breaks > 0 {
+                    let abs_pos = span.start + close_start as u32;
+                    ctx.diagnostic(
+                        format!("Expected no line breaks before closing bracket, but {} line break{} found.",
+                            close_line_breaks, if close_line_breaks != 1 { "s" } else { "" }),
+                        oxc::span::Span::new(abs_pos, abs_pos + close_name_end as u32 + 1),
+                    );
+                }
+            }
+
+            // Default rules for opening tag:
+            // - Singleline: expect 0 line breaks before bracket
+            // - Multiline (with attrs): expect 1 line break before bracket
+            if is_multiline {
+                // Multiline: expect exactly 1 line break
+                if line_breaks != 1 {
+                    let abs_pos = span.start + bracket_start as u32;
+                    if line_breaks == 0 {
+                        ctx.diagnostic(
+                            "Expected 1 line break before closing bracket, but no line breaks found.",
+                            oxc::span::Span::new(abs_pos, abs_pos + if is_self_closing { 2 } else { 1 }),
+                        );
+                    } else {
+                        ctx.diagnostic(
+                            format!("Expected 1 line break before closing bracket, but {} line breaks found.", line_breaks),
+                            oxc::span::Span::new(abs_pos, abs_pos + if is_self_closing { 2 } else { 1 }),
+                        );
+                    }
+                }
+            } else {
+                // Singleline: expect 0 line breaks
+                if line_breaks > 0 {
+                    let abs_pos = span.start + bracket_start as u32;
+                    ctx.diagnostic(
+                        format!("Expected no line breaks before closing bracket, but {} line break{} found.",
+                            line_breaks, if line_breaks != 1 { "s" } else { "" }),
+                        oxc::span::Span::new(abs_pos, abs_pos + if is_self_closing { 2 } else { 1 }),
+                    );
                 }
             }
         });

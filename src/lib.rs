@@ -416,6 +416,19 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    #[test]
+    fn test_each_key_fn_call() {
+        let s = "{#each things as thing (fn(thing))}\n\t{thing.name}\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::EachBlock(block) = &r.ast.html.nodes[0] {
+            eprintln!("context='{}' key={:?}", block.context, block.key);
+            assert_eq!(block.context.trim(), "thing");
+            assert!(block.key.as_ref().unwrap().contains("thing"),
+                "Key should contain 'thing', got: {:?}", block.key);
+        }
+    }
+
     // --- no-dom-manipulating unit tests ---
 
     #[test]
@@ -645,8 +658,7 @@ mod linter_fixture_tests {
     #[test] fn linter_no_unknown_style_directive_property_valid() { run_linter_valid("no-unknown-style-directive-property"); }
     #[test] fn linter_no_unknown_style_directive_property_invalid() { run_linter_invalid("no-unknown-style-directive-property"); }
     #[test] fn linter_valid_each_key_valid() { run_linter_valid("valid-each-key"); }
-    // valid-each-key invalid requires expression context analysis
-    // #[test] fn linter_valid_each_key_invalid() { run_linter_invalid("valid-each-key"); }
+    #[test] fn linter_valid_each_key_invalid() { run_linter_invalid("valid-each-key"); }
     #[test] fn linter_no_spaces_around_equal_signs_in_attribute_valid() { run_linter_valid("no-spaces-around-equal-signs-in-attribute"); }
     #[test] fn linter_no_spaces_around_equal_signs_in_attribute_invalid() { run_linter_invalid("no-spaces-around-equal-signs-in-attribute"); }
     #[test] fn linter_prefer_class_directive_valid() { run_linter_valid("prefer-class-directive"); }
@@ -669,8 +681,7 @@ mod linter_fixture_tests {
 
     #[test] fn linter_first_attribute_linebreak_invalid() { run_linter_invalid("first-attribute-linebreak"); }
     #[test] fn linter_max_attributes_per_line_invalid() { run_linter_invalid("max-attributes-per-line"); }
-    // html-closing-bracket-new-line invalid needs more bracket analysis
-    // #[test] fn linter_html_closing_bracket_new_line_invalid() { run_linter_invalid("html-closing-bracket-new-line"); }
+    #[test] fn linter_html_closing_bracket_new_line_invalid() { run_linter_invalid("html-closing-bracket-new-line"); }
 
     // Batch 5: more invalid tests
     #[test] fn linter_no_dom_manipulating_invalid() { run_linter_invalid("no-dom-manipulating"); }
