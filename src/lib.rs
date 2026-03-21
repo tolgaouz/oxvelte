@@ -993,6 +993,204 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- milestone 500 tests ---
+
+    #[test]
+    fn test_full_svelte4_app() {
+        let s = "<script>\n\timport { onMount } from 'svelte';\n\texport let name;\n\tlet count = 0;\n\t$: doubled = count * 2;\n\tconst increment = () => count++;\n\tonMount(() => console.log('ready'));\n</script>\n\n<h1>Hello {name}!</h1>\n<p>Count: {count}, Doubled: {doubled}</p>\n<button on:click={increment}>+1</button>\n\n<style>\n\th1 { color: purple; }\n\tp { margin: 1em 0; }\n\tbutton { cursor: pointer; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        assert!(r.ast.instance.is_some());
+        assert!(r.ast.css.is_some());
+    }
+
+    #[test]
+    fn test_full_svelte5_app() {
+        let s = "<script lang=\"ts\">\n\tlet count = $state(0);\n\tlet doubled = $derived(count * 2);\n\tconst increment = () => count++;\n\t$effect(() => console.log(count));\n</script>\n\n<h1>Counter</h1>\n{#each Array(count) as _, i}\n\t<span>{i}</span>\n{/each}\n<button onclick={increment}>+1</button>\n\n<style lang=\"scss\">\n\th1 { color: blue; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_complex_real_world() {
+        let s = "<script>\n\timport Header from './Header.svelte';\n\texport let data;\n\t$: ({ items, total } = data);\n</script>\n\n<Header title=\"Dashboard\" />\n\n<main>\n\t{#if items.length > 0}\n\t\t<ul>\n\t\t\t{#each items as item (item.id)}\n\t\t\t\t<li class:selected={item.active}>\n\t\t\t\t\t<span>{item.name}</span>\n\t\t\t\t\t<button on:click={() => remove(item.id)}>x</button>\n\t\t\t\t</li>\n\t\t\t{/each}\n\t\t</ul>\n\t\t<p>Total: {total}</p>\n\t{:else}\n\t\t<p>No items found.</p>\n\t{/if}\n</main>\n\n<style>\n\tmain { padding: 1rem; }\n\t.selected { font-weight: bold; }\n\tul { list-style: none; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    // --- linter diagnostic quality tests ---
+
+    #[test]
+    fn test_diagnostic_has_rule_name() {
+        let s = "{@html dangerous}";
+        let r = parser::parse(s);
+        let diags = Linter::recommended().lint(&r.ast, s);
+        assert!(!diags.is_empty());
+        for d in &diags {
+            assert!(!d.rule_name.is_empty(), "Diagnostic should have rule name");
+            assert!(d.rule_name.starts_with("svelte/"), "Rule name should start with svelte/");
+        }
+    }
+
+    #[test]
+    fn test_diagnostic_has_message() {
+        let s = "{@html dangerous}";
+        let r = parser::parse(s);
+        let diags = Linter::recommended().lint(&r.ast, s);
+        for d in &diags {
+            assert!(!d.message.is_empty(), "Diagnostic should have message");
+        }
+    }
+
+    #[test]
+    fn test_diagnostic_has_span() {
+        let s = "{@html dangerous}";
+        let r = parser::parse(s);
+        let diags = Linter::recommended().lint(&r.ast, s);
+        for d in &diags {
+            assert!(d.span.end > d.span.start, "Diagnostic span should have positive size");
+        }
+    }
+
+    #[test]
+    fn test_all_rules_have_names() {
+        let linter = Linter::all();
+        for rule in linter.rules() {
+            let name = rule.name();
+            assert!(!name.is_empty(), "Rule should have a name");
+            assert!(name.starts_with("svelte/"), "Rule name should start with svelte/: {}", name);
+        }
+    }
+
+    #[test]
+    fn test_recommended_rules_subset() {
+        let all = Linter::all();
+        let rec = Linter::recommended();
+        let all_names: std::collections::HashSet<_> = all.rules().iter().map(|r| r.name()).collect();
+        for rule in rec.rules() {
+            assert!(all_names.contains(rule.name()),
+                "Recommended rule {} should be in all rules", rule.name());
+        }
+    }
+
+    // --- parser whitespace handling ---
+
+    #[test]
+    fn test_parse_whitespace_only() {
+        let r = parser::parse("   \n\n\t  ");
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_mixed_content() {
+        let s = "text before\n<p>paragraph</p>\ntext between\n{#if cond}\n\t<span>inline</span>\n{/if}\ntext after";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        assert!(r.ast.html.nodes.len() >= 4);
+    }
+
+    #[test]
+    fn test_parse_self_closing_component() {
+        let s = "<Component />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::Element(el) = &r.ast.html.nodes[0] {
+            assert!(el.self_closing);
+            assert!(el.children.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_parse_component_with_children() {
+        let s = "<Layout>\n\t<Header />\n\t<Main>\n\t\t<slot />\n\t</Main>\n\t<Footer />\n</Layout>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::Element(el) = &r.ast.html.nodes[0] {
+            assert_eq!(el.name, "Layout");
+            // Should have children (Header, Main, Footer + whitespace)
+            assert!(!el.children.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_parse_attribute_value_types() {
+        let s = "<div static=\"hello\" dynamic={val} bool empty=\"\" concat=\"a{b}c\">text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_special_chars_in_text() {
+        let s = "<p>Price: $100 & 50% off < today > yesterday</p>";
+        let r = parser::parse(s);
+        // May have parse errors for unescaped < >, but shouldn't panic
+        let _ = r.ast.html.nodes.len();
+    }
+
+    #[test]
+    fn test_parse_script_with_jsx_like() {
+        let s = "<script>\n\tconst x = 1 < 2 && 3 > 1;\n\tconst y = a >> b;\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_multiline_attribute() {
+        let s = "<div\n\tclass=\"foo\"\n\tid=\"bar\"\n\tstyle=\"color: red\"\n>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_nested_mustache() {
+        let s = "<p>{a ? (b ? 'deep' : 'mid') : 'shallow'}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_data_attributes() {
+        let s = "<div data-testid=\"my-element\" data-custom-prop={value} aria-label=\"label\">text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_diags_on_empty() {
+        let r = parser::parse("");
+        let diags = Linter::all().lint(&r.ast, "");
+        assert!(diags.is_empty(), "Empty component should have no diagnostics");
+    }
+
+    #[test]
+    fn test_linter_no_diags_on_text_only() {
+        let r = parser::parse("Just some text");
+        let diags = Linter::all().lint(&r.ast, "Just some text");
+        assert!(diags.is_empty(), "Text-only component should have no diagnostics");
+    }
+
+    #[test]
+    fn test_parse_table_elements() {
+        let s = "<table>\n\t<thead><tr><th>Name</th></tr></thead>\n\t<tbody>{#each items as item}<tr><td>{item}</td></tr>{/each}</tbody>\n</table>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_pre_element() {
+        let s = "<pre>\n\tconst x = 1;\n\tconst y = 2;\n</pre>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_template_with_all_block_types() {
+        let s = "{#if a}\n\tif\n{:else if b}\n\telse-if\n{:else}\n\telse\n{/if}\n{#each xs as x (x)}\n\teach\n{:else}\n\tempty\n{/each}\n{#await p}\n\tpending\n{:then v}\n\tthen\n{:catch e}\n\tcatch\n{/await}\n{#key k}\n\tkey\n{/key}\n{#snippet s()}\n\tsnippet\n{/snippet}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        assert!(r.ast.html.nodes.len() >= 5);
+    }
+
     // --- AST structure tests ---
 
     #[test]
