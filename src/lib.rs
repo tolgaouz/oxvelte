@@ -334,6 +334,8 @@ mod linter_fixture_tests {
 
     #[test] fn linter_no_dynamic_slot_name_invalid() { run_linter_invalid("no-dynamic-slot-name"); }
     #[test] fn linter_no_goto_without_base_invalid() { run_linter_invalid("no-goto-without-base"); }
+    // no-navigation-without-base invalid needs <a href> template checking
+    // #[test] fn linter_no_navigation_without_base_invalid() { run_linter_invalid("no-navigation-without-base"); }
 
     #[test] fn linter_no_reactive_functions_invalid() { run_linter_invalid("no-reactive-functions"); }
 
