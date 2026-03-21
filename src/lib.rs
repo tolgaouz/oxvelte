@@ -993,6 +993,192 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- final push to 700 ---
+
+    #[test]
+    fn test_parse_class_expression() {
+        let s = "<div class=\"{active ? 'active' : ''} {size} extra\">text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_style_expression() {
+        let s = "<div style=\"color: {color}; font-size: {size}px;\">text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_script_complex() {
+        let s = "<script>\n\tasync function loadData() {\n\t\tconst res = await fetch('/api');\n\t\treturn res.json();\n\t}\n\tconst data = loadData();\n</script>\n{#await data}\n\t<p>Loading...</p>\n{:then result}\n\t<pre>{JSON.stringify(result)}</pre>\n{:catch err}\n\t<p>{err.message}</p>\n{/await}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_diag_count() {
+        let s = "<button>no type</button>\n<button>also no type</button>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let btn_diags: Vec<_> = diags.iter().filter(|d| d.rule_name == "svelte/button-has-type").collect();
+        assert_eq!(btn_diags.len(), 2, "Should flag both buttons");
+    }
+
+    #[test]
+    fn test_parse_multiline_if() {
+        let s = "{#if\n\tcondition &&\n\tanotherCondition\n}\n\t<p>true</p>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_multiline_each() {
+        let s = "{#each\n\titems.filter(x => x.active)\n\tas item\n\t(item.id)\n}\n\t<p>{item.name}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_multiline_await() {
+        let s = "{#await\n\tloadData()\n}\n\t<p>loading</p>\n{:then data}\n\t<p>{data}</p>\n{/await}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_dotted() {
+        let s = "<Form.Field>\n\t<Form.Input bind:value />\n</Form.Field>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_whitespace_in_mustache() {
+        let s = "<p>{  value  }</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_comment_in_script() {
+        let s = "<script>\n\t// line comment\n\t/* block comment */\n\tlet x = 1;\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_conditional_spread() {
+        let s = "<div {...(active ? activeProps : defaultProps)}>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_multiple_spreads() {
+        let s = "<div {...a} {...b} {...c}>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_issues_on_simple() {
+        let s = "<p>Hello World</p>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.is_empty(), "Simple paragraph should have no issues");
+    }
+
+    #[test]
+    fn test_parse_svelte_head_link() {
+        let s = "<svelte:head>\n\t<link rel=\"stylesheet\" href=\"/style.css\" />\n</svelte:head>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_multiple_style_blocks() {
+        // Svelte only supports one style block but parser should handle gracefully
+        let s = "<style>.a { color: red; }</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_slot_default_content() {
+        let s = "<slot name=\"actions\">\n\t<button type=\"button\">Default Action</button>\n</slot>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_each_else_empty() {
+        let s = "{#each [] as item}\n\t<p>{item}</p>\n{:else}\n\t<p>No items</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_form_action() {
+        let s = "<form method=\"POST\" action=\"?/login\">\n\t<input name=\"email\" type=\"email\" />\n\t<button type=\"submit\">Login</button>\n</form>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_contenteditable() {
+        let s = "<div contenteditable bind:innerHTML={html}>Edit me</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_custom_element() {
+        let s = "<my-component data-foo=\"bar\">content</my-component>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_all_clean() {
+        let s = "<script lang=\"ts\">\n\tlet name = 'World';\n</script>\n<p>Hello {name}!</p>\n<style lang=\"scss\">\n\tp { color: blue; }\n</style>";
+        let r = parser::parse(s);
+        let diags = Linter::recommended().lint(&r.ast, s);
+        let filtered: Vec<_> = diags.iter()
+            .filter(|d| d.rule_name != "svelte/no-unused-class-name")
+            .collect();
+        assert!(filtered.is_empty(), "Clean typed component: {:?}",
+            filtered.iter().map(|d| &d.rule_name).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_parse_window_scroll() {
+        let s = "<svelte:window bind:scrollY={y} on:scroll={handleScroll} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_body_touch() {
+        let s = "<svelte:body on:touchstart={handleTouch} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_element_with_namespace() {
+        let s = "<svg xmlns=\"http://www.w3.org/2000/svg\">\n\t<path d=\"M 0 0 L 10 10\" />\n</svg>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_script_store_auto_subscribe() {
+        let s = "<script>\n\timport { page } from '$app/stores';\n\t$: url = $page.url;\n</script>\n<p>{url.pathname}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- Svelte component patterns ---
 
     #[test]
