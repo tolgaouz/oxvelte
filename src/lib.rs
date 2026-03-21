@@ -683,6 +683,77 @@ mod tests {
         assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-navigation-without-base"),
             "Should NOT flag fragment URL");
     }
+
+    // --- block-lang unit tests ---
+
+    #[test]
+    fn test_block_lang_no_lang_script() {
+        let s = "<script>\n\tlet x = 1;\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/block-lang"),
+            "Should flag script without lang attribute");
+    }
+
+    #[test]
+    fn test_block_lang_ts_ok() {
+        let s = "<script lang=\"ts\">\n\tlet x: number = 1;\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/block-lang"),
+            "Should NOT flag script with lang='ts'");
+    }
+
+    #[test]
+    fn test_block_lang_style_no_lang() {
+        let s = "<style>\n\tp { color: red; }\n</style>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/block-lang"),
+            "Should flag style without lang attribute");
+    }
+
+    // --- derived-has-same-inputs-outputs unit tests ---
+
+    #[test]
+    fn test_derived_mismatch() {
+        let s = "<script>\n\timport { derived } from 'svelte/store';\n\tconst d = derived(count, (x) => x * 2);\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/derived-has-same-inputs-outputs"),
+            "Should flag mismatched derived param");
+    }
+
+    #[test]
+    fn test_derived_match_ok() {
+        let s = "<script>\n\timport { derived } from 'svelte/store';\n\tconst d = derived(count, ($count) => $count * 2);\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/derived-has-same-inputs-outputs"),
+            "Should NOT flag matching derived param");
+    }
+
+    // --- no-export-load-in-svelte-module unit tests ---
+
+    #[test]
+    fn test_no_export_load_ok_without_module() {
+        let s = "<script>\n\texport function load() {}\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-export-load-in-svelte-module-in-kit-pages"),
+            "Should NOT flag load in instance script");
+    }
+
+    // --- consistent-selector-style unit tests ---
+
+    #[test]
+    fn test_valid_prop_names_ok() {
+        let s = "<script>\n\texport let data;\n</script>\n<p>{data}</p>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/valid-prop-names-in-kit-pages"),
+            "Should NOT flag standard prop name");
+    }
 }
 
 #[cfg(test)]
