@@ -561,8 +561,7 @@ mod linter_fixture_tests {
     #[test] fn linter_no_ignored_unsubscribe_invalid() { run_linter_invalid("no-ignored-unsubscribe"); }
     #[test] fn linter_no_reactive_literals_invalid() { run_linter_invalid("no-reactive-literals"); }
     #[test] fn linter_require_stores_init_invalid() { run_linter_invalid("require-stores-init"); }
-    // valid-style-parse invalid: CSS parser skips malformed content with safety fix
-    // #[test] fn linter_valid_style_parse_invalid() { run_linter_invalid("valid-style-parse"); }
+    #[test] fn linter_valid_style_parse_invalid() { run_linter_invalid("valid-style-parse"); }
 
     // no-unnecessary-state-wrap invalid needs import alias tracking + config
     // #[test] fn linter_no_unnecessary_state_wrap_invalid() { run_linter_invalid("no-unnecessary-state-wrap"); }

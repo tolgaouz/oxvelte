@@ -16,11 +16,13 @@ pub struct CssParser<'a> {
     pub source: &'a str,
     pub pos: usize,
     pub offset: u32,
+    /// Positions where parsing failed and the safety skip was needed.
+    pub error_positions: Vec<usize>,
 }
 
 impl<'a> CssParser<'a> {
     pub fn new(source: &'a str, offset: u32) -> Self {
-        Self { source, pos: 0, offset }
+        Self { source, pos: 0, offset, error_positions: Vec::new() }
     }
 
     fn skip_whitespace(&mut self) {
@@ -81,6 +83,7 @@ impl<'a> CssParser<'a> {
             self.skip_ws_and_comments();
             // Safety: if position didn't advance, skip one character to prevent infinite loop
             if self.pos == prev_pos {
+                self.error_positions.push(self.pos);
                 self.pos += 1;
             }
         }
@@ -470,7 +473,28 @@ impl<'a> CssParser<'a> {
         let mut children = Vec::new();
 
         while self.pos < self.source.len() && self.source.as_bytes()[self.pos] != b'}' {
-            // Check for nested rule
+            let prev_pos = self.pos;
+
+            // Check for nested rule (nested { ... } blocks like in SCSS)
+            if self.pos < self.source.len() {
+                let ch = self.source.as_bytes()[self.pos];
+                if ch == b'{' {
+                    // Skip nested block entirely
+                    self.pos += 1;
+                    let mut depth = 1;
+                    while self.pos < self.source.len() && depth > 0 {
+                        match self.source.as_bytes()[self.pos] {
+                            b'{' => depth += 1,
+                            b'}' => depth -= 1,
+                            _ => {}
+                        }
+                        self.pos += 1;
+                    }
+                    self.skip_ws_and_comments();
+                    continue;
+                }
+            }
+
             if self.is_at_rule_start() {
                 if let Some(rule) = self.parse_rule() {
                     children.push(rule);
@@ -484,6 +508,12 @@ impl<'a> CssParser<'a> {
                 children.push(decl);
             }
             self.skip_ws_and_comments();
+
+            // Safety: if position didn't advance, skip one character to prevent infinite loop
+            if self.pos == prev_pos {
+                self.error_positions.push(self.pos);
+                self.pos += 1;
+            }
         }
 
         if self.pos < self.source.len() {
@@ -524,6 +554,12 @@ impl<'a> CssParser<'a> {
 
         if self.pos >= self.source.len() || self.source.as_bytes()[self.pos] != b':' {
             return None;
+        }
+
+        // Validate property name: CSS properties don't contain spaces (except custom properties)
+        // Properties with spaces indicate a parsing error
+        if !property.starts_with("--") && property.contains(' ') {
+            self.error_positions.push(prop_start);
         }
         self.pos += 1; // skip :
         self.skip_whitespace();

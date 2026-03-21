@@ -18,12 +18,11 @@ impl Rule for PreferClassDirective {
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
-                // Skip special elements and components
-                if el.name.starts_with("svelte:")
-                    || el.name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
-                {
-                    return;
-                }
+                // Skip components (uppercase) but allow svelte:element
+                let first_char = el.name.chars().next().unwrap_or('a');
+                if first_char.is_uppercase() { return; }
+                if el.name.starts_with("svelte:") && el.name != "svelte:element" { return; }
+
                 for attr in &el.attributes {
                     if let Attribute::NormalAttribute { name, value, span } = attr {
                         if name == "class" {
@@ -37,15 +36,11 @@ impl Rule for PreferClassDirective {
                                     }
                                 }
                                 AttributeValue::Concat(parts) => {
-                                    // Check each expression part independently.
-                                    // Only flag ternaries that aren't concatenated with adjacent non-empty static text.
                                     for (i, part) in parts.iter().enumerate() {
                                         if let AttributeValuePart::Expression(expr) = part {
                                             if !is_simple_class_ternary(expr) {
                                                 continue;
                                             }
-                                            // Check adjacent parts — expression must be surrounded by
-                                            // empty/whitespace static parts (not adjacent to other expressions)
                                             let prev_ok = if i > 0 {
                                                 match &parts[i - 1] {
                                                     AttributeValuePart::Static(s) => s.is_empty() || s.ends_with(' '),
