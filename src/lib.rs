@@ -3298,6 +3298,7 @@ mod linter_fixture_tests {
     #[test] fn linter_no_reactive_literals_valid() { run_linter_valid("no-reactive-literals"); }
     #[test] fn linter_no_reactive_functions_valid() { run_linter_valid("no-reactive-functions"); }
     #[test] fn linter_no_immutable_reactive_statements_valid() { run_linter_valid("no-immutable-reactive-statements"); }
+    #[test] fn linter_no_immutable_reactive_statements_invalid() { run_linter_invalid("no-immutable-reactive-statements"); }
     #[test] fn linter_no_useless_children_snippet_valid() { run_linter_valid("no-useless-children-snippet"); }
     #[test] fn linter_no_reactive_reassign_valid() { run_linter_valid("no-reactive-reassign"); }
     #[test] fn linter_no_ignored_unsubscribe_valid() { run_linter_valid("no-ignored-unsubscribe"); }
