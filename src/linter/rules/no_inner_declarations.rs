@@ -15,7 +15,8 @@ impl Rule for NoInnerDeclarations {
     }
 
     fn run<'a>(&self, _ctx: &mut LintContext<'a>) {
-        // This rule requires deep JS AST analysis
-        // Placeholder for now — full implementation needs semantic analysis
+        // This extension rule handles Svelte template-level {#if} blocks.
+        // Requires JS scope analysis + template block awareness.
+        // Placeholder — needs deep AST integration.
     }
 }

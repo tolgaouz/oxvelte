@@ -15,7 +15,8 @@ impl Rule for NoImmutableReactiveStatements {
     }
 
     fn run<'a>(&self, _ctx: &mut LintContext<'a>) {
-        // Requires semantic analysis to determine reactivity
-        // Placeholder — needs scope/symbol resolution
+        // Requires deep mutation/scope analysis to determine if referenced
+        // variables are truly immutable (const binding != immutable contents).
+        // Placeholder — needs semantic analysis with type tracking.
     }
 }
