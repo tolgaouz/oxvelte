@@ -309,6 +309,11 @@ mod linter_fixture_tests {
     #[test] fn linter_html_closing_bracket_spacing_invalid() { run_linter_invalid("html-closing-bracket-spacing"); }
     #[test] fn linter_html_quotes_invalid() { run_linter_invalid("html-quotes"); }
 
+    #[test] fn linter_first_attribute_linebreak_invalid() { run_linter_invalid("first-attribute-linebreak"); }
+    #[test] fn linter_max_attributes_per_line_invalid() { run_linter_invalid("max-attributes-per-line"); }
+    // html-closing-bracket-new-line invalid needs more bracket analysis
+    // #[test] fn linter_html_closing_bracket_new_line_invalid() { run_linter_invalid("html-closing-bracket-new-line"); }
+
     // Batch 5: additional valid tests not in batch 3
     #[test] fn linter_experimental_require_slot_types_valid() { run_linter_valid("experimental-require-slot-types"); }
     #[test] fn linter_experimental_require_strict_events_valid() { run_linter_valid("experimental-require-strict-events"); }
