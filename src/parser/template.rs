@@ -907,6 +907,15 @@ impl<'a> TemplateParser<'a> {
         // Check for shorthand: {#await expr then name} or {#await expr catch name}
         let (expression, mut then, mut then_binding, mut catch, mut catch_binding, pending);
 
+        // For shorthand blocks, find the end of previous content (skip trailing whitespace)
+        let prev_content_end = {
+            let mut p = start;
+            while p > 0 && self.source.as_bytes()[(p - 1) as usize].is_ascii_whitespace() {
+                p -= 1;
+            }
+            p
+        };
+
         if let Some(then_pos) = header.find(" then ") {
             expression = header[..then_pos].trim().to_string();
             let binding = header[then_pos + 6..].trim().to_string();
@@ -914,8 +923,8 @@ impl<'a> TemplateParser<'a> {
             pending = None;
             let shorthand_start = self.pos as u32; // after header }
             let mut frag = self.parse_fragment()?;
-            // Shorthand: inverted span (start after }, end before {#await)
-            frag.span = Span::new(shorthand_start, start);
+            // Shorthand: inverted span (start after }, end at previous content end)
+            frag.span = Span::new(shorthand_start, prev_content_end);
             then = Some(frag);
             catch = None;
             catch_binding = None;
@@ -925,7 +934,7 @@ impl<'a> TemplateParser<'a> {
             pending = None;
             let shorthand_start = self.pos as u32;
             let mut frag = self.parse_fragment()?;
-            frag.span = Span::new(shorthand_start, start);
+            frag.span = Span::new(shorthand_start, prev_content_end);
             then = Some(frag);
             catch = None;
             catch_binding = None;
@@ -938,7 +947,7 @@ impl<'a> TemplateParser<'a> {
             then_binding = None;
             let shorthand_start = self.pos as u32;
             let mut frag = self.parse_fragment()?;
-            frag.span = Span::new(shorthand_start, start);
+            frag.span = Span::new(shorthand_start, prev_content_end);
             catch = Some(frag);
         } else if header.ends_with(" catch") {
             expression = header[..header.len() - 6].trim().to_string();
@@ -948,7 +957,7 @@ impl<'a> TemplateParser<'a> {
             then_binding = None;
             let shorthand_start = self.pos as u32;
             let mut frag = self.parse_fragment()?;
-            frag.span = Span::new(shorthand_start, start);
+            frag.span = Span::new(shorthand_start, prev_content_end);
             catch = Some(frag);
         } else {
             expression = header;
