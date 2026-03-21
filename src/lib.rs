@@ -993,6 +993,54 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- Svelte 5 linter rule tests ---
+
+    #[test]
+    fn test_no_inspect_in_script() {
+        let s = "<script>\n\tlet count = $state(0);\n\t$inspect(count);\n\t$inspect.with(console.trace, count);\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let inspect_diags: Vec<_> = diags.iter().filter(|d| d.rule_name == "svelte/no-inspect").collect();
+        assert!(inspect_diags.len() >= 1, "Should flag $inspect calls");
+    }
+
+    #[test]
+    fn test_reactive_fn_decl() {
+        let s = "<script>\n\t$: fn = () => console.log('reactive function');\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-reactive-functions"),
+            "Should flag reactive function declaration");
+    }
+
+    #[test]
+    fn test_max_lines_per_block_script() {
+        // Script with many lines should not trigger by default (threshold is typically high)
+        let s = "<script>\n\tlet a = 1;\n\tlet b = 2;\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/max-lines-per-block"),
+            "Should NOT flag short script block");
+    }
+
+    #[test]
+    fn test_no_goto_without_base_imported() {
+        let s = "<script>\n\timport { goto } from '$app/navigation';\n\tgoto('/path');\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-goto-without-base"),
+            "Should flag goto without base import");
+    }
+
+    #[test]
+    fn test_dynamic_slot_name_expr() {
+        let s = "<slot name={dynamicName}>content</slot>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-dynamic-slot-name"),
+            "Should flag dynamic slot name");
+    }
+
     // --- linter rule combination tests ---
 
     #[test]
