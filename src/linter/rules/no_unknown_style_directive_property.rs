@@ -85,8 +85,13 @@ impl Rule for NoUnknownStyleDirectiveProperty {
             if let TemplateNode::Element(el) = node {
                 for attr in &el.attributes {
                     if let Attribute::Directive { kind: DirectiveKind::StyleDirective, name, span, .. } = attr {
-                        // Allow CSS custom properties (--var)
-                        if name.starts_with("--") {
+                        // Allow CSS custom properties (--var) and vendor prefixes
+                        if name.starts_with("--")
+                            || name.starts_with("-moz-")
+                            || name.starts_with("-webkit-")
+                            || name.starts_with("-ms-")
+                            || name.starts_with("-o-")
+                        {
                             continue;
                         }
                         if !KNOWN_CSS_PROPERTIES.contains(&name.as_str()) {

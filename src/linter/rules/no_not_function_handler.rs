@@ -27,7 +27,8 @@ impl Rule for NoNotFunctionHandler {
                             if value.starts_with('{') && value.ends_with('}') {
                                 let expr = &value[1..value.len()-1].trim();
                                 // Check for literal values that are clearly not functions
-                                if *expr == "true" || *expr == "false" || *expr == "null"
+                                // null is valid (used to conditionally disable handlers)
+                                if *expr == "true" || *expr == "false"
                                     || *expr == "undefined"
                                     || expr.parse::<f64>().is_ok()
                                     || (expr.starts_with('"') && expr.ends_with('"'))

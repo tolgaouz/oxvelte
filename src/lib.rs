@@ -131,7 +131,8 @@ mod tests {
 
     #[test]
     fn test_no_dupe_on_directives() {
-        let s = r#"<button on:click={a} on:click={b}>Click</button>"#;
+        // Same handler expression = duplicate
+        let s = r#"<button on:click={a} on:click={a}>Click</button>"#;
         let r = parser::parse(s);
         let diags = Linter::all().lint(&r.ast, s);
         assert!(diags.iter().any(|d| d.rule_name == "svelte/no-dupe-on-directives"));
@@ -254,6 +255,48 @@ mod linter_fixture_tests {
     #[test] fn linter_no_useless_mustaches_invalid() { run_linter_invalid("no-useless-mustaches"); }
     #[test] fn linter_no_object_in_text_mustaches_valid() { run_linter_valid("no-object-in-text-mustaches"); }
     #[test] fn linter_no_object_in_text_mustaches_invalid() { run_linter_invalid("no-object-in-text-mustaches"); }
+
+    // Batch 2: more rules
+    #[test] fn linter_no_dupe_on_directives_valid() { run_linter_valid("no-dupe-on-directives"); }
+    #[test] fn linter_no_dupe_on_directives_invalid() { run_linter_invalid("no-dupe-on-directives"); }
+    #[test] fn linter_no_dupe_use_directives_valid() { run_linter_valid("no-dupe-use-directives"); }
+    #[test] fn linter_no_dupe_use_directives_invalid() { run_linter_invalid("no-dupe-use-directives"); }
+    #[test] fn linter_no_raw_special_elements_valid() { run_linter_valid("no-raw-special-elements"); }
+    #[test] fn linter_no_raw_special_elements_invalid() { run_linter_invalid("no-raw-special-elements"); }
+    #[test] fn linter_no_inspect_valid() { run_linter_valid("no-inspect"); }
+    #[test] fn linter_no_inspect_invalid() { run_linter_invalid("no-inspect"); }
+    #[test] fn linter_no_svelte_internal_valid() { run_linter_valid("no-svelte-internal"); }
+    #[test] fn linter_no_svelte_internal_invalid() { run_linter_invalid("no-svelte-internal"); }
+    #[test] fn linter_no_inline_styles_valid() { run_linter_valid("no-inline-styles"); }
+    #[test] fn linter_no_inline_styles_invalid() { run_linter_invalid("no-inline-styles"); }
+    #[test] fn linter_no_unused_svelte_ignore_valid() { run_linter_valid("no-unused-svelte-ignore"); }
+    #[test] fn linter_no_unused_svelte_ignore_invalid() { run_linter_invalid("no-unused-svelte-ignore"); }
+    #[test] fn linter_shorthand_attribute_valid() { run_linter_valid("shorthand-attribute"); }
+    #[test] fn linter_shorthand_attribute_invalid() { run_linter_invalid("shorthand-attribute"); }
+    #[test] fn linter_shorthand_directive_valid() { run_linter_valid("shorthand-directive"); }
+    #[test] fn linter_shorthand_directive_invalid() { run_linter_invalid("shorthand-directive"); }
+    #[test] fn linter_html_self_closing_valid() { run_linter_valid("html-self-closing"); }
+    #[test] fn linter_html_self_closing_invalid() { run_linter_invalid("html-self-closing"); }
+    #[test] fn linter_no_not_function_handler_valid() { run_linter_valid("no-not-function-handler"); }
+    #[test] fn linter_no_not_function_handler_invalid() { run_linter_invalid("no-not-function-handler"); }
+    #[test] fn linter_no_shorthand_style_property_overrides_valid() { run_linter_valid("no-shorthand-style-property-overrides"); }
+    #[test] fn linter_no_shorthand_style_property_overrides_invalid() { run_linter_invalid("no-shorthand-style-property-overrides"); }
+    #[test] fn linter_no_unknown_style_directive_property_valid() { run_linter_valid("no-unknown-style-directive-property"); }
+    #[test] fn linter_no_unknown_style_directive_property_invalid() { run_linter_invalid("no-unknown-style-directive-property"); }
+    #[test] fn linter_valid_each_key_valid() { run_linter_valid("valid-each-key"); }
+    #[test] fn linter_valid_each_key_invalid() { run_linter_invalid("valid-each-key"); }
+    #[test] fn linter_no_spaces_around_equal_signs_in_attribute_valid() { run_linter_valid("no-spaces-around-equal-signs-in-attribute"); }
+    #[test] fn linter_no_spaces_around_equal_signs_in_attribute_invalid() { run_linter_invalid("no-spaces-around-equal-signs-in-attribute"); }
+    #[test] fn linter_prefer_class_directive_valid() { run_linter_valid("prefer-class-directive"); }
+    #[test] fn linter_prefer_class_directive_invalid() { run_linter_invalid("prefer-class-directive"); }
+    #[test] fn linter_prefer_style_directive_valid() { run_linter_valid("prefer-style-directive"); }
+    #[test] fn linter_prefer_style_directive_invalid() { run_linter_invalid("prefer-style-directive"); }
+    #[test] fn linter_no_trailing_spaces_valid() { run_linter_valid("no-trailing-spaces"); }
+    #[test] fn linter_no_trailing_spaces_invalid() { run_linter_invalid("no-trailing-spaces"); }
+    #[test] fn linter_no_restricted_html_elements_valid() { run_linter_valid("no-restricted-html-elements"); }
+    #[test] fn linter_no_restricted_html_elements_invalid() { run_linter_invalid("no-restricted-html-elements"); }
+    #[test] fn linter_no_extra_reactive_curlies_valid() { run_linter_valid("no-extra-reactive-curlies"); }
+    #[test] fn linter_no_extra_reactive_curlies_invalid() { run_linter_invalid("no-extra-reactive-curlies"); }
 }
 
 #[cfg(test)]
