@@ -1731,6 +1731,7 @@ mod linter_fixture_tests {
     #[test] fn linter_prefer_const_valid() { run_linter_valid("prefer-const"); }
     #[test] fn linter_prefer_const_invalid() { run_linter_invalid("prefer-const"); }
     #[test] fn linter_prefer_destructured_store_props_valid() { run_linter_valid("prefer-destructured-store-props"); }
+    #[test] fn linter_prefer_destructured_store_props_invalid() { run_linter_invalid("prefer-destructured-store-props"); }
     #[test] fn linter_infinite_reactive_loop_valid() { run_linter_valid("infinite-reactive-loop"); }
     // no-top-level-browser-globals: needs to recognize guard patterns (typeof, import.meta, etc.)
     // #[test] fn linter_no_top_level_browser_globals_valid() { run_linter_valid("no-top-level-browser-globals"); }
