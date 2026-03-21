@@ -33,6 +33,8 @@ impl Rule for NoNotFunctionHandler {
                                     || expr.parse::<f64>().is_ok()
                                     || (expr.starts_with('"') && expr.ends_with('"'))
                                     || (expr.starts_with('\'') && expr.ends_with('\''))
+                                    || (expr.starts_with('[') && expr.ends_with(']'))
+                                    || (expr.starts_with('{') && expr.ends_with('}'))
                                 {
                                     ctx.diagnostic(
                                         format!("Expected a function as event handler, got '{}'.", expr),

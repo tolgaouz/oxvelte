@@ -18,9 +18,10 @@ impl Rule for PreferStyleDirective {
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
-                // Skip special elements and components (style: directives only work on HTML elements)
-                if el.name.starts_with("svelte:")
-                    || el.name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+                // Skip components (style: directives only work on HTML/svelte:element)
+                // svelte:element renders as a real DOM element, so it supports style:
+                if el.name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+                    || (el.name.starts_with("svelte:") && el.name != "svelte:element")
                 {
                     return;
                 }
@@ -31,7 +32,6 @@ impl Rule for PreferStyleDirective {
                             // Don't flag expression-only styles (variables), shorthand, or concat
                             match value {
                                 AttributeValue::Static(s) => {
-                                    // Only flag if it contains actual CSS declarations
                                     if s.contains(':') {
                                         ctx.diagnostic(
                                             "Prefer using `style:property={value}` directive instead of the `style` attribute.",
@@ -39,9 +39,26 @@ impl Rule for PreferStyleDirective {
                                         );
                                     }
                                 }
-                                _ => {
-                                    // Expression or concat — can't reliably convert, skip
+                                AttributeValue::Concat(parts) => {
+                                    // Flag if static parts contain CSS declarations or if
+                                    // expressions contain CSS-like strings
+                                    let has_css_pattern = parts.iter().any(|p| {
+                                        match p {
+                                            crate::ast::AttributeValuePart::Static(s) => s.contains(':'),
+                                            crate::ast::AttributeValuePart::Expression(e) => {
+                                                // Check if expression contains CSS-like property:value patterns
+                                                e.contains(':')
+                                            }
+                                        }
+                                    });
+                                    if has_css_pattern {
+                                        ctx.diagnostic(
+                                            "Prefer using `style:property={value}` directive instead of the `style` attribute.",
+                                            *span,
+                                        );
+                                    }
                                 }
+                                _ => {}
                             }
                         }
                     }
