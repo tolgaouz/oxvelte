@@ -394,6 +394,27 @@ mod tests {
         let r = parser::parse(s);
         assert!(r.errors.is_empty());
     }
+
+    #[test]
+    fn test_await_block_full() {
+        let s = "{#await promise}\n<p>Loading...</p>\n{:then value}\n<p>{value}</p>\n{:catch error}\n<p>{error}</p>\n{/await}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_key_block() {
+        let s = "{#key value}\n<p>{value}</p>\n{/key}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_special_elements() {
+        let s = "<svelte:head><title>Test</title></svelte:head>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
 }
 
 #[cfg(test)]
