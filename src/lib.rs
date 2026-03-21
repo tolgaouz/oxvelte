@@ -4522,6 +4522,7 @@ mod linter_fixture_tests {
     #[test] fn linter_no_reactive_reassign_invalid() { run_linter_invalid("no-reactive-reassign"); }
     #[test] fn linter_no_ignored_unsubscribe_valid() { run_linter_valid("no-ignored-unsubscribe"); }
     #[test] fn linter_no_inner_declarations_valid() { run_linter_valid("no-inner-declarations"); }
+    #[test] fn linter_no_inner_declarations_invalid() { run_linter_invalid("no-inner-declarations"); }
     #[test] fn linter_no_add_event_listener_valid() { run_linter_valid("no-add-event-listener"); }
     #[test] fn linter_no_unnecessary_state_wrap_valid() { run_linter_valid("no-unnecessary-state-wrap"); }
     #[test] fn linter_no_unused_props_valid() { run_linter_valid("no-unused-props"); }
