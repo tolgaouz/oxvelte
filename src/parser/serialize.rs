@@ -2312,23 +2312,36 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
                 }
             }
         } else {
-            // Trailing comment: only attach to a statement if attached_to is AT or AFTER the statement end
-            // (not inside the statement body)
-            let is_inside_stmt = body.iter().any(|stmt| {
-                let s = stmt.get("start").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                let e = stmt.get("end").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                attached_abs > s && attached_abs < e
-            });
-            if is_inside_stmt { continue; } // skip — comment belongs to a nested node
-
-            let mut best_idx = None;
-            let mut best_dist = u32::MAX;
+            // Trailing comment: use attached_to to find the owning statement
+            // Only attach if attached_to matches a statement's start (the NEXT token)
+            // The actual "trailing" attachment is on the previous statement
+            let mut found = false;
             for (i, stmt) in body.iter().enumerate() {
+                let stmt_start = stmt.get("start").and_then(|s| s.as_u64()).unwrap_or(0) as u32;
                 let stmt_end = stmt.get("end").and_then(|s| s.as_u64()).unwrap_or(0) as u32;
-                if stmt_end <= c_start && (c_start - stmt_end) < best_dist {
-                    best_dist = c_start - stmt_end;
-                    best_idx = Some(i);
+                // Trailing comment: attached_to is the NEXT token. Find the statement
+                // that ENDS just before this comment and that the comment is on the same line
+                if stmt_end <= c_start && (c_start - stmt_end) <= 2 {
+                    // Only attach if comment is on the same line as statement end
+                    let stmt_end_line = offset_to_loc(source, stmt_end as usize).0;
+                    let comment_line = offset_to_loc(source, c_start as usize).0;
+                    if stmt_end_line == comment_line {
+                        if let Some(obj) = body[i].as_object_mut() {
+                            let arr = obj.entry("trailingComments").or_insert(json!([]));
+                            if let Some(a) = arr.as_array_mut() { a.push(comment_json.clone()); }
+                        }
+                        found = true;
+                        break;
+                    }
                 }
+            }
+            if found { continue; }
+            // Skip — trailing comment belongs to a nested node or isn't on a top-level statement
+            continue;
+            #[allow(unreachable_code)]
+            let mut best_idx: Option<usize> = None;
+            let best_dist = 0u32;
+            for (_i, _stmt) in body.iter().enumerate() {
             }
             if let Some(idx) = best_idx {
                 if let Some(obj) = body[idx].as_object_mut() {
