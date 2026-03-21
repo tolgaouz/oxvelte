@@ -27,6 +27,9 @@ enum Command {
         file: PathBuf,
         #[arg(long, short)]
         pretty: bool,
+        /// Output format: "legacy" (Svelte 4) or "modern" (Svelte 5).
+        #[arg(long, default_value = "legacy")]
+        format: String,
     },
     /// Parse + lint.
     Check {
@@ -39,7 +42,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::Lint { paths, all_rules, fix: _ } => cmd_lint(&paths, all_rules),
-        Command::Parse { file, pretty } => cmd_parse(&file, pretty),
+        Command::Parse { file, pretty, format } => cmd_parse(&file, pretty, &format),
         Command::Check { paths } => cmd_lint(&paths, false),
     }
 }
@@ -59,7 +62,9 @@ fn cmd_lint(paths: &[PathBuf], all_rules: bool) -> ExitCode {
         total_files += 1;
         for d in &diags {
             total_diags += 1;
-            eprintln!("{}: {} [{}]", path.display(), d.message, d.rule_name);
+            // Compute line:column from span
+            let (line, col) = offset_to_line_col(&source, d.span.start as usize);
+            eprintln!("{}:{}:{}: {} [{}]", path.display(), line, col, d.message, d.rule_name);
         }
     }
 
@@ -67,7 +72,9 @@ fn cmd_lint(paths: &[PathBuf], all_rules: bool) -> ExitCode {
     if total_diags > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS }
 }
 
-fn cmd_parse(file: &PathBuf, pretty: bool) -> ExitCode {
+fn cmd_parse(file: &PathBuf, pretty: bool, format: &str) -> ExitCode {
+    use oxvelte::parser::serialize::{to_legacy_json, to_modern_json};
+
     let source = match std::fs::read_to_string(file) {
         Ok(s) => s,
         Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); return ExitCode::from(1); }
@@ -76,15 +83,31 @@ fn cmd_parse(file: &PathBuf, pretty: bool) -> ExitCode {
     for err in &result.errors {
         eprintln!("Parse error: {:?}", err);
     }
-    let json = if pretty {
-        serde_json::to_string_pretty(&result.ast)
-    } else {
-        serde_json::to_string(&result.ast)
+
+    let json_value = match format {
+        "modern" => to_modern_json(&result.ast, &source),
+        _ => to_legacy_json(&result.ast, &source),
     };
-    match json {
+
+    let output = if pretty {
+        serde_json::to_string_pretty(&json_value)
+    } else {
+        serde_json::to_string(&json_value)
+    };
+    match output {
         Ok(j) => { println!("{}", j); ExitCode::SUCCESS }
         Err(e) => { eprintln!("JSON error: {}", e); ExitCode::from(1) }
     }
+}
+
+fn offset_to_line_col(source: &str, offset: usize) -> (usize, usize) {
+    let mut line = 1;
+    let mut col = 1;
+    for (i, ch) in source.char_indices() {
+        if i >= offset { break; }
+        if ch == '\n' { line += 1; col = 1; } else { col += 1; }
+    }
+    (line, col)
 }
 
 fn collect_svelte_files(paths: &[PathBuf]) -> Vec<PathBuf> {
