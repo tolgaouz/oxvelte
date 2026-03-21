@@ -993,6 +993,64 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- real-world template patterns ---
+
+    #[test]
+    fn test_real_world_form() {
+        let s = "<script>\n\tlet form = { name: '', email: '' };\n\tconst submit = () => console.log(form);\n</script>\n\n<form on:submit|preventDefault={submit}>\n\t<label>\n\t\tName:\n\t\t<input bind:value={form.name} />\n\t</label>\n\t<label>\n\t\tEmail:\n\t\t<input type=\"email\" bind:value={form.email} />\n\t</label>\n\t<button type=\"submit\">Submit</button>\n</form>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_real_world_list() {
+        let s = "<script>\n\tlet items = [];\n\tlet newItem = '';\n\tconst add = () => { items = [...items, newItem]; newItem = ''; };\n\tconst remove = (i) => { items = items.filter((_, idx) => idx !== i); };\n</script>\n\n<input bind:value={newItem} />\n<button on:click={add}>Add</button>\n\n<ul>\n\t{#each items as item, i (i)}\n\t\t<li>\n\t\t\t{item}\n\t\t\t<button on:click={() => remove(i)}>x</button>\n\t\t</li>\n\t{/each}\n</ul>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_real_world_tabs() {
+        let s = "<script>\n\tlet activeTab = 0;\n\tconst tabs = ['Home', 'About', 'Contact'];\n</script>\n\n<div class=\"tabs\">\n\t{#each tabs as tab, i}\n\t\t<button class:active={activeTab === i} on:click={() => activeTab = i}>\n\t\t\t{tab}\n\t\t</button>\n\t{/each}\n</div>\n\n{#if activeTab === 0}\n\t<p>Home content</p>\n{:else if activeTab === 1}\n\t<p>About content</p>\n{:else}\n\t<p>Contact content</p>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_real_world_modal() {
+        let s = "<script>\n\tlet showModal = false;\n</script>\n\n<button on:click={() => showModal = true}>Open</button>\n\n{#if showModal}\n\t<div class=\"overlay\" on:click={() => showModal = false}>\n\t\t<div class=\"modal\" on:click|stopPropagation>\n\t\t\t<h2>Modal Title</h2>\n\t\t\t<slot />\n\t\t\t<button on:click={() => showModal = false}>Close</button>\n\t\t</div>\n\t</div>\n{/if}\n\n<style>\n\t.overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); }\n\t.modal { background: white; padding: 2rem; border-radius: 8px; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_real_world_fetcher() {
+        let s = "<script>\n\tlet promise = fetch('/api/data').then(r => r.json());\n</script>\n\n{#await promise}\n\t<p>Loading...</p>\n{:then data}\n\t<pre>{JSON.stringify(data, null, 2)}</pre>\n{:catch error}\n\t<p class=\"error\">{error.message}</p>\n{/await}\n\n<style>\n\t.error { color: red; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_real_world_accordion() {
+        let s = "<script>\n\tlet items = [\n\t\t{ title: 'Section 1', content: 'Content 1' },\n\t\t{ title: 'Section 2', content: 'Content 2' },\n\t];\n\tlet open = null;\n</script>\n\n{#each items as item, i}\n\t<div>\n\t\t<button on:click={() => open = open === i ? null : i}>{item.title}</button>\n\t\t{#if open === i}\n\t\t\t<div transition:slide>{item.content}</div>\n\t\t{/if}\n\t</div>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_real_world_store_subscription() {
+        let s = "<script>\n\timport { writable, derived } from 'svelte/store';\n\tconst count = writable(0);\n\tconst doubled = derived(count, ($count) => $count * 2);\n\tconst inc = () => count.update(n => n + 1);\n</script>\n\n<p>Count: {$count}</p>\n<p>Doubled: {$doubled}</p>\n<button on:click={inc}>+1</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_real_world_svelte5_component() {
+        let s = "<script lang=\"ts\">\n\ttype Props = { title: string; items: string[]; onselect: (item: string) => void };\n\tlet { title, items = [], onselect }: Props = $props();\n\tlet selected = $state<string | null>(null);\n\tlet count = $derived(items.length);\n\t$effect(() => { if (selected) onselect(selected); });\n</script>\n\n<h2>{title} ({count})</h2>\n{#each items as item (item)}\n\t<button class:selected={item === selected} onclick={() => selected = item}>\n\t\t{item}\n\t</button>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- Svelte 5 specific tests ---
 
     #[test]
