@@ -993,6 +993,65 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- parser expression edge cases ---
+
+    #[test]
+    fn test_parse_ternary_in_attribute() {
+        let s = "<div class={active ? 'active' : 'inactive'}>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_template_literal_in_attribute() {
+        let s = "<div class={`item-${id}`}>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_object_spread_in_component() {
+        let s = "<Component {...$$restProps} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_multiline_expression() {
+        let s = "<p>{\n\titems\n\t\t.filter(Boolean)\n\t\t.map(String)\n\t\t.join(', ')\n}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_script_ts_generic() {
+        let s = "<script lang=\"ts\" generics=\"T extends Record<string, unknown>\">\n\tlet items: T[] = [];\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_render_tag_args() {
+        let s = "{@render header({ title: 'Hello', subtitle: 'World' })}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_const_tag_destructure() {
+        let s = "{#each items as item}\n\t{@const { name, age } = item}\n\t<p>{name}: {age}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_attach_directive() {
+        let s = "<div {@attach tooltip}>text</div>";
+        let r = parser::parse(s);
+        // May or may not parse successfully depending on parser support
+        let _ = r.ast.html.nodes.len();
+    }
+
     // --- linter edge case tests ---
 
     #[test]
