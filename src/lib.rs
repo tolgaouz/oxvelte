@@ -684,6 +684,71 @@ mod tests {
             "Should NOT flag fragment URL");
     }
 
+    // --- more linter rule unit tests ---
+
+    #[test]
+    fn test_dupe_use_directives() {
+        let s = "<div use:tooltip use:tooltip>text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-dupe-use-directives"),
+            "Should flag duplicate use: directives");
+    }
+
+    #[test]
+    fn test_shorthand_attr_non_short() {
+        let s = "<div name={name}>text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/shorthand-attribute"),
+            "Should flag non-shorthand attribute");
+    }
+
+    #[test]
+    fn test_shorthand_attr_ok() {
+        let s = "<div {name}>text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/shorthand-attribute"),
+            "Should NOT flag shorthand attribute");
+    }
+
+    #[test]
+    fn test_object_in_text_mustaches() {
+        let s = "<p>{{}}</p>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-object-in-text-mustaches"),
+            "Should flag object literal in text mustache");
+    }
+
+    #[test]
+    fn test_useless_mustaches_static() {
+        let s = "<div class=\"{'foo'}\">text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-useless-mustaches"),
+            "Should flag useless mustache with static string");
+    }
+
+    #[test]
+    fn test_dupe_else_if_condition() {
+        let s = "{#if x}\n\ta\n{:else if x}\n\tb\n{/if}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-dupe-else-if-blocks"),
+            "Should flag duplicate else-if condition");
+    }
+
+    #[test]
+    fn test_prefer_const_let() {
+        let s = "<script>\n\tlet x = 42;\n</script>\n<p>{x}</p>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/prefer-const"),
+            "Should flag let that could be const");
+    }
+
     // --- parser edge case tests ---
 
     #[test]
