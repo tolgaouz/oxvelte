@@ -993,6 +993,62 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- comprehensive linter negative tests ---
+
+    #[test]
+    fn test_button_has_type_ok() {
+        let s = "<button type=\"button\">click</button>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/button-has-type"),
+            "Should NOT flag button with type");
+    }
+
+    #[test]
+    fn test_button_has_type_missing() {
+        let s = "<button>click</button>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/button-has-type"),
+            "Should flag button without type");
+    }
+
+    #[test]
+    fn test_no_target_blank_ok() {
+        let s = "<a href=\"https://example.com\" rel=\"noopener noreferrer\" target=\"_blank\">link</a>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-target-blank"),
+            "Should NOT flag target=_blank with rel");
+    }
+
+    #[test]
+    fn test_no_target_blank_missing_rel() {
+        let s = "<a href=\"https://example.com\" target=\"_blank\">link</a>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-target-blank"),
+            "Should flag target=_blank without rel");
+    }
+
+    #[test]
+    fn test_no_spaces_around_equal_signs() {
+        let s = "<div class = \"foo\">text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-spaces-around-equal-signs-in-attribute"),
+            "Should flag spaces around = in attribute");
+    }
+
+    #[test]
+    fn test_html_quotes_double_ok() {
+        let s = "<div class=\"foo\">text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/html-quotes"),
+            "Should NOT flag double quotes (default)");
+    }
+
     // --- Svelte 5 linter rule tests ---
 
     #[test]
