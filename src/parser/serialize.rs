@@ -747,6 +747,51 @@ fn estree_binding_pattern(pattern: &oxc::ast::ast::FormalParameter<'_>, source: 
     result
 }
 
+/// Recursively try to attach a comment to a node whose start matches attached_to.
+fn attach_comment_recursive(node: &mut Value, comment: &Value, attached_to: u32, comment_start: u32, source: &str) -> bool {
+    if let Some(obj) = node.as_object_mut() {
+        let node_start = obj.get("start").and_then(|v| v.as_u64()).unwrap_or(u64::MAX) as u32;
+        let node_end = obj.get("end").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+
+        // Check if this node is the target
+        if node_start == attached_to {
+            // Check if it's a trailing comment (comment is AFTER the node on the same line)
+            let node_end_line = offset_to_loc(source, node_end as usize).0;
+            let comment_line = offset_to_loc(source, comment_start as usize).0;
+            let field = if comment_line == node_end_line && comment_start >= node_end {
+                "trailingComments"
+            } else {
+                "leadingComments"
+            };
+            let arr = obj.entry(field).or_insert(json!([]));
+            if let Some(a) = arr.as_array_mut() { a.push(comment.clone()); }
+            return true;
+        }
+
+        // If comment position is within this node's range, recurse into children
+        if comment_start >= node_start && comment_start < node_end {
+            for (_, v) in obj.iter_mut() {
+                match v {
+                    Value::Object(_) => {
+                        if attach_comment_recursive(v, comment, attached_to, comment_start, source) {
+                            return true;
+                        }
+                    }
+                    Value::Array(arr) => {
+                        for item in arr.iter_mut() {
+                            if attach_comment_recursive(item, comment, attached_to, comment_start, source) {
+                                return true;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Strip internal fields (starting with _) from JSON values recursively.
 fn strip_internal_fields(values: &mut Vec<Value>) {
     for v in values.iter_mut() {
@@ -2336,8 +2381,15 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
                 }
             }
             if found { continue; }
-            // Skip — trailing comment belongs to a nested node or isn't on a top-level statement
-            continue;
+            // Try to attach to nested nodes by walking the body tree
+            let mut attached = false;
+            for stmt in body.iter_mut() {
+                if attach_comment_recursive(stmt, &comment_json, attached_abs, c_start, source) {
+                    attached = true;
+                    break;
+                }
+            }
+            if attached { continue; }
             #[allow(unreachable_code)]
             let mut best_idx: Option<usize> = None;
             let best_dist = 0u32;
