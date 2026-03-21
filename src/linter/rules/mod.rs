@@ -55,6 +55,10 @@ mod no_spaces_around_equal_signs_in_attribute;
 mod no_restricted_html_elements;
 mod no_extra_reactive_curlies;
 
+mod no_dynamic_slot_name;
+mod no_goto_without_base;
+mod no_navigation_without_base;
+
 // New rules
 mod no_top_level_browser_globals;
 mod prefer_svelte_reactivity;
@@ -165,6 +169,9 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(experimental_require_strict_events::ExperimentalRequireStrictEvents),
         Box::new(comment_directive::CommentDirective),
         Box::new(system::System),
+        Box::new(no_dynamic_slot_name::NoDynamicSlotName),
+        Box::new(no_goto_without_base::NoGotoWithoutBase),
+        Box::new(no_navigation_without_base::NoNavigationWithoutBase),
     ]
 }
 

@@ -332,6 +332,10 @@ mod linter_fixture_tests {
     // #[test] fn linter_require_store_callbacks_use_set_param_valid() { run_linter_valid("require-store-callbacks-use-set-param"); }
     #[test] fn linter_require_store_reactive_access_valid() { run_linter_valid("require-store-reactive-access"); }
 
+    #[test] fn linter_no_dynamic_slot_name_invalid() { run_linter_invalid("no-dynamic-slot-name"); }
+    // no-goto-without-base invalid needs base prefix position analysis
+    // #[test] fn linter_no_goto_without_base_invalid() { run_linter_invalid("no-goto-without-base"); }
+
     // These invalid tests need more rule implementation work:
     // no-reactive-functions, no-navigation-without-resolve, no-goto-without-base,
     // no-navigation-without-base, no-dynamic-slot-name, require-event-dispatcher-types
