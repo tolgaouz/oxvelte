@@ -188,6 +188,40 @@ impl<'a> TemplateParser<'a> {
         text
     }
 
+    /// Read a quoted attribute value, properly skipping over `{...}` expressions
+    /// that may contain the same quote character inside JS strings.
+    fn eat_quoted_attr_value(&mut self, quote: u8) -> String {
+        let start = self.pos;
+        let bytes = self.source.as_bytes();
+        while self.pos < bytes.len() {
+            let ch = bytes[self.pos];
+            if ch == quote {
+                // Found the closing attribute quote
+                return self.source[start..self.pos].to_string();
+            }
+            if ch == b'{' {
+                // Skip the entire expression, respecting JS string quoting
+                self.pos += 1;
+                let mut brace_depth = 1;
+                while self.pos < bytes.len() && brace_depth > 0 {
+                    let c = bytes[self.pos];
+                    match c {
+                        b'{' => { brace_depth += 1; self.pos += 1; }
+                        b'}' => { brace_depth -= 1; self.pos += 1; }
+                        b'\'' | b'"' | b'`' => {
+                            // Skip JS string literal
+                            let _ = self.skip_string_literal(c);
+                        }
+                        _ => { self.pos += 1; }
+                    }
+                }
+                continue;
+            }
+            self.pos += 1;
+        }
+        self.source[start..self.pos].to_string()
+    }
+
     fn skip_whitespace(&mut self) {
         while self.pos < self.source.len()
             && self.source.as_bytes()[self.pos].is_ascii_whitespace()
@@ -710,20 +744,20 @@ impl<'a> TemplateParser<'a> {
             Ok(AttributeValue::Expression(expr))
         } else if self.looking_at("\"") {
             self.eat("\"")?;
-            let value = self.eat_until("\"");
+            let value = self.eat_quoted_attr_value(b'"');
             self.eat("\"")?;
             // Check for embedded expressions
             if value.contains('{') {
-                Ok(parse_concat_value(value))
+                Ok(parse_concat_value(&value))
             } else {
                 Ok(AttributeValue::Static(value.to_string()))
             }
         } else if self.looking_at("'") {
             self.eat("'")?;
-            let value = self.eat_until("'");
+            let value = self.eat_quoted_attr_value(b'\'');
             self.eat("'")?;
             if value.contains('{') {
-                Ok(parse_concat_value(value))
+                Ok(parse_concat_value(&value))
             } else {
                 Ok(AttributeValue::Static(value.to_string()))
             }

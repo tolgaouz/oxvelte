@@ -205,7 +205,8 @@ mod linter_fixture_tests {
             let lint = Linter::all();
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().map(|e| e == "svelte").unwrap_or(false) {
+                let fname = path.file_name().unwrap().to_string_lossy();
+                if fname.ends_with("-input.svelte") {
                     let source = std::fs::read_to_string(&path).unwrap();
                     let result = parser::parse(&source);
                     let diags = lint.lint(&result.ast, &source);
@@ -223,7 +224,8 @@ mod linter_fixture_tests {
             let lint = Linter::all();
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().map(|e| e == "svelte").unwrap_or(false) {
+                let fname = path.file_name().unwrap().to_string_lossy();
+                if fname.ends_with("-input.svelte") {
                     let source = std::fs::read_to_string(&path).unwrap();
                     let result = parser::parse(&source);
                     let diags = lint.lint(&result.ast, &source);
@@ -244,6 +246,14 @@ mod linter_fixture_tests {
     #[test] fn linter_no_target_blank_invalid() { run_linter_invalid("no-target-blank"); }
     #[test] fn linter_require_each_key_valid() { run_linter_valid("require-each-key"); }
     #[test] fn linter_require_each_key_invalid() { run_linter_invalid("require-each-key"); }
+    #[test] fn linter_no_dupe_style_properties_valid() { run_linter_valid("no-dupe-style-properties"); }
+    #[test] fn linter_no_dupe_style_properties_invalid() { run_linter_invalid("no-dupe-style-properties"); }
+    #[test] fn linter_no_dupe_else_if_blocks_valid() { run_linter_valid("no-dupe-else-if-blocks"); }
+    #[test] fn linter_no_dupe_else_if_blocks_invalid() { run_linter_invalid("no-dupe-else-if-blocks"); }
+    #[test] fn linter_no_useless_mustaches_valid() { run_linter_valid("no-useless-mustaches"); }
+    #[test] fn linter_no_useless_mustaches_invalid() { run_linter_invalid("no-useless-mustaches"); }
+    #[test] fn linter_no_object_in_text_mustaches_valid() { run_linter_valid("no-object-in-text-mustaches"); }
+    #[test] fn linter_no_object_in_text_mustaches_invalid() { run_linter_invalid("no-object-in-text-mustaches"); }
 }
 
 #[cfg(test)]

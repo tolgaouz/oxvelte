@@ -95,9 +95,12 @@ where F: FnMut(&TemplateNode)
             TemplateNode::IfBlock(block) => {
                 walk_template_nodes(&block.consequent, visitor);
                 if let Some(alt) = &block.alternate {
-                    if let TemplateNode::IfBlock(alt_block) = alt.as_ref() {
-                        walk_template_nodes(&alt_block.consequent, visitor);
-                    }
+                    // Walk the alternate as if it were in a fragment so visitors see it
+                    let wrapper = Fragment {
+                        nodes: vec![*alt.clone()],
+                        span: block.span,
+                    };
+                    walk_template_nodes(&wrapper, visitor);
                 }
             }
             TemplateNode::EachBlock(block) => {
