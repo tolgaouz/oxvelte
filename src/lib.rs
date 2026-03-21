@@ -993,6 +993,113 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- Svelte component patterns ---
+
+    #[test]
+    fn test_recursive_component() {
+        let s = "<script>\n\texport let depth = 5;\n</script>\n{#if depth > 0}\n\t<p>Depth: {depth}</p>\n\t<svelte:self depth={depth - 1} />\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_component_with_slot_props() {
+        let s = "<Hoverable let:hovering>\n\t<div class:active={hovering}>hover area</div>\n</Hoverable>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_component_with_named_slots() {
+        let s = "<Card>\n\t<svelte:fragment slot=\"header\">\n\t\t<h2>Title</h2>\n\t</svelte:fragment>\n\t<p>Body content</p>\n\t<svelte:fragment slot=\"footer\">\n\t\t<button>OK</button>\n\t</svelte:fragment>\n</Card>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_store_contract() {
+        let s = "<script>\n\timport { writable } from 'svelte/store';\n\tconst theme = writable('dark');\n\tconst toggle = () => theme.update(t => t === 'dark' ? 'light' : 'dark');\n</script>\n<button on:click={toggle}>{$theme}</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_keyed_each_with_transition() {
+        let s = "{#each list as item (item.id)}\n\t<div transition:fade>{item.text}</div>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_component_binding() {
+        let s = "<script>\n\tlet input;\n</script>\n<CustomInput bind:this={input} bind:value />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_svelte5_snippet_with_render() {
+        let s = "{#snippet header(title, subtitle)}\n\t<h1>{title}</h1>\n\t<p>{subtitle}</p>\n{/snippet}\n\n{@render header('Hello', 'World')}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_conditional_rendering_pattern() {
+        let s = "{#if loading}\n\t<Spinner />\n{:else if error}\n\t<Error message={error.message} />\n{:else if data}\n\t<DataView {data} />\n{:else}\n\t<Empty />\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_action_with_params() {
+        let s = "<div use:clickOutside on:outclick={close}>content</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_each_index_without_key() {
+        let s = "{#each items as _, i}\n\t<p>Index: {i}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_html_entities_comprehensive() {
+        let s = "<p>&lt;div&gt; &amp;&amp; &quot;quoted&quot; &#169; &#x00A9;</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_script_with_generics() {
+        let s = "<script lang=\"ts\" generics=\"T\">\n\tlet { items }: { items: T[] } = $props();\n</script>\n{#each items as item}<p>{item}</p>{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_component_with_rest_props() {
+        let s = "<script>\n\tlet { class: className, ...rest } = $props();\n</script>\n<div class={className} {...rest}><slot /></div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_bind_group_radio() {
+        let s = "<script>\n\tlet choice = 'a';\n</script>\n{#each ['a', 'b', 'c'] as option}\n\t<label>\n\t\t<input type=\"radio\" bind:group={choice} value={option} />\n\t\t{option}\n\t</label>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_two_way_binding_select() {
+        let s = "<script>\n\tlet selected = '';\n\tconst options = ['red', 'green', 'blue'];\n</script>\n<select bind:value={selected}>\n\t{#each options as opt}\n\t\t<option value={opt}>{opt}</option>\n\t{/each}\n</select>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- CSS feature tests ---
 
     #[test]
