@@ -332,7 +332,11 @@ mod linter_fixture_tests {
     // #[test] fn linter_require_store_callbacks_use_set_param_valid() { run_linter_valid("require-store-callbacks-use-set-param"); }
     #[test] fn linter_require_store_reactive_access_valid() { run_linter_valid("require-store-reactive-access"); }
 
-    // Batch 6: additional valid tests not in batch 3
+    // These invalid tests need more rule implementation work:
+    // no-reactive-functions, no-navigation-without-resolve, no-goto-without-base,
+    // no-navigation-without-base, no-dynamic-slot-name, require-event-dispatcher-types
+
+    // Batch 7: additional valid tests not in batch 3
     #[test] fn linter_experimental_require_slot_types_valid() { run_linter_valid("experimental-require-slot-types"); }
     #[test] fn linter_experimental_require_strict_events_valid() { run_linter_valid("experimental-require-strict-events"); }
     #[test] fn linter_html_closing_bracket_new_line_valid() { run_linter_valid("html-closing-bracket-new-line"); }
