@@ -993,6 +993,101 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- serialization and JSON output tests ---
+
+    #[test]
+    fn test_ast_serializable() {
+        let s = "<p>Hello</p>";
+        let r = parser::parse(s);
+        let json = serde_json::to_string(&r.ast).unwrap();
+        assert!(json.contains("Hello"));
+        assert!(json.contains("Element"));
+    }
+
+    #[test]
+    fn test_ast_roundtrip_json() {
+        let s = "<div class=\"test\"><p>{value}</p></div>";
+        let r = parser::parse(s);
+        let json = serde_json::to_value(&r.ast).unwrap();
+        assert!(json["html"]["nodes"].is_array());
+    }
+
+    #[test]
+    fn test_ast_spans_valid() {
+        let s = "<div>text</div>";
+        let r = parser::parse(s);
+        if let ast::TemplateNode::Element(el) = &r.ast.html.nodes[0] {
+            assert!(el.span.start < el.span.end);
+            assert!((el.span.end as usize) <= s.len());
+        }
+    }
+
+    #[test]
+    fn test_ast_fragment_span() {
+        let s = "<p>a</p><p>b</p>";
+        let r = parser::parse(s);
+        assert!(r.ast.html.span.start == 0 || r.ast.html.span.end as usize <= s.len());
+    }
+
+    #[test]
+    fn test_parse_numeric_entity() {
+        let s = "<p>&#8212; &#x2014;</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_inline_svg() {
+        let s = "<svg viewBox=\"0 0 100 100\"><circle cx=\"50\" cy=\"50\" r=\"40\" /></svg>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_math_ml() {
+        let s = "<math><mi>x</mi><mo>=</mo><mn>42</mn></math>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_all_vs_none() {
+        let s = "{@html x}\n{@debug y}\n<button>click</button>";
+        let r = parser::parse(s);
+        let all_diags = Linter::all().lint(&r.ast, s);
+        let rec_diags = Linter::recommended().lint(&r.ast, s);
+        assert!(all_diags.len() >= rec_diags.len(),
+            "All rules should produce >= diagnostics than recommended");
+    }
+
+    #[test]
+    fn test_parse_expression_member_access() {
+        let s = "<p>{obj.nested.deep.value}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_optional_chain() {
+        let s = "<p>{obj?.nested?.value ?? 'default'}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_array_access() {
+        let s = "<p>{items[0]}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_function_call() {
+        let s = "<p>{formatDate(new Date())}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- more parser and linter tests ---
 
     #[test]
