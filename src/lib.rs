@@ -993,6 +993,66 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- error recovery tests ---
+
+    #[test]
+    fn test_parse_unclosed_if() {
+        let s = "{#if cond}\n\t<p>text</p>";
+        let r = parser::parse(s);
+        // Should handle gracefully
+        let _ = r.ast.html.nodes.len();
+    }
+
+    #[test]
+    fn test_parse_unclosed_each() {
+        let s = "{#each items as item}\n\t<p>{item}</p>";
+        let r = parser::parse(s);
+        let _ = r.ast.html.nodes.len();
+    }
+
+    #[test]
+    fn test_parse_mismatched_tags() {
+        let s = "<div><span>text</div></span>";
+        let r = parser::parse(s);
+        let _ = r.ast.html.nodes.len();
+    }
+
+    #[test]
+    fn test_parse_bare_close_tag() {
+        let s = "</div>";
+        let r = parser::parse(s);
+        let _ = r.ast.html.nodes.len();
+    }
+
+    #[test]
+    fn test_parse_duplicate_attrs() {
+        let s = "<div class=\"a\" class=\"b\">text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_on_parse_error() {
+        let s = "{#if }\n\t<p>text</p>\n{/if}";
+        let r = parser::parse(s);
+        // Linter should handle parse results with errors gracefully
+        let _ = Linter::all().lint(&r.ast, s);
+    }
+
+    #[test]
+    fn test_parse_expression_with_braces() {
+        let s = "<p>{ { key: 'value' }.key }</p>";
+        let r = parser::parse(s);
+        let _ = r.ast.html.nodes.len();
+    }
+
+    #[test]
+    fn test_parse_component_lowercase_warning() {
+        let s = "<component />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- milestone 500 tests ---
 
     #[test]
