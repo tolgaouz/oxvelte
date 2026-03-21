@@ -12,6 +12,10 @@ impl Rule for ExperimentalRequireSlotTypes {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
+        // Only applies to TypeScript scripts
+        let is_ts = ctx.ast.instance.as_ref().map(|s| s.lang.as_deref() == Some("ts")).unwrap_or(false);
+        if !is_ts { return; }
+
         // Check if the component has <slot> elements.
         let mut has_slot = false;
         walk_template_nodes(&ctx.ast.html, &mut |node| {

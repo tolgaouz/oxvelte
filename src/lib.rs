@@ -304,6 +304,11 @@ mod linter_fixture_tests {
     #[test] fn linter_no_extra_reactive_curlies_valid() { run_linter_valid("no-extra-reactive-curlies"); }
     #[test] fn linter_no_extra_reactive_curlies_invalid() { run_linter_invalid("no-extra-reactive-curlies"); }
 
+    // Batch 4: additional valid tests not in batch 3
+    #[test] fn linter_experimental_require_slot_types_valid() { run_linter_valid("experimental-require-slot-types"); }
+    #[test] fn linter_experimental_require_strict_events_valid() { run_linter_valid("experimental-require-strict-events"); }
+    #[test] fn linter_html_closing_bracket_new_line_valid() { run_linter_valid("html-closing-bracket-new-line"); }
+
     // Batch 3: more rules
     #[test] fn linter_no_dom_manipulating_valid() { run_linter_valid("no-dom-manipulating"); }
     #[test] fn linter_no_reactive_literals_valid() { run_linter_valid("no-reactive-literals"); }
