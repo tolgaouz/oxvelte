@@ -25,11 +25,14 @@ impl Rule for NoReactiveLiterals {
                 // Check if it's a simple assignment to a literal
                 if let Some(eq_pos) = after.find('=') {
                     let rhs = after[eq_pos + 1..].trim_start();
+                    // Only flag simple literals (not template literals with ${},
+                    // arrays, or objects which may contain reactive values)
                     let is_literal = rhs.starts_with('"') || rhs.starts_with('\'')
-                        || rhs.starts_with('`') || rhs == "true" || rhs.starts_with("true")
-                        || rhs == "false" || rhs.starts_with("false")
-                        || rhs == "null" || rhs.starts_with("null")
-                        || rhs.starts_with("undefined")
+                        || (rhs.starts_with('`') && !rhs.contains("${"))
+                        || rhs.starts_with("true;") || rhs.starts_with("true\n") || rhs == "true"
+                        || rhs.starts_with("false;") || rhs.starts_with("false\n") || rhs == "false"
+                        || rhs.starts_with("null;") || rhs.starts_with("null\n") || rhs == "null"
+                        || rhs.starts_with("undefined;") || rhs.starts_with("undefined\n") || rhs == "undefined"
                         || rhs.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false);
 
                     if is_literal && !after[..eq_pos].contains('(') {

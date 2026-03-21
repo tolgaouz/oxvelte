@@ -307,8 +307,7 @@ mod linter_fixture_tests {
     // Batch 3: more rules
     // no-dom-manipulating: needs to distinguish DOM methods on elements vs other objects
     // #[test] fn linter_no_dom_manipulating_valid() { run_linter_valid("no-dom-manipulating"); }
-    // no-reactive-literals: needs to understand $: reactive statements more precisely
-    // #[test] fn linter_no_reactive_literals_valid() { run_linter_valid("no-reactive-literals"); }
+    #[test] fn linter_no_reactive_literals_valid() { run_linter_valid("no-reactive-literals"); }
     #[test] fn linter_no_reactive_functions_valid() { run_linter_valid("no-reactive-functions"); }
     #[test] fn linter_no_immutable_reactive_statements_valid() { run_linter_valid("no-immutable-reactive-statements"); }
     #[test] fn linter_no_useless_children_snippet_valid() { run_linter_valid("no-useless-children-snippet"); }
@@ -334,8 +333,7 @@ mod linter_fixture_tests {
     // no-top-level-browser-globals: needs to recognize guard patterns (typeof, import.meta, etc.)
     // #[test] fn linter_no_top_level_browser_globals_valid() { run_linter_valid("no-top-level-browser-globals"); }
     #[test] fn linter_require_event_prefix_valid() { run_linter_valid("require-event-prefix"); }
-    // mustache-spacing: default config "never" shouldn't flag most valid cases
-    // #[test] fn linter_mustache_spacing_valid() { run_linter_valid("mustache-spacing"); }
+    #[test] fn linter_mustache_spacing_valid() { run_linter_valid("mustache-spacing"); }
     #[test] fn linter_first_attribute_linebreak_valid() { run_linter_valid("first-attribute-linebreak"); }
     #[test] fn linter_max_attributes_per_line_valid() { run_linter_valid("max-attributes-per-line"); }
     #[test] fn linter_html_quotes_valid() { run_linter_valid("html-quotes"); }
