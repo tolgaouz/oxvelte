@@ -912,14 +912,21 @@ impl<'a> TemplateParser<'a> {
             let binding = header[then_pos + 6..].trim().to_string();
             if !binding.is_empty() { then_binding = Some(binding); } else { then_binding = None; }
             pending = None;
-            then = Some(self.parse_fragment()?);
+            let shorthand_start = self.pos as u32; // after header }
+            let mut frag = self.parse_fragment()?;
+            // Shorthand: inverted span (start after }, end before {#await)
+            frag.span = Span::new(shorthand_start, start);
+            then = Some(frag);
             catch = None;
             catch_binding = None;
         } else if header.ends_with(" then") {
             expression = header[..header.len() - 5].trim().to_string();
             then_binding = None;
             pending = None;
-            then = Some(self.parse_fragment()?);
+            let shorthand_start = self.pos as u32;
+            let mut frag = self.parse_fragment()?;
+            frag.span = Span::new(shorthand_start, start);
+            then = Some(frag);
             catch = None;
             catch_binding = None;
         } else if let Some(catch_pos) = header.find(" catch ") {
@@ -929,14 +936,20 @@ impl<'a> TemplateParser<'a> {
             pending = None;
             then = None;
             then_binding = None;
-            catch = Some(self.parse_fragment()?);
+            let shorthand_start = self.pos as u32;
+            let mut frag = self.parse_fragment()?;
+            frag.span = Span::new(shorthand_start, start);
+            catch = Some(frag);
         } else if header.ends_with(" catch") {
             expression = header[..header.len() - 6].trim().to_string();
             catch_binding = None;
             pending = None;
             then = None;
             then_binding = None;
-            catch = Some(self.parse_fragment()?);
+            let shorthand_start = self.pos as u32;
+            let mut frag = self.parse_fragment()?;
+            frag.span = Span::new(shorthand_start, start);
+            catch = Some(frag);
         } else {
             expression = header;
             pending = Some(self.parse_fragment()?);

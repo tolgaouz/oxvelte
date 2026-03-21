@@ -78,7 +78,39 @@ fn expression_to_estree(source: &str, expr_str: &str, expr_start: u32) -> Value 
 
     if let Ok(expr) = &js_result {
         if !expr_str.ends_with('.') {
-            return estree_expr(expr, source, expr_start);
+            let mut result = estree_expr(expr, source, expr_start);
+            // Check for leading block comments in the expression text
+            let trimmed = expr_str.trim_start();
+            if trimmed.starts_with("/*") {
+                if let Some(end_pos) = trimmed.find("*/") {
+                    let comment_text = &trimmed[2..end_pos];
+                    let comment_start = expr_start;
+                    let comment_end = expr_start + end_pos as u32 + 2;
+                    if let Some(obj) = result.as_object_mut() {
+                        obj.insert("leadingComments".to_string(), json!([{
+                            "type": "Block",
+                            "value": comment_text,
+                            "start": comment_start,
+                            "end": comment_end
+                        }]));
+                    }
+                }
+            } else if trimmed.starts_with("//") {
+                if let Some(nl_pos) = trimmed.find('\n') {
+                    let comment_text = &trimmed[2..nl_pos];
+                    let comment_start = expr_start;
+                    let comment_end = expr_start + nl_pos as u32;
+                    if let Some(obj) = result.as_object_mut() {
+                        obj.insert("leadingComments".to_string(), json!([{
+                            "type": "Line",
+                            "value": comment_text,
+                            "start": comment_start,
+                            "end": comment_end
+                        }]));
+                    }
+                }
+            }
+            return result;
         }
     }
 
@@ -1606,8 +1638,14 @@ pub fn to_modern_json(ast: &SvelteAst, source: &str) -> Value {
     {
         let bytes = source.as_bytes();
         let mut i = 0;
+        let mut brace_depth = 0i32; // track { } nesting to skip comments inside expressions
         while i < source.len() {
             if in_script_or_style(i) { i += 1; continue; }
+            // Track brace depth for skipping comments inside {expressions}
+            if bytes[i] == b'{' { brace_depth += 1; i += 1; continue; }
+            if bytes[i] == b'}' { brace_depth -= 1; i += 1; continue; }
+            // Only collect comments at template level (not inside expressions)
+            if brace_depth > 0 { i += 1; continue; }
             if bytes[i] == b'"' || bytes[i] == b'\'' || bytes[i] == b'`' {
                 let q = bytes[i]; i += 1;
                 while i < source.len() && bytes[i] != q {
