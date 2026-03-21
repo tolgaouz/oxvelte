@@ -277,8 +277,7 @@ mod linter_fixture_tests {
     #[test] fn linter_shorthand_directive_valid() { run_linter_valid("shorthand-directive"); }
     #[test] fn linter_shorthand_directive_invalid() { run_linter_invalid("shorthand-directive"); }
     #[test] fn linter_html_self_closing_valid() { run_linter_valid("html-self-closing"); }
-    // html-self-closing invalid requires config options for different element categories
-    // #[test] fn linter_html_self_closing_invalid() { run_linter_invalid("html-self-closing"); }
+    #[test] fn linter_html_self_closing_invalid() { run_linter_invalid("html-self-closing"); }
     #[test] fn linter_no_not_function_handler_valid() { run_linter_valid("no-not-function-handler"); }
     // no-not-function-handler invalid requires type analysis for value01 fixture
     // #[test] fn linter_no_not_function_handler_invalid() { run_linter_invalid("no-not-function-handler"); }
