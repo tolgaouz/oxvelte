@@ -138,6 +138,7 @@ impl<'a> CssParser<'a> {
     fn parse_selector(&mut self) -> Option<Value> {
         let start = self.pos;
         let mut children = Vec::new();
+        let mut last_parse_end = self.pos; // track position after last selector (before whitespace skip)
 
         self.skip_ws_and_comments();
 
@@ -157,6 +158,7 @@ impl<'a> CssParser<'a> {
             }
 
             let simple = self.parse_simple_selector()?;
+            last_parse_end = self.pos; // position after parsing (including parens)
             children.push(simple);
         }
 
@@ -166,10 +168,12 @@ impl<'a> CssParser<'a> {
 
         let end = children.last().map(|s| s["end"].as_u64().unwrap() as u32)
             .unwrap_or(self.abs(start));
+        let full_end = self.abs(last_parse_end);
 
         Some(json!({
             "type": "Selector",
             "start": self.abs(start),
+            "_full_end": full_end,
             "end": end,
             "children": children
         }))

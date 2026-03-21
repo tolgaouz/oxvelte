@@ -715,6 +715,30 @@ fn estree_binding_pattern(pattern: &oxc::ast::ast::FormalParameter<'_>, source: 
     result
 }
 
+/// Strip internal fields (starting with _) from JSON values recursively.
+fn strip_internal_fields(values: &mut Vec<Value>) {
+    for v in values.iter_mut() {
+        strip_internal_fields_value(v);
+    }
+}
+
+fn strip_internal_fields_value(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            map.retain(|k, _| !k.starts_with('_'));
+            for (_, v) in map.iter_mut() {
+                strip_internal_fields_value(v);
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                strip_internal_fields_value(v);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Adjust all column values +1 in loc objects for multi-line destructured patterns.
 /// The Svelte compiler uses acorn which has a different column convention for patterns.
 fn adjust_binding_columns(value: &mut Value, source: &str) {
@@ -1253,13 +1277,24 @@ fn convert_css_to_modern(children: &[Value]) -> Vec<Value> {
 fn convert_selector_list_modern(selector_list: &mut Value) {
     if let Some(obj) = selector_list.as_object_mut() {
         if obj.get("type").and_then(|t| t.as_str()) == Some("SelectorList") {
-            if let Some(children) = obj.get_mut("children") {
-                if let Some(arr) = children.as_array_mut() {
-                    let converted: Vec<Value> = arr.iter().map(|selector| {
-                        convert_selector_to_complex(selector)
-                    }).collect();
-                    *children = json!(converted);
-                }
+            // Update end from _full_end if available
+            if let Some(full_end) = obj.get("_full_end").cloned() {
+                obj.insert("end".to_string(), full_end);
+            }
+            obj.remove("_full_end");
+            // Convert children and update end
+            let new_end = if let Some(children) = obj.get("children").and_then(|c| c.as_array()) {
+                let converted: Vec<Value> = children.iter().map(|selector| {
+                    convert_selector_to_complex(selector)
+                }).collect();
+                let last_end = converted.last().and_then(|l| l.get("end")).cloned();
+                obj.insert("children".to_string(), json!(converted));
+                last_end
+            } else {
+                None
+            };
+            if let Some(end) = new_end {
+                obj.insert("end".to_string(), end);
             }
         }
     }
@@ -1269,7 +1304,9 @@ fn convert_selector_to_complex(selector: &Value) -> Value {
     if let Some(obj) = selector.as_object() {
         if obj.get("type").and_then(|t| t.as_str()) == Some("Selector") {
             let start = obj.get("start").cloned().unwrap_or(json!(0));
-            let end = obj.get("end").cloned().unwrap_or(json!(0));
+            // Use _full_end for modern format (includes pseudo-element parens)
+            let end = obj.get("_full_end").cloned()
+                .unwrap_or_else(|| obj.get("end").cloned().unwrap_or(json!(0)));
             let children = obj.get("children").and_then(|c| c.as_array()).cloned().unwrap_or_default();
 
             // Group children into RelativeSelectors (split on Combinator)
@@ -1307,8 +1344,8 @@ fn convert_selector_to_complex(selector: &Value) -> Value {
                 }
             }
             if !current_selectors.is_empty() {
-                let rel_end = current_selectors.last()
-                    .and_then(|s| s.get("end")).cloned().unwrap_or(end.clone());
+                // Use the full selector end (includes pseudo-element parens)
+                let rel_end = end.clone();
                 relative_selectors.push(json!({
                     "type": "RelativeSelector",
                     "combinator": current_combinator,
@@ -2023,8 +2060,9 @@ fn serialize_css_legacy(style: &Style, source: &str) -> Value {
     let content_start = style.span.start + content_start_rel as u32;
     let content_end = style.span.start + content_end_rel as u32;
 
-    // Parse CSS children
-    let children = crate::parser::css::parse_css_children(&style.content, content_start);
+    // Parse CSS children and strip internal fields
+    let mut children = crate::parser::css::parse_css_children(&style.content, content_start);
+    strip_internal_fields(&mut children);
 
     json!({
         "type": "Style",
