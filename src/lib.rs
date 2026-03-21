@@ -994,6 +994,33 @@ mod tests {
     }
 
     #[test]
+    fn test_prefer_writable_derived_basic() {
+        let s = "<script>\n\tconst { x } = $props();\n\tlet y = $state(x);\n\t$effect(() => {\n\t\ty = x;\n\t});\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/prefer-writable-derived"),
+            "Should flag $state + $effect pattern");
+    }
+
+    #[test]
+    fn test_prefer_writable_derived_conditional_ok() {
+        let s = "<script>\n\tconst { x } = $props();\n\tlet y = $state(x);\n\t$effect(() => {\n\t\tif (x > 0) y = x;\n\t});\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/prefer-writable-derived"),
+            "Should NOT flag conditional $effect");
+    }
+
+    #[test]
+    fn test_prefer_writable_derived_no_effect_ok() {
+        let s = "<script>\n\tlet y = $state(0);\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/prefer-writable-derived"),
+            "Should NOT flag $state without $effect");
+    }
+
+    #[test]
     fn test_prefer_writable_derived_effect_pre() {
         let s = "<script>\n\tconst { x } = $props();\n\tlet y = $state(x);\n\t$effect.pre(() => {\n\t\ty = x;\n\t});\n</script>";
         let r = parser::parse(s);
