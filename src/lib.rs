@@ -993,6 +993,69 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- more parser and linter tests ---
+
+    #[test]
+    fn test_parse_svelte_self() {
+        let s = "<svelte:self count={count - 1} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte_component_this() {
+        let s = "<svelte:component this={Component} prop={value} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_no_as() {
+        let s = "{#each {length: 3}}\n\t<p>item</p>\n{/each}";
+        let r = parser::parse(s);
+        // May or may not error, but shouldn't panic
+        let _ = r.ast.html.nodes.len();
+    }
+
+    #[test]
+    fn test_parse_script_export_default() {
+        let s = "<script context=\"module\">\n\texport default class App {}\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_boolean_attribute() {
+        let s = "<input disabled readonly required />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_unquoted_attribute() {
+        let s = "<div class=foo>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_consistent_selector_class_ok() {
+        let s = "<style>\n\t.my-class { color: red; }\n</style>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/consistent-selector-style"),
+            "Should NOT flag class selector");
+    }
+
+    #[test]
+    fn test_no_export_load_module() {
+        let s = "<script context=\"module\">\n\texport function load() {}\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-export-load-in-svelte-module-in-kit-pages"),
+            "Should flag export load in module script");
+    }
+
     // --- no-store-async tests ---
 
     #[test]
