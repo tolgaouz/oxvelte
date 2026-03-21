@@ -993,6 +993,62 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- linter edge case tests ---
+
+    #[test]
+    fn test_no_at_html_in_each() {
+        let s = "{#each items as item}\n\t{@html item.content}\n{/each}";
+        let r = parser::parse(s);
+        let diags = Linter::recommended().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-at-html-tags"),
+            "Should flag @html inside each block");
+    }
+
+    #[test]
+    fn test_no_at_debug_in_if() {
+        let s = "{#if debug}\n\t{@debug value}\n{/if}";
+        let r = parser::parse(s);
+        let diags = Linter::recommended().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-at-debug-tags"),
+            "Should flag @debug inside if block");
+    }
+
+    #[test]
+    fn test_each_key_using_index() {
+        let s = "{#each items as item, i (i)}\n\t<p>{item}</p>\n{/each}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/valid-each-key"),
+            "Should NOT flag index as key (it's defined by each block)");
+    }
+
+    #[test]
+    fn test_dom_manipulating_svelte_element() {
+        let s = "<script>\n\tlet el;\n\tconst rm = () => el.remove();\n</script>\n<svelte:element this=\"div\" bind:this={el}>text</svelte:element>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-dom-manipulating"),
+            "Should flag dom manipulation on svelte:element");
+    }
+
+    #[test]
+    fn test_unused_class_directive() {
+        let s = "<div class:active={isActive}>text</div>\n<style>\n\t.active { color: red; }\n</style>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-unused-class-name"),
+            "Should NOT flag class used via class: directive");
+    }
+
+    #[test]
+    fn test_prefer_style_directive_ok() {
+        let s = "<div style:color=\"red\">text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/prefer-style-directive"),
+            "Should NOT flag style: directive (already using it)");
+    }
+
     // --- parser robustness tests ---
 
     #[test]
