@@ -1002,6 +1002,98 @@ mod tests {
             "Should NOT flag window inside if block");
     }
 
+    // --- additional coverage ---
+
+    #[test]
+    fn test_browser_global_in_onmount_ok() {
+        let s = "<script>\n\timport { onMount } from 'svelte';\n\tonMount(() => {\n\t\tconsole.log(window.innerWidth);\n\t});\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-top-level-browser-globals"),
+            "Should NOT flag window inside onMount");
+    }
+
+    #[test]
+    fn test_browser_global_in_effect_ok() {
+        let s = "<script>\n\t$effect(() => {\n\t\tconsole.log(document.title);\n\t});\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-top-level-browser-globals"),
+            "Should NOT flag document inside $effect");
+    }
+
+    #[test]
+    fn test_browser_global_in_function_ok() {
+        let s = "<script>\n\tfunction handleClick() {\n\t\tconsole.log(navigator.userAgent);\n\t}\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-top-level-browser-globals"),
+            "Should NOT flag navigator inside function");
+    }
+
+    #[test]
+    fn test_browser_global_fetch_top_level() {
+        let s = "<script>\n\tconst data = fetch('/api');\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-top-level-browser-globals"),
+            "Should flag fetch at top level");
+    }
+
+    #[test]
+    fn test_browser_global_localstorage_top_level() {
+        let s = "<script>\n\tconst x = localStorage.getItem('key');\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-top-level-browser-globals"),
+            "Should flag localStorage at top level");
+    }
+
+    #[test]
+    fn test_browser_global_typeof_guard_ok() {
+        let s = "<script>\n\tconst x = typeof window !== 'undefined' ? window.innerWidth : 0;\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-top-level-browser-globals"),
+            "Should NOT flag window with typeof guard");
+    }
+
+    #[test]
+    fn test_prefer_destructured_store_member() {
+        let s = "<script>\n\timport { count } from './stores';\n</script>\n{$count.value}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/prefer-destructured-store-props"),
+            "Should flag $count.value");
+    }
+
+    #[test]
+    fn test_prefer_destructured_store_ok() {
+        let s = "<script>\n\timport { count } from './stores';\n</script>\n{$count}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/prefer-destructured-store-props"),
+            "Should NOT flag $count without member");
+    }
+
+    #[test]
+    fn test_immutable_reactive_function_decl() {
+        let s = "<script>\n\texport function greet() {}\n\t$: greet();\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-immutable-reactive-statements"),
+            "Should flag reactive statement calling immutable function");
+    }
+
+    #[test]
+    fn test_dom_manip_appendChild() {
+        let s = "<script>\n\tlet div;\n\tconst add = () => div.appendChild(document.createElement('p'));\n</script>\n<div bind:this={div} />";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-dom-manipulating"),
+            "Should flag appendChild on bind:this element");
+    }
+
     #[test]
     fn test_browser_global_in_globalthis_guard() {
         let s = "<script>\n\tif (globalThis.location !== undefined) {\n\t\tconsole.log(location.href);\n\t}\n</script>";
