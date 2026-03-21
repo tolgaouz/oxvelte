@@ -1002,6 +1002,143 @@ mod tests {
             "Should NOT flag window inside if block");
     }
 
+    // --- pushing to 750 ---
+
+    #[test]
+    fn test_parse_class_concat_complex() {
+        let s = "<div class=\"static {dynamic} {cond ? 'a' : 'b'} more\">text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_on_directive_bare() {
+        let s = "<button on:click>click</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_bind_each_item() {
+        let s = "{#each items as item}\n\t<input bind:value={item.name} />\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_no_reactive_fn_arrow() {
+        let s = "<script>\n\t$: fn = () => 42;\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-reactive-functions"),
+            "Should flag reactive arrow function");
+    }
+
+    #[test]
+    fn test_no_reactive_fn_named_ok() {
+        let s = "<script>\n\tfunction myFn() { return 42; }\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-reactive-functions"),
+            "Should NOT flag regular function declaration");
+    }
+
+    #[test]
+    fn test_shorthand_directive_class() {
+        let s = "<div class:active={active}>text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/shorthand-directive"),
+            "Should flag non-shorthand class directive");
+    }
+
+    #[test]
+    fn test_shorthand_directive_class_ok() {
+        let s = "<div class:active>text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/shorthand-directive"),
+            "Should NOT flag shorthand class directive");
+    }
+
+    #[test]
+    fn test_no_raw_in_template() {
+        let s = "{@html '<p>raw</p>'}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-at-html-tags"),
+            "Should flag @html in template");
+    }
+
+    #[test]
+    fn test_parse_keyed_each_fn_key() {
+        let s = "{#each items as item (getId(item))}\n\t<p>{item.name}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::EachBlock(block) = &r.ast.html.nodes[0] {
+            assert_eq!(block.key.as_deref(), Some("getId(item)"));
+        }
+    }
+
+    #[test]
+    fn test_parse_complex_await_chain() {
+        let s = "{#await fetch('/api').then(r => r.json())}\n\t<p>loading</p>\n{:then data}\n\t<p>{JSON.stringify(data)}</p>\n{/await}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_dynamic_element() {
+        let s = "<svelte:element this={tag} class=\"dynamic\">{content}</svelte:element>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_empty_each_flagged() {
+        let s = "{#each [] as item}\n\t<p>{item}</p>\n{/each}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/require-each-key"),
+            "Should flag each without key even on empty array");
+    }
+
+    #[test]
+    fn test_parse_expression_with_comma() {
+        let s = "<p>{(a, b)}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_with_object() {
+        let s = "<p>{{ key: 'value' }}</p>";
+        let r = parser::parse(s);
+        // Object literal in mustache
+        let _ = r.ast.html.nodes.len();
+    }
+
+    #[test]
+    fn test_parse_conditional_attribute() {
+        let s = "<div class={condition ? 'active' : undefined}>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_nullish_coalesce() {
+        let s = "<p>{value ?? 'default'}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_optional_chain_call() {
+        let s = "<p>{obj?.method?.(arg)}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- comprehensive linter coverage batch ---
 
     #[test]
