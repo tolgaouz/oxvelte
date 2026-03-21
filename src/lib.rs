@@ -993,6 +993,99 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- HTML element edge cases ---
+
+    #[test]
+    fn test_parse_details_summary() {
+        let s = "<details>\n\t<summary>Click to expand</summary>\n\t<p>Hidden content</p>\n</details>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_picture_source() {
+        let s = "<picture>\n\t<source srcset=\"large.webp\" media=\"(min-width: 800px)\" />\n\t<img src=\"small.jpg\" alt=\"photo\" />\n</picture>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_dl_dt_dd() {
+        let s = "<dl>\n\t<dt>Term</dt>\n\t<dd>Definition</dd>\n</dl>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_fieldset_legend() {
+        let s = "<fieldset>\n\t<legend>Personal Info</legend>\n\t<input type=\"text\" />\n</fieldset>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_figure_figcaption() {
+        let s = "<figure>\n\t<img src=\"img.jpg\" alt=\"photo\" />\n\t<figcaption>A nice photo</figcaption>\n</figure>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_dialog() {
+        let s = "<dialog open>\n\t<p>Dialog content</p>\n\t<button>Close</button>\n</dialog>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_template_tag() {
+        let s = "<template>\n\t<p>Template content</p>\n</template>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_progress_meter() {
+        let s = "<progress value=\"70\" max=\"100\"></progress>\n<meter value=\"0.7\">70%</meter>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_output() {
+        let s = "<output name=\"result\">{result}</output>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_audio_video() {
+        let s = "<audio src=\"song.mp3\" controls />\n<video src=\"video.mp4\" controls width=\"640\" />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_iframe() {
+        let s = "<iframe src=\"https://example.com\" title=\"Embedded\" />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_abbr_time() {
+        let s = "<abbr title=\"HyperText Markup Language\">HTML</abbr>\n<time datetime=\"2024-01-01\">New Year</time>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_code_pre() {
+        let s = "<pre><code>const x = 42;\nconsole.log(x);</code></pre>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- linter false-positive regression ---
 
     #[test]
