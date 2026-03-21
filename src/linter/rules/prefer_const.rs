@@ -37,6 +37,17 @@ impl Rule for PreferConst {
                     continue;
                 }
                 let var_name = &rest[..var_end];
+                // Skip declarations with Svelte runes ($derived, $state, $props, $bindable)
+                let after_name = rest[var_end..].trim_start();
+                if after_name.starts_with("= $derived") || after_name.starts_with("= $state")
+                    || after_name.starts_with("= $props") || after_name.starts_with("= $bindable")
+                {
+                    continue;
+                }
+                // Also skip destructuring: let { ... } = $props()
+                if var_name == "{" || var_name == "[" {
+                    continue;
+                }
                 // Check if this variable is reassigned anywhere (simple: look for `var_name =` but not `==`).
                 let after_decl = &content[offset + 4 + var_end..];
                 let pattern = format!("{} =", var_name);

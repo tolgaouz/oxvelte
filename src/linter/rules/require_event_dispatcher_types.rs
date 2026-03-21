@@ -16,6 +16,14 @@ impl Rule for RequireEventDispatcherTypes {
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         if let Some(script) = &ctx.ast.instance {
+            // Only applies to TypeScript scripts (type parameters are a TS feature)
+            if script.lang.as_deref() != Some("ts") {
+                return;
+            }
+            // Only flag if createEventDispatcher is imported from 'svelte'
+            if !script.content.contains("from 'svelte'") && !script.content.contains("from \"svelte\"") {
+                return;
+            }
             if script.content.contains("createEventDispatcher()") {
                 let tag_start = script.span.start as usize;
                 let source = ctx.source;

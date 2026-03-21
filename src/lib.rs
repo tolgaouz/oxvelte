@@ -317,15 +317,13 @@ mod linter_fixture_tests {
     #[test] fn linter_no_unnecessary_state_wrap_valid() { run_linter_valid("no-unnecessary-state-wrap"); }
     #[test] fn linter_no_unused_props_valid() { run_linter_valid("no-unused-props"); }
     #[test] fn linter_no_unused_class_name_valid() { run_linter_valid("no-unused-class-name"); }
-    // require-event-dispatcher-types: needs to distinguish Svelte's createEventDispatcher from other functions
-    // #[test] fn linter_require_event_dispatcher_types_valid() { run_linter_valid("require-event-dispatcher-types"); }
+    #[test] fn linter_require_event_dispatcher_types_valid() { run_linter_valid("require-event-dispatcher-types"); }
     // require-stores-init: needs store type detection
     // #[test] fn linter_require_stores_init_valid() { run_linter_valid("require-stores-init"); }
     // require-optimized-style-attribute: needs better static CSS detection
     // #[test] fn linter_require_optimized_style_attribute_valid() { run_linter_valid("require-optimized-style-attribute"); }
     #[test] fn linter_prefer_writable_derived_valid() { run_linter_valid("prefer-writable-derived"); }
-    // prefer-const: needs better $derived/$state detection
-    // #[test] fn linter_prefer_const_valid() { run_linter_valid("prefer-const"); }
+    #[test] fn linter_prefer_const_valid() { run_linter_valid("prefer-const"); }
     #[test] fn linter_prefer_destructured_store_props_valid() { run_linter_valid("prefer-destructured-store-props"); }
     #[test] fn linter_infinite_reactive_loop_valid() { run_linter_valid("infinite-reactive-loop"); }
     // no-top-level-browser-globals: needs to recognize guard patterns (typeof, import.meta, etc.)
