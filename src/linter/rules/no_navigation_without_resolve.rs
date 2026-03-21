@@ -42,10 +42,15 @@ impl Rule for NoNavigationWithoutResolve {
                     }
                     let rest = &content[offset + nav_fn.len()..];
                     let trimmed = rest.trim_start();
-                    // Flag if the argument is a string literal (starts with quote or backtick).
-                    if trimmed.starts_with('\'')
-                        || trimmed.starts_with('"')
-                        || trimmed.starts_with('`')
+                    // Flag if the argument is a non-empty string literal.
+                    // Skip empty strings ('', "", ``)
+                    let is_empty_string = trimmed.starts_with("''")
+                        || trimmed.starts_with("\"\"")
+                        || trimmed.starts_with("``");
+                    if !is_empty_string
+                        && (trimmed.starts_with('\'')
+                            || trimmed.starts_with('"')
+                            || trimmed.starts_with('`'))
                     {
                         let start = (base + offset) as u32;
                         let end = start + nav_fn.len() as u32;
