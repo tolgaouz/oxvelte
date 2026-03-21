@@ -1186,11 +1186,18 @@ fn serialize_attribute_modern(attr: &Attribute, source: &str) -> Value {
                     if trimmed.is_empty() && name.is_empty() {
                         // Empty shorthand {} attribute: position inside braces
                         let inner_pos = span.start + brace_pos as u32 + 1;
+                        let mut expr = expression_to_estree(source, "", inner_pos);
+                        // Modern format: add loc to empty expression
+                        if let Some(obj) = expr.as_object_mut() {
+                            if !obj.contains_key("loc") {
+                                obj.insert("loc".to_string(), loc_json_with_char(source, inner_pos, inner_pos));
+                            }
+                        }
                         json!({
                             "type": "ExpressionTag",
                             "start": inner_pos,
                             "end": inner_pos,
-                            "expression": expression_to_estree(source, "", inner_pos)
+                            "expression": expr
                         })
                     } else {
                         let mustache_start = span.start + brace_pos as u32;
