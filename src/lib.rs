@@ -993,6 +993,56 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- more linter positive/negative tests ---
+
+    #[test]
+    fn test_first_attribute_linebreak_ok() {
+        let s = "<div class=\"foo\">text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/first-attribute-linebreak"),
+            "Should NOT flag singleline element");
+    }
+
+    #[test]
+    fn test_max_attributes_per_line_ok() {
+        let s = "<div class=\"foo\">text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/max-attributes-per-line"),
+            "Should NOT flag element with 1 attribute");
+    }
+
+    #[test]
+    fn test_mustache_spacing_ok() {
+        let s = "<p>{value}</p>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/mustache-spacing"),
+            "Should NOT flag default mustache spacing");
+    }
+
+    #[test]
+    fn test_no_add_event_listener() {
+        let s = "<script>\n\tdocument.addEventListener('click', handler);\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-add-event-listener"),
+            "Should flag addEventListener");
+    }
+
+    #[test]
+    fn test_experimental_require_strict_events_ts() {
+        let s = "<script lang=\"ts\">\n\timport { createEventDispatcher } from 'svelte';\n\tconst dispatch = createEventDispatcher();\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/experimental-require-strict-events"
+            || d.rule_name == "svelte/require-event-dispatcher-types"),
+            "Should flag untyped dispatcher");
+    }
+
+
+    #[test]
     // --- comprehensive linter negative tests ---
 
     #[test]
