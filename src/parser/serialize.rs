@@ -2870,12 +2870,14 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
             obj
         }
         TemplateNode::MustacheTag(m) => {
-            let expr_start = m.span.start + 1; // skip '{'
+            let trimmed = m.expression.trim();
+            let leading_ws = m.expression.len() - m.expression.trim_start().len();
+            let expr_start = m.span.start + 1 + leading_ws as u32; // skip '{' + leading whitespace
             json!({
                 "type": "MustacheTag",
                 "start": m.span.start,
                 "end": m.span.end,
-                "expression": expression_to_estree(source, m.expression.trim(), expr_start)
+                "expression": expression_to_estree(source, trimmed, expr_start)
             })
         }
         TemplateNode::RawMustacheTag(r) => {
