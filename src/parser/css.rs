@@ -68,6 +68,7 @@ impl<'a> CssParser<'a> {
                 break;
             }
 
+            let prev_pos = self.pos;
             if self.source[self.pos..].starts_with('@') {
                 if let Some(atrule) = self.parse_atrule() {
                     rules.push(atrule);
@@ -78,6 +79,10 @@ impl<'a> CssParser<'a> {
                 }
             }
             self.skip_ws_and_comments();
+            // Safety: if position didn't advance, skip one character to prevent infinite loop
+            if self.pos == prev_pos {
+                self.pos += 1;
+            }
         }
 
         rules
