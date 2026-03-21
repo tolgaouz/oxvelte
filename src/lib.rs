@@ -993,6 +993,64 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- parser robustness tests ---
+
+    #[test]
+    fn test_parse_deeply_nested_blocks() {
+        let s = "{#if a}\n\t{#if b}\n\t\t{#if c}\n\t\t\t{#each items as item}\n\t\t\t\t{item}\n\t\t\t{/each}\n\t\t{/if}\n\t{/if}\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_else() {
+        let s = "{#each items as item}\n\t<p>{item}</p>\n{:else}\n\t<p>No items</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_with_all_attrs() {
+        let s = "<Widget bind:value on:change={handler} class:active let:item use:tooltip {...props}>{item}</Widget>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_textarea() {
+        let s = "<textarea bind:value>{content}</textarea>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_select() {
+        let s = "<select bind:value>\n\t<option value=\"a\">A</option>\n\t<option value=\"b\">B</option>\n</select>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_style_global() {
+        let s = "<style>\n\t:global(.foo) { color: red; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_attribute_expressions() {
+        let s = "<div class=\"static {dynamic} more-static\" data-id={id} hidden={!visible}>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_event_with_inline_handler() {
+        let s = "<button on:click={() => { count++; console.log(count); }}>click</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- shorthand directive tests ---
 
     #[test]
