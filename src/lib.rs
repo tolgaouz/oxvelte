@@ -993,6 +993,79 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- accessibility linter tests ---
+
+    #[test]
+    fn test_button_type_submit() {
+        let s = "<button type=\"submit\">submit</button>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/button-has-type"),
+            "Should NOT flag button type=submit");
+    }
+
+    #[test]
+    fn test_button_type_reset() {
+        let s = "<button type=\"reset\">reset</button>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/button-has-type"),
+            "Should NOT flag button type=reset");
+    }
+
+    #[test]
+    fn test_no_target_blank_no_target_ok() {
+        let s = "<a href=\"https://example.com\">link</a>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-target-blank"),
+            "Should NOT flag link without target");
+    }
+
+    // --- template pattern tests ---
+
+    #[test]
+    fn test_parse_slot_with_fallback() {
+        let s = "<slot>\n\t<p>Fallback content</p>\n</slot>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_named_slot() {
+        let s = "<div slot=\"header\"><h1>Title</h1></div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_action_with_params() {
+        let s = "<div use:longpress={300}>Hold me</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_transition_with_params() {
+        let s = "<div transition:fly={{y: 200, duration: 500}}>content</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_animation() {
+        let s = "{#each items as item (item.id)}\n\t<li animate:flip={{duration: 300}}>{item.name}</li>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_bind_this() {
+        let s = "<canvas bind:this={canvas} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- serialization and JSON output tests ---
 
     #[test]
