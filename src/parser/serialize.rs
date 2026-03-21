@@ -2109,10 +2109,62 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
         "end": { "line": end_line, "column": end_col }
     });
 
-    // Serialize the program body statements
-    let body: Vec<Value> = result.program.body.iter().map(|stmt| {
+    // Serialize the program body statements with comment association
+    let mut body: Vec<Value> = result.program.body.iter().map(|stmt| {
         serialize_statement_legacy(stmt, source, content_start)
     }).collect();
+
+    // Associate comments with statements using attached_to
+    for c in result.program.comments.iter() {
+        let c_start = content_start + c.span.start;
+        let c_end = content_start + c.span.end;
+        let comment_type = if c.is_line() { "Line" } else { "Block" };
+        let raw = &script.content[c.span.start as usize..c.span.end as usize];
+        let value = if c.is_line() {
+            raw.strip_prefix("//").unwrap_or(raw)
+        } else {
+            raw.strip_prefix("/*").and_then(|v| v.strip_suffix("*/")).unwrap_or(raw)
+        };
+        let comment_json = json!({
+            "type": comment_type,
+            "value": value,
+            "start": c_start,
+            "end": c_end
+        });
+
+        // Find the statement this comment is attached to
+        let attached_abs = content_start + c.attached_to;
+        if c.is_leading() {
+            // Leading comment: attached_to points to the statement start
+            for stmt in body.iter_mut() {
+                let stmt_start = stmt.get("start").and_then(|s| s.as_u64()).unwrap_or(0) as u32;
+                if stmt_start == attached_abs {
+                    if let Some(obj) = stmt.as_object_mut() {
+                        let arr = obj.entry("leadingComments").or_insert(json!([]));
+                        if let Some(a) = arr.as_array_mut() { a.push(comment_json.clone()); }
+                    }
+                    break;
+                }
+            }
+        } else {
+            // Trailing comment: find the statement that ends just before this comment
+            let mut best_idx = None;
+            let mut best_dist = u32::MAX;
+            for (i, stmt) in body.iter().enumerate() {
+                let stmt_end = stmt.get("end").and_then(|s| s.as_u64()).unwrap_or(0) as u32;
+                if stmt_end <= c_start && (c_start - stmt_end) < best_dist {
+                    best_dist = c_start - stmt_end;
+                    best_idx = Some(i);
+                }
+            }
+            if let Some(idx) = best_idx {
+                if let Some(obj) = body[idx].as_object_mut() {
+                    let arr = obj.entry("trailingComments").or_insert(json!([]));
+                    if let Some(a) = arr.as_array_mut() { a.push(comment_json.clone()); }
+                }
+            }
+        }
+    }
 
     // Serialize comments
     let comments: Vec<Value> = result.program.comments.iter().map(|c| {
@@ -2380,6 +2432,49 @@ fn serialize_statement_legacy(stmt: &oxc::ast::ast::Statement<'_>, source: &str,
                 "end": end,
                 "loc": loc_json(source, start, end),
                 "argument": ret.argument.as_ref().map(|a| estree_expr(a, source, offset))
+            })
+        }
+        Statement::FunctionDeclaration(f) => {
+            let start = offset + f.span.start;
+            let end = offset + f.span.end;
+            let params: Vec<Value> = f.params.items.iter().map(|p| {
+                estree_binding_pattern(p, source, offset)
+            }).collect();
+            let body_val = f.body.as_ref().map(|b| {
+                let b_start = offset + b.span.start;
+                let b_end = offset + b.span.end;
+                let stmts: Vec<Value> = b.statements.iter().map(|s| {
+                    serialize_statement_legacy(s, source, offset)
+                }).collect();
+                json!({
+                    "type": "BlockStatement",
+                    "start": b_start,
+                    "end": b_end,
+                    "loc": loc_json(source, b_start, b_end),
+                    "body": stmts
+                })
+            });
+            json!({
+                "type": "FunctionDeclaration",
+                "start": start,
+                "end": end,
+                "loc": loc_json(source, start, end),
+                "id": f.id.as_ref().map(|id| {
+                    let id_start = offset + id.span.start;
+                    let id_end = offset + id.span.end;
+                    json!({
+                        "type": "Identifier",
+                        "start": id_start,
+                        "end": id_end,
+                        "loc": loc_json(source, id_start, id_end),
+                        "name": id.name.as_str()
+                    })
+                }),
+                "expression": false,
+                "generator": f.generator,
+                "async": f.r#async,
+                "params": params,
+                "body": body_val
             })
         }
         _ => {
