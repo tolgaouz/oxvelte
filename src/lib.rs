@@ -993,6 +993,42 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- cross-cutting linter tests ---
+
+    #[test]
+    fn test_clean_svelte5_component() {
+        let s = "<script>\n\tlet count = $state(0);\n\tlet doubled = $derived(count * 2);\n\tconst increment = () => count++;\n</script>\n\n<button onclick={increment}>\n\t{count} x 2 = {doubled}\n</button>\n\n<style>\n\tbutton { cursor: pointer; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        let diags = Linter::recommended().lint(&r.ast, s);
+        let filtered: Vec<_> = diags.iter()
+            .filter(|d| d.rule_name != "svelte/block-lang" && d.rule_name != "svelte/no-unused-class-name")
+            .collect();
+        assert!(filtered.is_empty(), "Clean Svelte 5 component should have no warnings, got: {:?}",
+            filtered.iter().map(|d| format!("{}: {}", d.rule_name, d.message)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_each_with_key_and_destructure() {
+        let s = "{#each users as { id, name } (id)}\n\t<p>{name}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/require-each-key"),
+            "Should NOT flag each with key");
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/valid-each-key"),
+            "Should NOT flag key using destructured var");
+    }
+
+    #[test]
+    fn test_multiple_style_checks() {
+        let s = "<div style=\"color: red; color: blue;\" style:font-size=\"14px\">text</div>\n<style>\n\tdiv { margin: 0; }\n</style>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-dupe-style-properties"),
+            "Should flag duplicate color in style attr");
+    }
+
     // --- parser expression edge cases ---
 
     #[test]
