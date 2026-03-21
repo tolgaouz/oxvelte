@@ -993,6 +993,106 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- comprehensive edge cases ---
+
+    #[test]
+    fn test_each_complex_expressions() {
+        let sources = [
+            "{#each Array.from({length: n}) as _, i (i)}<p>{i}</p>{/each}",
+            "{#each [...items, extra] as item}<p>{item}</p>{/each}",
+            "{#each items.filter(i => i.active) as item (item.id)}<p>{item.name}</p>{/each}",
+        ];
+        for s in &sources {
+            let r = parser::parse(s);
+            assert!(r.errors.is_empty(), "Failed to parse: {}", s);
+        }
+    }
+
+    #[test]
+    fn test_if_complex_conditions() {
+        let sources = [
+            "{#if items?.length > 0}<p>has items</p>{/if}",
+            "{#if typeof window !== 'undefined'}<p>browser</p>{/if}",
+            "{#if a && (b || c)}<p>complex</p>{/if}",
+        ];
+        for s in &sources {
+            let r = parser::parse(s);
+            assert!(r.errors.is_empty(), "Failed to parse: {}", s);
+        }
+    }
+
+    #[test]
+    fn test_attribute_edge_cases() {
+        let sources = [
+            "<div class:foo class:bar>text</div>",
+            "<input type=\"range\" min={0} max={100} step={1} />",
+            "<div data-tooltip=\"test\" aria-hidden=\"true\">text</div>",
+            "<img loading=\"lazy\" decoding=\"async\" src={url} alt=\"\" />",
+        ];
+        for s in &sources {
+            let r = parser::parse(s);
+            assert!(r.errors.is_empty(), "Failed to parse: {}", s);
+        }
+    }
+
+    #[test]
+    fn test_multiple_blocks_same_level() {
+        let s = "{#if a}\n\t<p>a</p>\n{/if}\n{#if b}\n\t<p>b</p>\n{/if}\n{#if c}\n\t<p>c</p>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        assert!(r.ast.html.nodes.len() >= 3);
+    }
+
+    #[test]
+    fn test_whitespace_between_elements() {
+        let s = "<p>a</p>\n\n<p>b</p>\n\n<p>c</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_head_with_meta() {
+        let s = "<svelte:head>\n\t<title>{pageTitle}</title>\n\t<meta name=\"description\" content={description} />\n</svelte:head>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_window_bindings() {
+        let s = "<svelte:window bind:scrollY={y} bind:innerWidth={width} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_events() {
+        let s = "<Widget on:custom={handler} on:click on:submit|preventDefault={submit} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_multiple_issues() {
+        let s = "<script>\n\t$inspect(x);\n</script>\n{@html dangerous}\n{@debug value}\n{#each items as item}\n\t<p>{item}</p>\n{/each}\n<button>click</button>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.len() >= 3, "Should have multiple diagnostics, got {}", diags.len());
+    }
+
+    #[test]
+    fn test_parse_svg_with_svelte() {
+        let s = "<svg viewBox=\"0 0 100 100\">\n\t{#each circles as c}\n\t\t<circle cx={c.x} cy={c.y} r={c.r} fill={c.color} />\n\t{/each}\n</svg>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_table_with_each() {
+        let s = "<table>\n\t<thead><tr><th>Name</th><th>Age</th></tr></thead>\n\t<tbody>\n\t\t{#each people as p (p.id)}\n\t\t\t<tr><td>{p.name}</td><td>{p.age}</td></tr>\n\t\t{/each}\n\t</tbody>\n</table>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     #[test]
     fn test_prefer_writable_derived_basic() {
         let s = "<script>\n\tconst { x } = $props();\n\tlet y = $state(x);\n\t$effect(() => {\n\t\ty = x;\n\t});\n</script>";
