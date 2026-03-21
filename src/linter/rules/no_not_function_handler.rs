@@ -2,7 +2,7 @@
 //! ⭐ Recommended
 
 use crate::linter::{walk_template_nodes, LintContext, Rule};
-use crate::ast::{TemplateNode, Attribute, DirectiveKind, AttributeValue};
+use crate::ast::{TemplateNode, Attribute, DirectiveKind};
 
 pub struct NoNotFunctionHandler;
 

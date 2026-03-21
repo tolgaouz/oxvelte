@@ -795,7 +795,7 @@ impl<'a> TemplateParser<'a> {
         let alternate = if self.looking_at("{:else if") {
             Some(Box::new(self.parse_else_if_block()?))
         } else if self.looking_at("{:else}") || self.is_else_closing() {
-            let else_start = self.pos as u32;
+            let _else_start = self.pos as u32;
             self.eat("{:else")?;
             self.skip_whitespace();
             if self.looking_at("}") { self.eat("}")?; }
@@ -838,7 +838,7 @@ impl<'a> TemplateParser<'a> {
         let alternate = if self.looking_at("{:else if") {
             Some(Box::new(self.parse_else_if_block()?))
         } else if self.looking_at("{:else}") || self.is_else_closing() {
-            let else_start = self.pos as u32;
+            let _else_start = self.pos as u32;
             self.eat("{:else")?;
             self.skip_whitespace();
             if self.looking_at("}") { self.eat("}")?; }

@@ -260,7 +260,7 @@ impl<'a> CssParser<'a> {
                     let name = &self.source[name_start..self.pos];
                     // Check for args in parens — parse as SelectorList for :global/:is/:where
                     if self.pos < self.source.len() && self.source.as_bytes()[self.pos] == b'(' {
-                        let args_start = self.pos;
+                        let _args_start = self.pos;
                         self.pos += 1; // skip (
                         // Parse inner content as selectors
                         let inner_start = self.pos;
@@ -302,7 +302,7 @@ impl<'a> CssParser<'a> {
                             });
                             // Build selectors array: Nth + optional selector entries
                             let mut selectors_arr = vec![nth_node];
-                            let mut rel_end = nth_val_end;
+                            let mut _rel_end = nth_val_end;
                             if let Some(sel_str) = of_sel {
                                 let sel_offset = inner_offset + (trimmed.len() - sel_str.len()) as u32;
                                 let mut ip = CssParser::new(sel_str, sel_offset);
@@ -311,7 +311,7 @@ impl<'a> CssParser<'a> {
                                     ip.skip_ws_and_comments();
                                     if ip.pos >= ip.source.len() { break; }
                                     if let Some(sel) = ip.parse_simple_selector() {
-                                        rel_end = sel.get("end").and_then(|e| e.as_u64()).unwrap_or(0) as u32;
+                                        _rel_end = sel.get("end").and_then(|e| e.as_u64()).unwrap_or(0) as u32;
                                         selectors_arr.push(sel);
                                     } else { break; }
                                 }

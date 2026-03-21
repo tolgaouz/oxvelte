@@ -461,7 +461,7 @@ fn estree_expr(expr: &oxc::ast::ast::Expression<'_>, source: &str, offset: u32) 
                             "argument": estree_expr(&s.argument, source, offset)
                         })
                     }
-                    oxc::ast::ast::ArrayExpressionElement::Elision(e) => {
+                    oxc::ast::ast::ArrayExpressionElement::Elision(_e) => {
                         Value::Null
                     }
                     _ => {
@@ -810,7 +810,7 @@ fn estree_binding_pattern(pattern: &oxc::ast::ast::FormalParameter<'_>, source: 
     // If the FormalParameter has a type annotation, use the FormalParameter's span
     // and add typeAnnotation field
     if let Some(type_ann) = &pattern.type_annotation {
-        let param_start = offset + pattern.span.start;
+        let _param_start = offset + pattern.span.start;
         let param_end = offset + pattern.span.end;
         // Update the end to include the type annotation
         if let Some(obj) = result.as_object_mut() {
@@ -1714,12 +1714,12 @@ pub fn to_modern_json(ast: &SvelteAst, source: &str) -> Value {
         if let Some(lang) = &script.lang {
             if let Some(lang_pos) = attrs_text.find("lang") {
                 let attr_start = script.span.start + 7 + lang_pos as u32;
-                let attr_end = attrs_text.find('>').map(|p| script.span.start + 7 + p as u32)
+                let _attr_end = attrs_text.find('>').map(|p| script.span.start + 7 + p as u32)
                     .unwrap_or(script.span.start + gt_pos as u32);
                 // Find the value position
                 let eq_pos = attrs_text[lang_pos..].find('=').unwrap_or(4);
                 let val_region = &attrs_text[lang_pos + eq_pos + 1..];
-                let quote = val_region.chars().next().unwrap_or('"');
+                let _quote = val_region.chars().next().unwrap_or('"');
                 let val_start = attr_start + eq_pos as u32 + 2;
                 let val_end = val_start + lang.len() as u32;
                 let attr_full_end = val_end + 1; // include closing quote
@@ -1908,6 +1908,7 @@ fn serialize_fragment_modern_ctx(fragment: &Fragment, source: &str, in_shadow_ro
     })
 }
 
+#[allow(dead_code)]
 fn serialize_node_modern(node: &TemplateNode, source: &str) -> Value {
     serialize_node_modern_ctx(node, source, false)
 }
@@ -2590,6 +2591,7 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
     })
 }
 
+#[allow(dead_code)]
 fn offset_to_loc_json(text: &str, offset: usize) -> Value {
     let (line, col) = offset_to_loc(text, offset);
     json!({ "line": line, "column": col })
@@ -2971,6 +2973,7 @@ fn serialize_fragment_legacy_root(fragment: &Fragment, source: &str, has_blocks:
     })
 }
 
+#[allow(dead_code)]
 fn serialize_fragment_legacy(fragment: &Fragment, source: &str) -> Value {
     // Root fragment: only strip trailing whitespace, keep all other nodes
     let filtered = strip_trailing_whitespace(&fragment.nodes);
@@ -3684,7 +3687,7 @@ fn serialize_attribute_legacy(attr: &Attribute, source: &str) -> Value {
 
             // Calculate name_loc: from directive start to end of directive name (prefix:name)
             let attr_text = &source[span.start as usize..span.end as usize];
-            let colon_pos = attr_text.find(':').unwrap_or(0);
+            let _colon_pos = attr_text.find(':').unwrap_or(0);
             let name_start = span.start;
             // name_loc covers the entire "prefix:name" part
             let name_end_rel = if let Some(eq) = attr_text.find('=') {
@@ -3975,7 +3978,7 @@ fn serialize_attr_value_legacy(value: &AttributeValue, source: &str, attr_span: 
                         pos += 1; // skip {
                         let expr_start = pos;
                         pos += expr.len() as u32;
-                        let expr_end = pos;
+                        let _expr_end = pos;
                         pos += 1; // skip }
                         let mustache_end = pos;
                         json!({
