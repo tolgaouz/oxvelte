@@ -64,8 +64,8 @@ impl<'a> TemplateParser<'a> {
                 }
                 // Closing tag — let the caller handle it
                 break;
-            } else if self.looking_at("{/") {
-                // Block closing tag — let the caller handle it
+            } else if self.looking_at("{/") && !self.looking_at("{/*") {
+                // Block closing tag — let the caller handle it (but not {/* comment */})
                 break;
             } else if self.looking_at("{:") {
                 // Block continuation tag — let the caller handle it
