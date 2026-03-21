@@ -841,6 +841,37 @@ mod tests {
             "Should flag store without initial value");
     }
 
+    // --- unused class name unit tests ---
+
+    #[test]
+    fn test_unused_class_name_no_css() {
+        let s = "<div class=\"foo\">text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-unused-class-name"),
+            "Should flag class without style block");
+    }
+
+    #[test]
+    fn test_unused_class_name_defined_ok() {
+        let s = "<div class=\"foo\">text</div>\n<style>\n\t.foo { color: red; }\n</style>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-unused-class-name"),
+            "Should NOT flag class defined in style");
+    }
+
+    #[test]
+    fn test_unused_class_name_partial() {
+        let s = "<div class=\"foo bar\">text</div>\n<style>\n\t.foo { color: red; }\n</style>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.message.contains("bar")),
+            "Should flag 'bar' not defined in style");
+        assert!(!diags.iter().any(|d| d.message.contains("foo")),
+            "Should NOT flag 'foo' defined in style");
+    }
+
     // --- parser edge case tests ---
 
     #[test]
