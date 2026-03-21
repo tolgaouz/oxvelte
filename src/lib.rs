@@ -993,6 +993,44 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- navigation + SvelteKit tests ---
+
+    #[test]
+    fn test_goto_without_base() {
+        let s = "<script>\n\timport { goto } from '$app/navigation';\n\tgoto('/dashboard');\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-goto-without-base"),
+            "Should flag goto without base");
+    }
+
+    #[test]
+    fn test_goto_with_base_ok() {
+        let s = "<script>\n\timport { goto } from '$app/navigation';\n\timport { base } from '$app/paths';\n\tgoto(`${base}/dashboard`);\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-goto-without-base"),
+            "Should NOT flag goto with base");
+    }
+
+    #[test]
+    fn test_nav_base_link_with_base_ok() {
+        let s = "<script>\n\timport { base } from '$app/paths';\n</script>\n<a href={`${base}/foo`}>link</a>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-navigation-without-base"),
+            "Should NOT flag link using base");
+    }
+
+    #[test]
+    fn test_no_export_load_in_module_basic() {
+        let s = "<script context=\"module\">\n\texport function load() { return {}; }\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-export-load-in-svelte-module-in-kit-pages"),
+            "Should flag export load in module");
+    }
+
     // --- Svelte 4 legacy syntax tests ---
 
     #[test]
