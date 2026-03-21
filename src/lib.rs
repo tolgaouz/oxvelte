@@ -993,6 +993,57 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- edge case attribute patterns ---
+
+    #[test]
+    fn test_parse_class_shorthand() {
+        let s = "<div {className}>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_multiple_class_directives() {
+        let s = "<div class:a class:b={isB} class:c={true}>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_multiple_style_directives() {
+        let s = "<div style:color=\"red\" style:font-size=\"14px\" style:--custom={val}>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_event_with_multiple_modifiers() {
+        let s = "<form on:submit|preventDefault|stopPropagation|once={handler}>content</form>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_bind_various() {
+        let s = "<input bind:value />\n<div bind:clientWidth={w} bind:clientHeight={h} />\n<video bind:duration bind:currentTime bind:paused />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_multiple_transitions() {
+        let s = "<div in:fly={{y: -100}} out:fade={{duration: 300}}>content</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_class_and_style_combined() {
+        let s = "<div class=\"base\" class:active class:disabled={!enabled} style=\"padding: 1rem\" style:color>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- real-world template patterns ---
 
     #[test]
