@@ -33,7 +33,8 @@ impl Rule for NoReactiveLiterals {
                         || rhs.starts_with("false;") || rhs.starts_with("false\n") || rhs == "false"
                         || rhs.starts_with("null;") || rhs.starts_with("null\n") || rhs == "null"
                         || rhs.starts_with("undefined;") || rhs.starts_with("undefined\n") || rhs == "undefined"
-                        || rhs.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false);
+                        || rhs.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+                        || rhs.starts_with("[]") || rhs.starts_with("{}");
 
                     if is_literal && !after[..eq_pos].contains('(') {
                         let tag_start = script.span.start as usize;
