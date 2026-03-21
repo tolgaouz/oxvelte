@@ -803,6 +803,44 @@ mod tests {
             "Should flag let that could be const");
     }
 
+    // --- more rule unit tests ---
+
+    #[test]
+    fn test_ignored_unsubscribe() {
+        let s = "<script>\n\timport { writable } from 'svelte/store';\n\tconst store = writable(0);\n\tstore.subscribe(v => console.log(v));\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-ignored-unsubscribe"),
+            "Should flag ignored unsubscribe return");
+    }
+
+    #[test]
+    fn test_ignored_unsubscribe_saved_ok() {
+        let s = "<script>\n\timport { writable } from 'svelte/store';\n\tconst store = writable(0);\n\tconst unsub = store.subscribe(v => console.log(v));\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-ignored-unsubscribe"),
+            "Should NOT flag saved unsubscribe");
+    }
+
+    #[test]
+    fn test_reactive_literal_42() {
+        let s = "<script>\n\t$: x = 42;\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-reactive-literals"),
+            "Should flag reactive literal assignment");
+    }
+
+    #[test]
+    fn test_stores_init_no_arg() {
+        let s = "<script>\n\timport { writable } from 'svelte/store';\n\tconst count = writable();\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/require-stores-init"),
+            "Should flag store without initial value");
+    }
+
     // --- parser edge case tests ---
 
     #[test]
