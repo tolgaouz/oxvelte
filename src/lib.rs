@@ -993,6 +993,193 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- AST structure tests ---
+
+    #[test]
+    fn test_ast_if_block_structure() {
+        let s = "{#if cond}\n\t<p>yes</p>\n{:else}\n\t<p>no</p>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::IfBlock(block) = &r.ast.html.nodes[0] {
+            assert_eq!(block.test.trim(), "cond");
+            assert!(!block.consequent.nodes.is_empty());
+            assert!(block.alternate.is_some());
+        } else {
+            panic!("Expected IfBlock");
+        }
+    }
+
+    #[test]
+    fn test_ast_each_block_structure() {
+        let s = "{#each items as item, i (item.id)}\n\t<p>{item}</p>\n{:else}\n\t<p>empty</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::EachBlock(block) = &r.ast.html.nodes[0] {
+            assert_eq!(block.expression.trim(), "items");
+            assert_eq!(block.context.trim(), "item");
+            assert_eq!(block.index.as_deref(), Some("i"));
+            assert_eq!(block.key.as_deref(), Some("item.id"));
+            assert!(block.fallback.is_some());
+        } else {
+            panic!("Expected EachBlock");
+        }
+    }
+
+    #[test]
+    fn test_ast_await_block_structure() {
+        let s = "{#await promise}\n\t<p>loading</p>\n{:then value}\n\t<p>{value}</p>\n{:catch error}\n\t<p>{error}</p>\n{/await}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::AwaitBlock(block) = &r.ast.html.nodes[0] {
+            assert_eq!(block.expression.trim(), "promise");
+            assert!(block.pending.is_some());
+            assert!(block.then.is_some());
+            assert_eq!(block.then_binding.as_deref(), Some("value"));
+            assert!(block.catch.is_some());
+            assert_eq!(block.catch_binding.as_deref(), Some("error"));
+        } else {
+            panic!("Expected AwaitBlock");
+        }
+    }
+
+    #[test]
+    fn test_ast_key_block_structure() {
+        let s = "{#key value}\n\t<p>{value}</p>\n{/key}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::KeyBlock(block) = &r.ast.html.nodes[0] {
+            assert_eq!(block.expression.trim(), "value");
+        } else {
+            panic!("Expected KeyBlock");
+        }
+    }
+
+    #[test]
+    fn test_ast_snippet_structure() {
+        let s = "{#snippet greeting(name)}\n\t<p>Hello {name}!</p>\n{/snippet}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::SnippetBlock(block) = &r.ast.html.nodes[0] {
+            assert_eq!(block.name, "greeting");
+            assert!(block.params.contains("name"));
+        } else {
+            panic!("Expected SnippetBlock");
+        }
+    }
+
+    #[test]
+    fn test_ast_element_attributes() {
+        let s = "<div class=\"foo\" id={myId} {...rest} on:click={handler} bind:value use:tooltip class:active style:color=\"red\">text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::Element(el) = &r.ast.html.nodes[0] {
+            assert_eq!(el.name, "div");
+            assert!(el.attributes.len() >= 7, "Should have at least 7 attributes");
+        }
+    }
+
+    #[test]
+    fn test_ast_script_content() {
+        let s = "<script>\n\tlet x = 42;\n\tconst y = 'hello';\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        let script = r.ast.instance.as_ref().unwrap();
+        assert!(script.content.contains("let x = 42"));
+        assert!(script.content.contains("const y = 'hello'"));
+        assert!(!script.module);
+    }
+
+    #[test]
+    fn test_ast_module_script() {
+        let s = "<script context=\"module\">\n\texport const prerender = true;\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        let module = r.ast.module.as_ref().unwrap();
+        assert!(module.module);
+    }
+
+    #[test]
+    fn test_ast_css_content() {
+        let s = "<style>\n\tp { color: red; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        let css = r.ast.css.as_ref().unwrap();
+        assert!(css.content.contains("color: red"));
+    }
+
+    #[test]
+    fn test_ast_render_tag() {
+        let s = "{@render greeting('world')}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::RenderTag(tag) = &r.ast.html.nodes[0] {
+            assert!(tag.expression.contains("greeting"));
+        } else {
+            panic!("Expected RenderTag");
+        }
+    }
+
+    #[test]
+    fn test_ast_const_tag() {
+        let s = "{@const x = 42}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::ConstTag(tag) = &r.ast.html.nodes[0] {
+            assert!(tag.declaration.contains("42"));
+        } else {
+            panic!("Expected ConstTag");
+        }
+    }
+
+    #[test]
+    fn test_ast_debug_tag() {
+        let s = "{@debug x, y}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::DebugTag(tag) = &r.ast.html.nodes[0] {
+            assert!(tag.identifiers.contains(&"x".to_string()));
+            assert!(tag.identifiers.contains(&"y".to_string()));
+        } else {
+            panic!("Expected DebugTag");
+        }
+    }
+
+    #[test]
+    fn test_ast_raw_mustache() {
+        let s = "{@html '<p>raw</p>'}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::RawMustacheTag(tag) = &r.ast.html.nodes[0] {
+            assert!(tag.expression.contains("<p>raw</p>"));
+        } else {
+            panic!("Expected RawMustacheTag");
+        }
+    }
+
+    #[test]
+    fn test_ast_text_node() {
+        let s = "Hello World!";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::Text(text) = &r.ast.html.nodes[0] {
+            assert_eq!(text.data, "Hello World!");
+        } else {
+            panic!("Expected Text");
+        }
+    }
+
+    #[test]
+    fn test_ast_comment() {
+        let s = "<!-- comment text -->";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::Comment(comment) = &r.ast.html.nodes[0] {
+            assert_eq!(comment.data.trim(), "comment text");
+        } else {
+            panic!("Expected Comment");
+        }
+    }
+
     // --- comprehensive rule coverage ---
 
     #[test]
