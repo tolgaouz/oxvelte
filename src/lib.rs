@@ -1002,6 +1002,171 @@ mod tests {
             "Should NOT flag window inside if block");
     }
 
+    // --- comprehensive linter coverage batch ---
+
+    #[test]
+    fn test_multiple_class_names_unused() {
+        let s = "<div class=\"a b c\">text</div>\n<style>\n\t.a { color: red; }\n</style>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let unused: Vec<_> = diags.iter().filter(|d| d.rule_name == "svelte/no-unused-class-name").collect();
+        assert_eq!(unused.len(), 2, "Should flag 'b' and 'c' as unused, got: {:?}", unused.iter().map(|d| &d.message).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_reactive_reassign_member_obj() {
+        let s = "<script>\n\tlet v = 0;\n\t$: obj = { v };\n\tfunction click() { obj.v = 1; }\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-reactive-reassign"),
+            "Should flag member assignment on reactive object");
+    }
+
+    #[test]
+    fn test_reactive_reassign_delete() {
+        let s = "<script>\n\tlet v = 0;\n\t$: obj = { v };\n\tfunction click() { delete obj.v; }\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-reactive-reassign"),
+            "Should flag delete on reactive object");
+    }
+
+    #[test]
+    fn test_html_closing_bracket_multiline_no_break() {
+        let s = "<div\n\tclass=\"foo\"\n\tid=\"bar\"></div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/html-closing-bracket-new-line"),
+            "Should flag multiline element with no line break before >");
+    }
+
+    #[test]
+    fn test_no_spaces_equal_ok() {
+        let s = "<div class=\"foo\" id=\"bar\">text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-spaces-around-equal-signs-in-attribute"),
+            "Should NOT flag attributes without spaces around =");
+    }
+
+    #[test]
+    fn test_no_trailing_spaces_multi() {
+        let s = "<p>line1</p>  \n<p>line2</p>\t\n<p>line3</p>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let trail: Vec<_> = diags.iter().filter(|d| d.rule_name == "svelte/no-trailing-spaces").collect();
+        assert_eq!(trail.len(), 2, "Should flag 2 lines with trailing spaces");
+    }
+
+    #[test]
+    fn test_no_inline_styles_dynamic() {
+        let s = "<div style=\"color: {active ? 'red' : 'blue'}\">text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-inline-styles"),
+            "Should flag dynamic inline style");
+    }
+
+    #[test]
+    fn test_prefer_style_directive_no_style_ok() {
+        let s = "<div class=\"foo\">text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/prefer-style-directive"),
+            "Should NOT flag element without style");
+    }
+
+    #[test]
+    fn test_button_input_not_flagged() {
+        let s = "<input type=\"submit\" value=\"Submit\" />";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/button-has-type"),
+            "Should NOT flag input type=submit");
+    }
+
+    #[test]
+    fn test_a_without_href_ok_for_blank() {
+        let s = "<a>no href</a>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-target-blank"),
+            "Should NOT flag <a> without target=_blank");
+    }
+
+    #[test]
+    fn test_writable_derived_multiple_effects() {
+        let s = "<script>\n\tconst { a, b } = $props();\n\tlet x = $state(a);\n\tlet y = $state(b);\n\t$effect(() => { x = a; });\n\t$effect(() => { y = b; });\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let wd: Vec<_> = diags.iter().filter(|d| d.rule_name == "svelte/prefer-writable-derived").collect();
+        assert_eq!(wd.len(), 2, "Should flag both $state + $effect pairs");
+    }
+
+    #[test]
+    fn test_store_callback_no_set_nested() {
+        let s = "<script>\n\timport { readable } from 'svelte/store';\n\treadable(0, () => { return () => {}; });\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/require-store-callbacks-use-set-param"),
+            "Should flag callback returning cleanup but not using set");
+    }
+
+    #[test]
+    fn test_no_store_async_sync_callback_ok() {
+        let s = "<script>\n\timport { writable } from 'svelte/store';\n\tconst s = writable(0, (set) => {\n\t\tconst interval = setInterval(() => set(Date.now()), 1000);\n\t\treturn () => clearInterval(interval);\n\t});\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-store-async"),
+            "Should NOT flag sync store callback");
+    }
+
+    #[test]
+    fn test_svelte_internal_import() {
+        let s = "<script>\n\timport { flush } from 'svelte/internal';\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-svelte-internal"),
+            "Should flag svelte/internal import");
+    }
+
+    #[test]
+    fn test_svelte_internal_client() {
+        let s = "<script>\n\timport { mount } from 'svelte/internal/client';\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-svelte-internal"),
+            "Should flag svelte/internal/client import");
+    }
+
+    #[test]
+    fn test_reactive_literal_false_expr() {
+        let s = "<script>\n\tlet count = 0;\n\t$: doubled = count * 2;\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-reactive-literals"),
+            "Should NOT flag reactive expression using variable");
+    }
+
+    #[test]
+    fn test_no_at_html_multiple() {
+        let s = "{@html a}\n{@html b}\n{@html c}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let html_diags: Vec<_> = diags.iter().filter(|d| d.rule_name == "svelte/no-at-html-tags").collect();
+        assert_eq!(html_diags.len(), 3, "Should flag all 3 @html tags");
+    }
+
+    #[test]
+    fn test_each_key_self_ok() {
+        let s = "{#each [1, 2, 3] as num (num)}\n\t<p>{num}</p>\n{/each}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let key_diags: Vec<_> = diags.iter().filter(|d| d.rule_name == "svelte/valid-each-key").collect();
+        // Using num as both context and key is flagged
+        assert!(!key_diags.is_empty(), "Should flag using item directly as key");
+    }
+
     // --- additional coverage ---
 
     #[test]
