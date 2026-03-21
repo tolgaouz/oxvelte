@@ -501,8 +501,7 @@ mod linter_fixture_tests {
     #[test] fn linter_html_self_closing_valid() { run_linter_valid("html-self-closing"); }
     #[test] fn linter_html_self_closing_invalid() { run_linter_invalid("html-self-closing"); }
     #[test] fn linter_no_not_function_handler_valid() { run_linter_valid("no-not-function-handler"); }
-    // no-not-function-handler invalid requires type analysis for value01 fixture
-    // #[test] fn linter_no_not_function_handler_invalid() { run_linter_invalid("no-not-function-handler"); }
+    #[test] fn linter_no_not_function_handler_invalid() { run_linter_invalid("no-not-function-handler"); }
     #[test] fn linter_no_shorthand_style_property_overrides_valid() { run_linter_valid("no-shorthand-style-property-overrides"); }
     #[test] fn linter_no_shorthand_style_property_overrides_invalid() { run_linter_invalid("no-shorthand-style-property-overrides"); }
     #[test] fn linter_no_unknown_style_directive_property_valid() { run_linter_valid("no-unknown-style-directive-property"); }
@@ -536,8 +535,7 @@ mod linter_fixture_tests {
     // #[test] fn linter_html_closing_bracket_new_line_invalid() { run_linter_invalid("html-closing-bracket-new-line"); }
 
     // Batch 5: more invalid tests
-    // no-dom-manipulating invalid needs type/scope analysis for .remove()
-    // #[test] fn linter_no_dom_manipulating_invalid() { run_linter_invalid("no-dom-manipulating"); }
+    #[test] fn linter_no_dom_manipulating_invalid() { run_linter_invalid("no-dom-manipulating"); }
     // require-event-prefix invalid needs $props type analysis
     // #[test] fn linter_require_event_prefix_invalid() { run_linter_invalid("require-event-prefix"); }
     #[test] fn linter_no_add_event_listener_invalid() { run_linter_invalid("no-add-event-listener"); }
@@ -549,14 +547,13 @@ mod linter_fixture_tests {
     #[test] fn linter_no_dynamic_slot_name_valid() { run_linter_valid("no-dynamic-slot-name"); }
     #[test] fn linter_no_goto_without_base_valid() { run_linter_valid("no-goto-without-base"); }
     #[test] fn linter_no_navigation_without_base_valid() { run_linter_valid("no-navigation-without-base"); }
-    // require-store-callbacks-use-set-param: needs function keyword callback detection
-    // #[test] fn linter_require_store_callbacks_use_set_param_valid() { run_linter_valid("require-store-callbacks-use-set-param"); }
+    #[test] fn linter_require_store_callbacks_use_set_param_valid() { run_linter_valid("require-store-callbacks-use-set-param"); }
+    #[test] fn linter_require_store_callbacks_use_set_param_invalid() { run_linter_invalid("require-store-callbacks-use-set-param"); }
     #[test] fn linter_require_store_reactive_access_valid() { run_linter_valid("require-store-reactive-access"); }
 
     #[test] fn linter_no_dynamic_slot_name_invalid() { run_linter_invalid("no-dynamic-slot-name"); }
     #[test] fn linter_no_goto_without_base_invalid() { run_linter_invalid("no-goto-without-base"); }
-    // no-navigation-without-base invalid needs <a href> template checking
-    // #[test] fn linter_no_navigation_without_base_invalid() { run_linter_invalid("no-navigation-without-base"); }
+    #[test] fn linter_no_navigation_without_base_invalid() { run_linter_invalid("no-navigation-without-base"); }
 
     #[test] fn linter_no_reactive_functions_invalid() { run_linter_invalid("no-reactive-functions"); }
 
