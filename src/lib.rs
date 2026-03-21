@@ -684,6 +684,35 @@ mod tests {
             "Should NOT flag fragment URL");
     }
 
+    // --- no-reactive-reassign unit tests ---
+
+    #[test]
+    fn test_no_reactive_reassign_basic() {
+        let s = "<script>\n\tlet value = 0;\n\t$: reactiveValue = value * 2;\n\tfunction click() { reactiveValue = 3; }\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-reactive-reassign"),
+            "Should flag reassignment of reactive variable");
+    }
+
+    #[test]
+    fn test_no_reactive_reassign_let_ok() {
+        let s = "<script>\n\tlet value = 0;\n\tlet reactive;\n\t$: reactive = value * 2;\n\tfunction click() { reactive = 3; }\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-reactive-reassign"),
+            "Should NOT flag pre-declared let variable");
+    }
+
+    #[test]
+    fn test_no_reactive_reassign_bind() {
+        let s = "<script>\n\tlet value = 0;\n\t$: reactiveValue = value * 2;\n</script>\n<input bind:value={reactiveValue} />";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-reactive-reassign"),
+            "Should flag bind:value on reactive variable");
+    }
+
     // --- no-inline-styles unit tests ---
 
     #[test]
