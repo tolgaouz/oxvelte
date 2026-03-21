@@ -481,6 +481,73 @@ mod tests {
             "Should NOT flag valid SCSS");
     }
 
+    // --- spaced-html-comment unit tests ---
+
+    #[test]
+    fn test_spaced_comment_no_space_after() {
+        let s = "<!--comment-->";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/spaced-html-comment"),
+            "Should flag comment without space after <!--");
+    }
+
+    #[test]
+    fn test_spaced_comment_with_spaces_ok() {
+        let s = "<!-- comment -->";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/spaced-html-comment"),
+            "Should NOT flag comment with proper spaces");
+    }
+
+    #[test]
+    fn test_spaced_comment_no_space_before() {
+        let s = "<!-- comment-->";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/spaced-html-comment"),
+            "Should flag comment without space before -->");
+    }
+
+    // --- no-unnecessary-state-wrap unit tests ---
+
+    #[test]
+    fn test_unnecessary_state_wrap_svelte_set() {
+        let s = "<script>\n\tconst set = $state(new SvelteSet());\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-unnecessary-state-wrap"),
+            "Should flag $state(new SvelteSet())");
+    }
+
+    #[test]
+    fn test_unnecessary_state_wrap_let_ok() {
+        let s = "<script>\n\tlet set = $state(new SvelteSet());\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-unnecessary-state-wrap"),
+            "Should NOT flag let (might be reassigned)");
+    }
+
+    #[test]
+    fn test_unnecessary_state_wrap_import_alias() {
+        let s = "<script>\n\timport { SvelteSet as CustomSet } from 'svelte/reactivity';\n\tconst set = $state(new CustomSet());\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-unnecessary-state-wrap"),
+            "Should flag aliased SvelteSet import");
+    }
+
+    #[test]
+    fn test_unnecessary_state_wrap_regular_ok() {
+        let s = "<script>\n\tconst x = $state(42);\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-unnecessary-state-wrap"),
+            "Should NOT flag regular $state usage");
+    }
+
     // --- no-dom-manipulating unit tests ---
 
     #[test]

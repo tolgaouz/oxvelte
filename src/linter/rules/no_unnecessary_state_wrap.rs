@@ -4,7 +4,7 @@
 //! Svelte's reactive classes (SvelteSet, SvelteMap, etc.) are already reactive
 //! and don't need `$state()` wrapping.
 
-use crate::linter::{LintContext, Rule};
+use crate::linter::{parse_imports, LintContext, Rule};
 
 const REACTIVE_CLASSES: &[&str] = &[
     "SvelteSet", "SvelteMap", "SvelteURL", "SvelteURLSearchParams",
@@ -28,25 +28,35 @@ impl Rule for NoUnnecessaryStateWrap {
             let tag_start = script.span.start as usize;
             let source = ctx.source;
 
-            // Look for $state(new SvelteReactiveClass(...)) patterns
+            // Build a mapping of local names -> original reactive class names
+            let imports = parse_imports(content);
+            let mut reactive_local_names: Vec<String> = REACTIVE_CLASSES.iter().map(|s| s.to_string()).collect();
+            for (local, imported, module) in &imports {
+                if module.starts_with("svelte/") || module == "svelte" {
+                    if REACTIVE_CLASSES.contains(&imported.as_str()) && local != imported {
+                        // Aliased import: import { SvelteSet as CustomSet }
+                        reactive_local_names.push(local.clone());
+                    }
+                }
+            }
+
+            // Look for $state(new ReactiveClass(...)) patterns
             let mut search_from = 0;
             while let Some(pos) = content[search_from..].find("$state(") {
                 let abs_pos = search_from + pos;
                 let after = &content[abs_pos + 7..];
                 let trimmed = after.trim_start();
 
-                // Check if argument is `new SvelteReactiveClass(...)`
+                // Check if argument is `new ReactiveClass(...)`
                 if trimmed.starts_with("new ") {
                     let after_new = trimmed[4..].trim_start();
-                    let is_reactive = REACTIVE_CLASSES.iter().any(|cls| {
-                        after_new.starts_with(cls)
+                    let is_reactive = reactive_local_names.iter().any(|cls| {
+                        after_new.starts_with(cls.as_str())
                     });
-                    // Only flag if the declaration uses `const` (not reassignable)
-                    // Look backwards from $state( to find the declaration keyword
+                    // Only flag const declarations (let/var might be reassigned)
                     let before = content[..abs_pos].trim_end();
-                    let uses_const = before.ends_with("=") && {
+                    let uses_const = before.ends_with('=') && {
                         let before_eq = before[..before.len()-1].trim_end();
-                        // Go back past the variable name to find const/let
                         let words: Vec<&str> = before_eq.split_whitespace().collect();
                         words.len() >= 2 && words[words.len() - 2] == "const"
                     };
