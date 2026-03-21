@@ -49,15 +49,15 @@ impl Rule for PreferClassDirective {
                                             let prev_ok = if i > 0 {
                                                 match &parts[i - 1] {
                                                     AttributeValuePart::Static(s) => s.is_empty() || s.ends_with(' '),
-                                                    AttributeValuePart::Expression(_) => false, // adjacent expression
+                                                    AttributeValuePart::Expression(_) => false,
                                                 }
-                                            } else { true }; // start of attribute
+                                            } else { true };
                                             let next_ok = if i + 1 < parts.len() {
                                                 match &parts[i + 1] {
                                                     AttributeValuePart::Static(s) => s.is_empty() || s.starts_with(' '),
-                                                    AttributeValuePart::Expression(_) => false, // adjacent expression
+                                                    AttributeValuePart::Expression(_) => false,
                                                 }
-                                            } else { true }; // end of attribute
+                                            } else { true };
 
                                             if prev_ok && next_ok {
                                                 ctx.diagnostic(
