@@ -2368,7 +2368,8 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
         "sourceType": "module"
     });
 
-    if !comments.is_empty() {
+    // Only add trailingComments to Program if there are no statements to attach to
+    if !comments.is_empty() && body.is_empty() {
         program["trailingComments"] = json!(comments);
     }
 
