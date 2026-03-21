@@ -112,15 +112,15 @@ fn extract_style_props(
     }
 }
 
-fn collect_props_from_css_text(text: &str) -> FxHashSet<String> {
-    let mut props = FxHashSet::default();
+fn collect_props_from_css_text(text: &str) -> Vec<String> {
+    let mut props = Vec::new();
     for decl in text.split(';') {
         let decl = decl.trim();
         if decl.is_empty() { continue; }
         if let Some(colon_pos) = decl.find(':') {
             let prop = decl[..colon_pos].trim().to_lowercase();
             if !prop.is_empty() && prop.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-                props.insert(prop);
+                props.push(prop);
             }
         }
     }

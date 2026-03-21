@@ -687,6 +687,42 @@ mod tests {
     // --- more linter rule unit tests ---
 
     #[test]
+    fn test_dupe_style_props_inline() {
+        let s = "<div style=\"color: red; color: blue;\">text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-dupe-style-properties"),
+            "Should flag duplicate style properties");
+    }
+
+    #[test]
+    fn test_dupe_style_props_no_dupe_ok() {
+        let s = "<div style=\"color: red; font-size: 14px;\">text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-dupe-style-properties"),
+            "Should NOT flag different style properties");
+    }
+
+    #[test]
+    fn test_dupe_on_directives_same_expr() {
+        let s = "<button on:click={handler} on:click={handler}>text</button>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-dupe-on-directives"),
+            "Should flag duplicate on: directives with same expression");
+    }
+
+    #[test]
+    fn test_dupe_on_directives_diff_ok() {
+        let s = "<button on:click={foo} on:click={bar}>text</button>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-dupe-on-directives"),
+            "Should NOT flag different on: handlers");
+    }
+
+    #[test]
     fn test_dupe_use_directives() {
         let s = "<div use:tooltip use:tooltip>text</div>";
         let r = parser::parse(s);
