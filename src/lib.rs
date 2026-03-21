@@ -993,6 +993,34 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    #[test]
+    fn test_browser_global_in_if_ok() {
+        let s = "<script>\n\tif (typeof window !== 'undefined') {\n\t\tconsole.log(window.innerWidth);\n\t}\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-top-level-browser-globals"),
+            "Should NOT flag window inside if block");
+    }
+
+    #[test]
+    fn test_browser_global_in_globalthis_guard() {
+        let s = "<script>\n\tif (globalThis.location !== undefined) {\n\t\tconsole.log(location.href);\n\t}\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let loc_diags: Vec<_> = diags.iter().filter(|d| d.rule_name == "svelte/no-top-level-browser-globals").collect();
+        assert!(loc_diags.is_empty(),
+            "Should NOT flag location inside globalThis guard, got: {:?}", loc_diags.iter().map(|d| &d.message).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_browser_global_top_level() {
+        let s = "<script>\n\tconsole.log(window.innerWidth);\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-top-level-browser-globals"),
+            "Should flag window at top level");
+    }
+
     // --- final push to 700 ---
 
     #[test]
@@ -4117,8 +4145,7 @@ mod linter_fixture_tests {
     #[test] fn linter_prefer_destructured_store_props_valid() { run_linter_valid("prefer-destructured-store-props"); }
     #[test] fn linter_prefer_destructured_store_props_invalid() { run_linter_invalid("prefer-destructured-store-props"); }
     #[test] fn linter_infinite_reactive_loop_valid() { run_linter_valid("infinite-reactive-loop"); }
-    // no-top-level-browser-globals: needs to recognize guard patterns (typeof, import.meta, etc.)
-    // #[test] fn linter_no_top_level_browser_globals_valid() { run_linter_valid("no-top-level-browser-globals"); }
+    #[test] fn linter_no_top_level_browser_globals_valid() { run_linter_valid("no-top-level-browser-globals"); }
     #[test] fn linter_require_event_prefix_valid() { run_linter_valid("require-event-prefix"); }
     #[test] fn linter_mustache_spacing_valid() { run_linter_valid("mustache-spacing"); }
     #[test] fn linter_first_attribute_linebreak_valid() { run_linter_valid("first-attribute-linebreak"); }
