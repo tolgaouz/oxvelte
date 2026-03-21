@@ -10,8 +10,8 @@ impl Rule for ValidStyleParse {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        // Placeholder: requires a CSS parser to validate the style block content.
-        // A full implementation would parse `ctx.ast.css` and report syntax errors.
+        // Placeholder: the CSS parser needs strict error reporting
+        // to detect malformed CSS. Currently it's too tolerant.
         let _ = ctx;
     }
 }

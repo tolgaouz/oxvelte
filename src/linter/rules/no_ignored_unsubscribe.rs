@@ -22,7 +22,7 @@ impl Rule for NoIgnoredUnsubscribe {
                 let before = &content[..i];
                 let before_trimmed = before.trim_end();
                 // Check what's before the variable name
-                let var_end = before_trimmed.len();
+                let _var_end = before_trimmed.len();
                 let var_start = before_trimmed.rfind(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '.')
                     .map(|p| p + 1).unwrap_or(0);
                 let stmt_before = &before_trimmed[..var_start].trim_end();

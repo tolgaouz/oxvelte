@@ -12,14 +12,14 @@ pub fn parse_css_children(css: &str, offset: u32) -> Vec<Value> {
     parser.parse_rules()
 }
 
-struct CssParser<'a> {
-    source: &'a str,
-    pos: usize,
-    offset: u32,
+pub struct CssParser<'a> {
+    pub source: &'a str,
+    pub pos: usize,
+    pub offset: u32,
 }
 
 impl<'a> CssParser<'a> {
-    fn new(source: &'a str, offset: u32) -> Self {
+    pub fn new(source: &'a str, offset: u32) -> Self {
         Self { source, pos: 0, offset }
     }
 
@@ -59,7 +59,7 @@ impl<'a> CssParser<'a> {
         self.offset + pos as u32
     }
 
-    fn parse_rules(&mut self) -> Vec<Value> {
+    pub fn parse_rules(&mut self) -> Vec<Value> {
         let mut rules = Vec::new();
         self.skip_ws_and_comments();
 
