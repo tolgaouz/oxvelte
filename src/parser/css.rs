@@ -271,12 +271,18 @@ impl<'a> CssParser<'a> {
                         let inner = &self.source[inner_start..self.pos];
                         let inner_offset = self.abs(inner_start);
                         // For :nth-* pseudo-classes, parse as Nth value
-                        let is_nth = name.starts_with("nth-");
+                        // Only parse as Nth if the content looks like An+B (not a plain selector)
+                        let trimmed_inner = inner.trim();
+                        let looks_like_nth = trimmed_inner.contains('n')
+                            || trimmed_inner == "odd" || trimmed_inner == "even"
+                            || trimmed_inner.chars().all(|c| c.is_ascii_digit() || c == '+' || c == '-' || c == ' ')
+                            || trimmed_inner.contains(" of ");
+                        let is_nth = name.starts_with("nth-") && looks_like_nth;
                         let args = if is_nth {
                             let trimmed = inner.trim();
-                            // Check for "of <selector>" suffix
+                            // Check for "of <selector>" suffix — include "of " in the Nth value
                             let (nth_val, of_sel) = if let Some(of_pos) = trimmed.find(" of ") {
-                                (&trimmed[..of_pos], Some(&trimmed[of_pos + 4..]))
+                                (&trimmed[..of_pos + 4], Some(&trimmed[of_pos + 4..]))
                             } else {
                                 (trimmed, None)
                             };
