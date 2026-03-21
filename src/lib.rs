@@ -993,6 +993,64 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
+    // --- Svelte 5 specific tests ---
+
+    #[test]
+    fn test_svelte5_snippet_with_multiple_params() {
+        let s = "{#snippet row(item, index, isLast)}\n\t<tr class:last={isLast}><td>{index}: {item.name}</td></tr>\n{/snippet}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_svelte5_render_conditional() {
+        let s = "{#if headerSnippet}\n\t{@render headerSnippet()}\n{:else}\n\t<h1>Default Header</h1>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_svelte5_props_with_defaults() {
+        let s = "<script>\n\tlet { name = 'World', count = 0, items = [] } = $props();\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_svelte5_derived_by() {
+        let s = "<script>\n\tlet count = $state(0);\n\tlet doubled = $derived.by(() => count * 2);\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_svelte5_effect_pre() {
+        let s = "<script>\n\tlet el;\n\t$effect.pre(() => { if (el) el.scrollTop = 0; });\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_svelte5_host_rune() {
+        let s = "<script>\n\tconst el = $host();\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_svelte5_class_state() {
+        let s = "<script>\n\tclass Counter {\n\t\tcount = $state(0);\n\t\tincrement() { this.count++; }\n\t}\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_svelte5_snippet_in_component() {
+        let s = "<Dialog>\n\t{#snippet title()}\n\t\t<h2>My Dialog</h2>\n\t{/snippet}\n\t{#snippet content()}\n\t\t<p>Dialog content</p>\n\t{/snippet}\n</Dialog>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- accessibility linter tests ---
 
     #[test]
