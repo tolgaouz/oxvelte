@@ -684,6 +684,76 @@ mod tests {
             "Should NOT flag fragment URL");
     }
 
+    // --- parser edge case tests ---
+
+    #[test]
+    fn test_parse_nested_each_key_parens() {
+        let s = "{#each items as item (getKey(item, 'id'))}\n\t{item}\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::EachBlock(block) = &r.ast.html.nodes[0] {
+            assert_eq!(block.context.trim(), "item");
+            assert_eq!(block.key.as_ref().unwrap(), "getKey(item, 'id')");
+        }
+    }
+
+    #[test]
+    fn test_parse_svelte_element() {
+        let s = "<svelte:element this=\"div\" class=\"foo\">content</svelte:element>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::Element(el) = &r.ast.html.nodes[0] {
+            assert_eq!(el.name, "svelte:element");
+        }
+    }
+
+    #[test]
+    fn test_parse_svelte_boundary() {
+        let s = "<svelte:boundary onerror={handler}>\n\t<p>content</p>\n</svelte:boundary>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_class_directive() {
+        let s = "<div class:active={isActive}>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::Element(el) = &r.ast.html.nodes[0] {
+            assert!(el.attributes.iter().any(|a| {
+                matches!(a, ast::Attribute::Directive { kind: ast::DirectiveKind::Class, name, .. } if name == "active")
+            }));
+        }
+    }
+
+    #[test]
+    fn test_parse_style_directive() {
+        let s = "<div style:color=\"red\">text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_use_directive() {
+        let s = "<div use:tooltip>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_transition_directive() {
+        let s = "<div transition:fade>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_animate_directive() {
+        let s = "<li animate:flip>item</li>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- no-reactive-reassign unit tests ---
 
     #[test]
