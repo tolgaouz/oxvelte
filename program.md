@@ -332,7 +332,12 @@ If an API doesn't do what you need, write adapter code in `src/`.
 - **Tests must not regress**: if your change causes previously-passing tests to fail, revert.
 - **Fixture verification must pass**: run `bash verify_fixtures.sh` before every commit.
   The `fixtures/` directory is read-only and checksummed against `vendor/` originals.
-- **Timeout**: if a build + test cycle exceeds 10 minutes, kill it and treat as failure.
+- **Timeout**: No process should take more than 2 minutes. `cargo build` and `cargo test`
+  should complete in seconds for a project this size. If any process takes longer than
+  2 minutes, **kill it immediately** (`pkill -f "cargo test"`) and investigate for
+  performance issues (infinite loops, infinite recursion, runaway allocation) before
+  retrying. Do NOT retry without fixing the root cause first — a hanging process means
+  there is a bug in your code.
 - **Crashes**: if a build or test crashes, use your judgment:
   - If it's a simple fix (typo, missing import, borrow checker issue), fix and retry.
   - If the approach is fundamentally broken, revert and try something else.

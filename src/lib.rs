@@ -415,6 +415,142 @@ mod tests {
         let r = parser::parse(s);
         assert!(r.errors.is_empty());
     }
+
+    // --- no-dom-manipulating unit tests ---
+
+    #[test]
+    fn test_no_dom_manipulating_bind_this() {
+        let s = "<script>\n\tlet div;\n\tconst rm = () => div.remove();\n</script>\n<div bind:this={div} />";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-dom-manipulating"),
+            "Should flag div.remove() on bind:this element");
+    }
+
+    #[test]
+    fn test_no_dom_manipulating_component_ok() {
+        let s = "<script>\n\timport C from './C.svelte';\n\tlet c;\n\tconst rm = () => c.remove();\n</script>\n<C bind:this={c} />";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-dom-manipulating"),
+            "Should NOT flag .remove() on component bind:this");
+    }
+
+    #[test]
+    fn test_no_dom_manipulating_text_content() {
+        let s = "<script>\n\tlet div;\n\tconst upd = () => div.textContent = 'x';\n</script>\n<div bind:this={div} />";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-dom-manipulating"),
+            "Should flag textContent assignment on bind:this element");
+    }
+
+    // --- no-not-function-handler unit tests ---
+
+    #[test]
+    fn test_no_not_function_handler_string_var() {
+        let s = "<script>\n\tconst a = 'hello';\n</script>\n<button on:click={a} />";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-not-function-handler"),
+            "Should flag string variable as event handler");
+    }
+
+    #[test]
+    fn test_no_not_function_handler_number_var() {
+        let s = "<script>\n\tconst x = 42;\n</script>\n<button on:click={x} />";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-not-function-handler"),
+            "Should flag number variable as event handler");
+    }
+
+    #[test]
+    fn test_no_not_function_handler_fn_ok() {
+        let s = "<script>\n\tconst fn1 = () => {};\n</script>\n<button on:click={fn1} />";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-not-function-handler"),
+            "Should NOT flag function variable as event handler");
+    }
+
+    // --- require-store-callbacks-use-set-param unit tests ---
+
+    #[test]
+    fn test_store_callback_without_set() {
+        let s = "<script>\n\timport { readable } from 'svelte/store';\n\treadable(false, () => true);\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/require-store-callbacks-use-set-param"),
+            "Should flag callback without set param");
+    }
+
+    #[test]
+    fn test_store_callback_with_set_ok() {
+        let s = "<script>\n\timport { readable } from 'svelte/store';\n\treadable(false, (set) => set(true));\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/require-store-callbacks-use-set-param"),
+            "Should NOT flag callback with set param");
+    }
+
+    #[test]
+    fn test_store_callback_function_with_set_ok() {
+        let s = "<script>\n\timport { readable } from 'svelte/store';\n\treadable(null, function (set) { set(0); });\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/require-store-callbacks-use-set-param"),
+            "Should NOT flag function keyword callback with set param");
+    }
+
+    // --- valid-style-parse unit tests ---
+
+    #[test]
+    fn test_valid_style_parse_bad_css() {
+        let s = "<style>\n\t.container {\n\t\tclass .div-class/35\n\t\tcolor: red;\n\t}\n</style>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/valid-style-parse"),
+            "Should flag invalid CSS");
+    }
+
+    #[test]
+    fn test_valid_style_parse_good_css_ok() {
+        let s = "<style>\n\t.container { color: red; }\n</style>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/valid-style-parse"),
+            "Should NOT flag valid CSS");
+    }
+
+    // --- no-navigation-without-base unit tests ---
+
+    #[test]
+    fn test_nav_without_base_link() {
+        let s = r#"<a href="/foo">Click</a>"#;
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-navigation-without-base"),
+            "Should flag <a href='/foo'> without base");
+    }
+
+    #[test]
+    fn test_nav_without_base_absolute_ok() {
+        let s = r#"<a href="https://example.com">Click</a>"#;
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-navigation-without-base"),
+            "Should NOT flag absolute URL");
+    }
+
+    #[test]
+    fn test_nav_without_base_fragment_ok() {
+        let s = "<a href=\"#section\">Click</a>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-navigation-without-base"),
+            "Should NOT flag fragment URL");
+    }
 }
 
 #[cfg(test)]
@@ -428,6 +564,7 @@ mod linter_fixture_tests {
             let lint = Linter::all();
             for entry in entries.flatten() {
                 let path = entry.path();
+                if path.is_dir() { continue; }
                 let fname = path.file_name().unwrap().to_string_lossy();
                 if fname.ends_with("-input.svelte") {
                     let source = std::fs::read_to_string(&path).unwrap();
@@ -447,6 +584,7 @@ mod linter_fixture_tests {
             let lint = Linter::all();
             for entry in entries.flatten() {
                 let path = entry.path();
+                if path.is_dir() { continue; }
                 let fname = path.file_name().unwrap().to_string_lossy();
                 if fname.ends_with("-input.svelte") {
                     let source = std::fs::read_to_string(&path).unwrap();
