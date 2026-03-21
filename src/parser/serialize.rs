@@ -1165,24 +1165,43 @@ fn serialize_attribute_modern(attr: &Attribute, source: &str) -> Value {
             }
             // Regular attribute
             let tag_region = &source[span.start as usize..span.end as usize];
-            let name_offset = tag_region.find(name.as_str()).unwrap_or(0);
-            let n_start = span.start + name_offset as u32;
-            let n_end = n_start + name.len() as u32;
+            let (n_start, n_end) = if name.is_empty() {
+                // Empty shorthand {} — name position inside braces
+                let inner_pos = span.start + tag_region.find('{').map(|p| p + 1).unwrap_or(0) as u32;
+                (inner_pos, inner_pos)
+            } else {
+                let name_offset = tag_region.find(name.as_str()).unwrap_or(0);
+                let ns = span.start + name_offset as u32;
+                (ns, ns + name.len() as u32)
+            };
             // Modern attribute value: Expression → ExpressionTag, not array
             let value_json = match value {
                 AttributeValue::Expression(expr) => {
                     let region = &source[span.start as usize..span.end as usize];
                     let brace_pos = region.find('{').unwrap_or(0);
                     let close_brace = region.rfind('}').map(|p| p + 1).unwrap_or(region.len());
-                    let expr_start = span.start + brace_pos as u32 + 1;
-                    let mustache_start = span.start + brace_pos as u32;
-                    let mustache_end = span.start + close_brace as u32;
-                    json!({
-                        "type": "ExpressionTag",
-                        "start": mustache_start,
-                        "end": mustache_end,
-                        "expression": expression_to_estree(source, expr.trim(), expr_start)
-                    })
+                    let trimmed = expr.trim();
+                    let leading_trim = expr.len() - expr.trim_start().len();
+                    let expr_start = span.start + brace_pos as u32 + 1 + leading_trim as u32;
+                    if trimmed.is_empty() && name.is_empty() {
+                        // Empty shorthand {} attribute: position inside braces
+                        let inner_pos = span.start + brace_pos as u32 + 1;
+                        json!({
+                            "type": "ExpressionTag",
+                            "start": inner_pos,
+                            "end": inner_pos,
+                            "expression": expression_to_estree(source, "", inner_pos)
+                        })
+                    } else {
+                        let mustache_start = span.start + brace_pos as u32;
+                        let mustache_end = span.start + close_brace as u32;
+                        json!({
+                            "type": "ExpressionTag",
+                            "start": mustache_start,
+                            "end": mustache_end,
+                            "expression": expression_to_estree(source, trimmed, expr_start)
+                        })
+                    }
                 }
                 AttributeValue::True => json!(true),
                 _ => serialize_attr_value_legacy(value, source, span),
@@ -1887,7 +1906,8 @@ fn serialize_node_modern_ctx(node: &TemplateNode, source: &str, in_shadow_root: 
                     "type": "Identifier",
                     "name": context_str,
                     "start": ctx_start,
-                    "end": ctx_end
+                    "end": ctx_end,
+                    "loc": loc_json_with_char(source, ctx_start, ctx_end)
                 })
             };
             let mut obj = json!({
@@ -1912,12 +1932,51 @@ fn serialize_node_modern_ctx(node: &TemplateNode, source: &str, in_shadow_root: 
         }
         TemplateNode::AwaitBlock(block) => {
             let expr_start = block.span.start + 8;
-            json!({
+            let mut obj = json!({
                 "type": "AwaitBlock",
                 "start": block.span.start,
                 "end": block.span.end,
                 "expression": expression_to_estree(source, block.expression.trim(), expr_start)
-            })
+            });
+            // Add pending/then/catch (always present in modern format)
+            obj["pending"] = if let Some(pending) = &block.pending {
+                let nodes: Vec<Value> = pending.nodes.iter().map(|n| serialize_node_modern_ctx(n, source, in_shadow_root)).collect();
+                json!({ "type": "Fragment", "nodes": nodes })
+            } else { Value::Null };
+            obj["then"] = if let Some(then) = &block.then {
+                let nodes: Vec<Value> = then.nodes.iter().map(|n| serialize_node_modern_ctx(n, source, in_shadow_root)).collect();
+                json!({ "type": "Fragment", "nodes": nodes })
+            } else { Value::Null };
+            obj["catch"] = if let Some(catch) = &block.catch {
+                let nodes: Vec<Value> = catch.nodes.iter().map(|n| serialize_node_modern_ctx(n, source, in_shadow_root)).collect();
+                json!({ "type": "Fragment", "nodes": nodes })
+            } else { Value::Null };
+            // value/error as Identifier objects
+            if let Some(binding) = &block.then_binding {
+                let src_text = &source[block.span.start as usize..block.span.end as usize];
+                let then_keyword = src_text.find(":then").map(|p| (p, 5))
+                    .or_else(|| src_text.find(" then ").map(|p| (p + 1, 4)));
+                if let Some((pos, len)) = then_keyword {
+                    let after = &src_text[pos + len..];
+                    let trimmed = after.trim_start();
+                    let bs = block.span.start + pos as u32 + len as u32 + (after.len() - trimmed.len()) as u32;
+                    let be = bs + binding.len() as u32;
+                    obj["value"] = json!({ "type": "Identifier", "name": binding, "start": bs, "end": be, "loc": loc_json_with_char(source, bs, be) });
+                } else { obj["value"] = json!(binding); }
+            } else { obj["value"] = Value::Null; }
+            if let Some(binding) = &block.catch_binding {
+                let src_text = &source[block.span.start as usize..block.span.end as usize];
+                let catch_keyword = src_text.find(":catch").map(|p| (p, 6))
+                    .or_else(|| src_text.find(" catch ").map(|p| (p + 1, 5)));
+                if let Some((pos, len)) = catch_keyword {
+                    let after = &src_text[pos + len..];
+                    let trimmed = after.trim_start();
+                    let bs = block.span.start + pos as u32 + len as u32 + (after.len() - trimmed.len()) as u32;
+                    let be = bs + binding.len() as u32;
+                    obj["error"] = json!({ "type": "Identifier", "name": binding, "start": bs, "end": be, "loc": loc_json_with_char(source, bs, be) });
+                } else { obj["error"] = json!(binding); }
+            } else { obj["error"] = Value::Null; }
+            obj
         }
         TemplateNode::KeyBlock(block) => {
             let expr_start = block.span.start + 6;
