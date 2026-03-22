@@ -29,7 +29,8 @@ impl Rule for Indent {
         let mut in_multiline_tag = false;
         let mut multiline_tag_depth = 0i32;
         let mut multiline_tag_ignored = false;
-        let mut multiline_tag_column = 0usize; // column of the opening <
+        let mut multiline_tag_column = 0usize;
+        let mut multiline_brace_depth = 0i32;
 
         for &line in &lines {
             let line_start = offset;
@@ -66,10 +67,32 @@ impl Rule for Indent {
                 continue;
             }
 
-            // Multiline tag: attribute lines are not checked (they use column-relative
-            // indentation which requires tracking the opening tag's column position)
+            // Multiline tag: check attribute indentation using tag's column + INDENT
             if in_multiline_tag {
-                let is_end = trimmed.ends_with(">") || trimmed.ends_with("/>") || trimmed == ">" || trimmed == "/";
+                let is_end = trimmed.ends_with(">") || trimmed.ends_with("/>") || trimmed == ">" || trimmed == "/>";
+                // Check attribute indentation only for simple cases (not ignored):
+                // Only check lines that look like top-level attribute names
+                // (not inside {}, not value continuations, not deeper nesting)
+                if !is_end && !multiline_tag_ignored && multiline_brace_depth == 0 {
+                    let actual = leading_spaces(line);
+                    let expected = multiline_tag_column + INDENT;
+                    // Only check if it's a simple attribute name at the right depth
+                    let first_char = trimmed.chars().next().unwrap_or(' ');
+                    let is_simple_attr = first_char.is_ascii_alphabetic() || first_char == '_' || first_char == '$';
+                    let is_at_attr_depth = actual == expected || actual == expected + INDENT;
+                    // Flag only exact attribute-name lines at wrong indent
+                    if is_simple_attr && actual != expected && actual < expected + INDENT {
+                        let msg = format!("Expected indentation of {} spaces but found {} spaces.", expected, actual);
+                        ctx.diagnostic(msg, oxc::span::Span::new(line_start as u32, (line_start + actual.max(1)) as u32));
+                    }
+                }
+                // Track brace depth within multiline tags
+                if !is_end {
+                    for c in trimmed.chars() {
+                        if c == '{' { multiline_brace_depth += 1; }
+                        if c == '}' { multiline_brace_depth -= 1; if multiline_brace_depth < 0 { multiline_brace_depth = 0; } }
+                    }
+                }
                 if is_end {
                     in_multiline_tag = false;
                     multiline_tag_ignored = false;
@@ -90,7 +113,8 @@ impl Rule for Indent {
                     in_multiline_tag = true;
                     multiline_tag_depth = depth;
                     multiline_tag_column = leading_spaces(line);
-                    multiline_tag_ignored = true;
+                    multiline_tag_ignored = false; // still check attributes of ignored tags
+                    multiline_brace_depth = 0;
                 } else {
                     depth += opens - closes;
                     if depth < 0 { depth = 0; }
@@ -108,6 +132,7 @@ impl Rule for Indent {
                     multiline_tag_depth = depth;
                     multiline_tag_column = leading_spaces(line);
                     multiline_tag_ignored = false;
+                    multiline_brace_depth = 0;
                     continue;
                 }
             }
