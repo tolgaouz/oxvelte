@@ -21,17 +21,31 @@ pub struct Fix {
     pub replacement: String,
 }
 
+/// Rule configuration loaded from config files.
+#[derive(Debug, Clone, Default)]
+pub struct RuleConfig {
+    /// Raw JSON options from the config file
+    pub options: Option<serde_json::Value>,
+    /// Parsed settings
+    pub settings: Option<serde_json::Value>,
+}
+
 /// Context provided to lint rules during execution.
 pub struct LintContext<'a> {
     pub ast: &'a SvelteAst,
     pub source: &'a str,
+    pub config: RuleConfig,
     diagnostics: Vec<LintDiagnostic>,
     current_rule: &'static str,
 }
 
 impl<'a> LintContext<'a> {
     pub fn new(ast: &'a SvelteAst, source: &'a str) -> Self {
-        Self { ast, source, diagnostics: Vec::new(), current_rule: "" }
+        Self { ast, source, config: RuleConfig::default(), diagnostics: Vec::new(), current_rule: "" }
+    }
+
+    pub fn with_config(ast: &'a SvelteAst, source: &'a str, config: RuleConfig) -> Self {
+        Self { ast, source, config, diagnostics: Vec::new(), current_rule: "" }
     }
 
     pub fn diagnostic(&mut self, message: impl Into<String>, span: Span) {
@@ -77,6 +91,15 @@ impl Linter {
 
     pub fn lint(&self, ast: &SvelteAst, source: &str) -> Vec<LintDiagnostic> {
         let mut ctx = LintContext::new(ast, source);
+        for rule in &self.rules {
+            ctx.set_rule(rule.name());
+            rule.run(&mut ctx);
+        }
+        ctx.into_diagnostics()
+    }
+
+    pub fn lint_with_config(&self, ast: &SvelteAst, source: &str, config: RuleConfig) -> Vec<LintDiagnostic> {
+        let mut ctx = LintContext::with_config(ast, source, config);
         for rule in &self.rules {
             ctx.set_rule(rule.name());
             rule.run(&mut ctx);

@@ -9114,7 +9114,44 @@ mod tests {
 #[cfg(test)]
 mod linter_fixture_tests {
     use crate::parser;
-    use crate::linter::Linter;
+    use crate::linter::{Linter, RuleConfig};
+
+    /// Load the rule config for a specific fixture file.
+    /// Checks for `<basename>-config.json` first, then `_config.json` as default.
+    fn load_config(dir: &str, input_filename: &str) -> RuleConfig {
+        // Per-file config: foo-input.svelte -> foo-config.json
+        let base = input_filename.strip_suffix("-input.svelte").unwrap_or(input_filename);
+        let per_file = format!("{}/{}-config.json", dir, base);
+        let default_cfg = format!("{}/_config.json", dir);
+
+        let config_path = if std::path::Path::new(&per_file).exists() {
+            Some(per_file)
+        } else if std::path::Path::new(&default_cfg).exists() {
+            Some(default_cfg)
+        } else {
+            None
+        };
+
+        if let Some(path) = config_path {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                    // Extract rule options from the config
+                    let options = json.get("options").cloned()
+                        .or_else(|| json.get("rules").and_then(|r| {
+                            // ESLint format: { "rules": { "svelte/rule-name": ["error", options] } }
+                            r.as_object().and_then(|m| {
+                                m.values().next().and_then(|v| {
+                                    v.as_array().and_then(|a| a.get(1).cloned())
+                                })
+                            })
+                        }));
+                    let settings = json.get("settings").cloned();
+                    return RuleConfig { options, settings };
+                }
+            }
+        }
+        RuleConfig::default()
+    }
 
     fn run_linter_valid(rule_name: &str) {
         let valid_dir = format!("fixtures/linter/{}/valid", rule_name);
@@ -9123,11 +9160,12 @@ mod linter_fixture_tests {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir() { continue; }
-                let fname = path.file_name().unwrap().to_string_lossy();
+                let fname = path.file_name().unwrap().to_string_lossy().to_string();
                 if fname.ends_with("-input.svelte") {
                     let source = std::fs::read_to_string(&path).unwrap();
                     let result = parser::parse(&source);
-                    let diags = lint.lint(&result.ast, &source);
+                    let config = load_config(&valid_dir, &fname);
+                    let diags = lint.lint_with_config(&result.ast, &source, config);
                     let rule_diags: Vec<_> = diags.iter().filter(|d| d.rule_name == format!("svelte/{}", rule_name)).collect();
                     assert!(rule_diags.is_empty(), "Rule {} should not fire on valid file {}: {:?}",
                         rule_name, path.display(), rule_diags.iter().map(|d| &d.message).collect::<Vec<_>>());
@@ -9143,11 +9181,12 @@ mod linter_fixture_tests {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir() { continue; }
-                let fname = path.file_name().unwrap().to_string_lossy();
+                let fname = path.file_name().unwrap().to_string_lossy().to_string();
                 if fname.ends_with("-input.svelte") {
                     let source = std::fs::read_to_string(&path).unwrap();
                     let result = parser::parse(&source);
-                    let diags = lint.lint(&result.ast, &source);
+                    let config = load_config(&invalid_dir, &fname);
+                    let diags = lint.lint_with_config(&result.ast, &source, config);
                     let rule_diags: Vec<_> = diags.iter().filter(|d| d.rule_name == format!("svelte/{}", rule_name)).collect();
                     assert!(!rule_diags.is_empty(), "Rule {} should fire on invalid file {}", rule_name, path.display());
                 }
@@ -9214,8 +9253,8 @@ mod linter_fixture_tests {
     #[test] fn linter_no_trailing_spaces_valid() { run_linter_valid("no-trailing-spaces"); }
     #[test] fn linter_no_trailing_spaces_invalid() { run_linter_invalid("no-trailing-spaces"); }
     // no-restricted-html-elements requires rule configuration support
-    // #[test] fn linter_no_restricted_html_elements_valid() { run_linter_valid("no-restricted-html-elements"); }
-    // #[test] fn linter_no_restricted_html_elements_invalid() { run_linter_invalid("no-restricted-html-elements"); }
+    #[test] fn linter_no_restricted_html_elements_valid() { run_linter_valid("no-restricted-html-elements"); }
+    #[test] fn linter_no_restricted_html_elements_invalid() { run_linter_invalid("no-restricted-html-elements"); }
     #[test] fn linter_no_extra_reactive_curlies_valid() { run_linter_valid("no-extra-reactive-curlies"); }
     #[test] fn linter_no_extra_reactive_curlies_invalid() { run_linter_invalid("no-extra-reactive-curlies"); }
 
@@ -9258,7 +9297,7 @@ mod linter_fixture_tests {
     #[test] fn linter_valid_style_parse_invalid() { run_linter_invalid("valid-style-parse"); }
 
     // no-unnecessary-state-wrap invalid needs import alias tracking + config
-    // #[test] fn linter_no_unnecessary_state_wrap_invalid() { run_linter_invalid("no-unnecessary-state-wrap"); }
+    #[test] fn linter_no_unnecessary_state_wrap_invalid() { run_linter_invalid("no-unnecessary-state-wrap"); }
 
     // These invalid tests need more rule implementation work:
     // no-navigation-without-resolve, no-goto-without-base,
