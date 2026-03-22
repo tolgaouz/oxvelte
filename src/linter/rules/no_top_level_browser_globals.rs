@@ -213,7 +213,107 @@ impl Rule for NoTopLevelBrowserGlobals {
             }
         }
 
-        // Template-level browser global checking requires proper AST context
-        // tracking for {#if browser} guards — disabled for now (14/15 pass).
+        // Template-level: check mustache tags for browser globals,
+        // respecting {#if browser} guards via recursive tree walk.
+        check_template_nodes(&ctx.ast.html.nodes, ctx, false);
+    }
+}
+
+/// Walk template nodes checking for browser globals in expressions.
+/// `in_browser_ctx` tracks whether we're inside a browser-safe {#if browser} block.
+fn check_template_nodes(nodes: &[TemplateNode], ctx: &mut LintContext<'_>, in_browser_ctx: bool) {
+    for node in nodes {
+        match node {
+            TemplateNode::MustacheTag(tag) => {
+                if !in_browser_ctx {
+
+                    check_expr_for_globals(&tag.expression, tag.span, ctx);
+                }
+            }
+            TemplateNode::IfBlock(block) => {
+                let cond = block.test.trim();
+
+                let is_browser_guard = cond == "browser" || cond == "BROWSER"
+                    || cond.ends_with(".browser") || cond.ends_with(".BROWSER")
+                    || cond.starts_with("typeof window") || cond.starts_with("typeof document")
+                    || cond.starts_with("globalThis.")
+                    || cond.contains("browser") || cond.contains("BROWSER");
+                let is_negated = cond.starts_with('!');
+
+                // Consequent: if browser guard + positive → browser context
+                let cons_browser = in_browser_ctx || (is_browser_guard && !is_negated);
+                // If negated browser guard → if-true is server context
+                let cons_server = is_browser_guard && is_negated;
+                check_template_nodes(&block.consequent.nodes, ctx, cons_browser || (!cons_server && in_browser_ctx));
+
+                // Alternate: inverse of guard
+                if let Some(alt) = &block.alternate {
+                    let alt_browser = in_browser_ctx || (is_browser_guard && is_negated);
+                    // The alternate is always wrapped as IfBlock(test="", consequent=..., alternate=None)
+                    // for simple {:else}, or IfBlock(test="cond", ...) for {:else if cond}
+                    if let TemplateNode::IfBlock(else_if) = alt.as_ref() {
+                        let else_test = else_if.test.trim();
+                        if else_test.is_empty() {
+                            // Simple {:else} — check consequent with inverted guard
+                            check_template_nodes(&else_if.consequent.nodes, ctx, alt_browser);
+                        } else {
+                            // {:else if cond} — recurse with alt_browser context
+                            let ebc = else_test == "browser" || else_test == "BROWSER"
+                                || else_test.contains("globalThis.");
+                            let eng = else_test.starts_with('!');
+                            let eb = alt_browser || (ebc && !eng);
+                            check_template_nodes(&else_if.consequent.nodes, ctx, eb);
+                            if let Some(a2) = &else_if.alternate {
+                                let eb2 = alt_browser || (ebc && eng);
+                                if let TemplateNode::IfBlock(a2if) = a2.as_ref() {
+                                    check_template_nodes(&a2if.consequent.nodes, ctx, eb2);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            TemplateNode::Element(el) => {
+                check_template_nodes(&el.children, ctx, in_browser_ctx);
+            }
+            TemplateNode::EachBlock(block) => {
+                check_template_nodes(&block.body.nodes, ctx, in_browser_ctx);
+                if let Some(fb) = &block.fallback {
+                    check_template_nodes(&fb.nodes, ctx, in_browser_ctx);
+                }
+            }
+            TemplateNode::KeyBlock(block) => {
+                check_template_nodes(&block.body.nodes, ctx, in_browser_ctx);
+            }
+            TemplateNode::SnippetBlock(block) => {
+                check_template_nodes(&block.body.nodes, ctx, in_browser_ctx);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn check_single_node(node: &TemplateNode, ctx: &mut LintContext<'_>, in_browser: bool) {
+    let nodes = [node.clone()];
+    check_template_nodes(&nodes, ctx, in_browser);
+}
+
+fn check_expr_for_globals(expr: &str, span: Span, ctx: &mut LintContext<'_>) {
+    for global in BROWSER_GLOBALS {
+        if let Some(pos) = expr.find(global) {
+            if pos > 0 {
+                let p = expr.as_bytes()[pos - 1];
+                if p.is_ascii_alphanumeric() || p == b'_' || p == b'$' || p == b'.' { continue; }
+            }
+            let after = pos + global.len();
+            if after < expr.len() {
+                let a = expr.as_bytes()[after];
+                if a.is_ascii_alphanumeric() || a == b'_' { continue; }
+            }
+            ctx.diagnostic(
+                format!("Avoid referencing `{}` at the top level — it is not available during SSR.", global),
+                span,
+            );
+        }
     }
 }
