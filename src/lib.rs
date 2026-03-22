@@ -9270,7 +9270,7 @@ mod linter_fixture_tests {
     // Batch 5: more invalid tests
     #[test] fn linter_no_dom_manipulating_invalid() { run_linter_invalid("no-dom-manipulating"); }
     // require-event-prefix invalid needs $props type analysis
-    // #[test] fn linter_require_event_prefix_invalid() { run_linter_invalid("require-event-prefix"); }
+    #[test] fn linter_require_event_prefix_invalid() { run_linter_invalid("require-event-prefix"); }
     #[test] fn linter_no_add_event_listener_invalid() { run_linter_invalid("no-add-event-listener"); }
 
     #[test] fn linter_max_lines_per_block_valid() { run_linter_valid("max-lines-per-block"); }
