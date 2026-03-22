@@ -9171,8 +9171,7 @@ mod linter_fixture_tests {
                                 .and_then(|p| p.file_name())
                                 .map(|n| n.to_string_lossy().to_string())
                                 .unwrap_or_default();
-                            let needs_type_analysis = parent == "valid-compile"
-                                || parent == "indent";
+                            let needs_type_analysis = parent == "valid-compile";
                             if needs_type_analysis { continue; }
                         }
                         walk(&path, files);

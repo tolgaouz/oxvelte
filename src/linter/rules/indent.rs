@@ -31,6 +31,8 @@ impl Rule for Indent {
         let mut multiline_tag_ignored = false;
         let mut multiline_tag_column = 0usize;
         let mut multiline_brace_depth = 0i32;
+        let mut in_script = false;
+        let mut script_base_depth = 0i32;
 
         // Parse config options
         let opts = ctx.config.options.as_ref()
@@ -63,11 +65,14 @@ impl Rule for Indent {
                 if skip_next_line { skip_next_line = false; }
                 // Track depth for script open/close
                 if trimmed.starts_with("<script") && !trimmed.ends_with("/>") {
+                    in_script = true;
                     if indent_script {
                         depth += 1;
                     }
+                    script_base_depth = depth;
                 }
                 if trimmed.starts_with("</script") {
+                    in_script = false;
                     if indent_script {
                         depth -= 1;
                         if depth < 0 { depth = 0; }
@@ -133,6 +138,31 @@ impl Rule for Indent {
                 } else {
                     depth += opens - closes;
                     if depth < 0 { depth = 0; }
+                }
+                continue;
+            }
+
+            // Inside script blocks: check base indentation level
+            // When indentScript=false, enforce exact depth 0 for top-level lines
+            // When indentScript=true, only check minimum (don't track JS nesting)
+            if in_script {
+                let actual = leading_spaces(line);
+                let base = (script_base_depth.max(0) as usize) * INDENT;
+                if !indent_script {
+                    // indentScript=false: top-level script content must be at depth 0
+                    if actual != 0 && trimmed.starts_with("const ") || trimmed.starts_with("let ") || trimmed.starts_with("var ")
+                        || trimmed.starts_with("function ") || trimmed.starts_with("import ") || trimmed.starts_with("export ")
+                        || trimmed.starts_with("type ") || trimmed.starts_with("interface ") || trimmed.starts_with("class ")
+                        || trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with("$")
+                    {
+                        if actual != 0 {
+                            let msg = format!("Expected indentation of 0 spaces but found {} spaces.", actual);
+                            ctx.diagnostic(msg, oxc::span::Span::new(line_start as u32, (line_start + actual.max(1)) as u32));
+                        }
+                    }
+                } else if actual < base {
+                    let msg = format!("Expected indentation of {} spaces but found {} spaces.", base, actual);
+                    ctx.diagnostic(msg, oxc::span::Span::new(line_start as u32, (line_start + actual.max(1)) as u32));
                 }
                 continue;
             }
