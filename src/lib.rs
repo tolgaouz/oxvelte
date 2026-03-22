@@ -1011,6 +1011,108 @@ mod tests {
         assert!(bg.is_empty(), "Should NOT flag location inside guarded blocks, got: {:?}", bg.iter().map(|d| &d.message).collect::<Vec<_>>());
     }
 
+    // --- towards 1250 ---
+
+    #[test]
+    fn test_parse_real_world_image_gallery() {
+        let s = "<script>\n\tlet { images } = $props();\n\tlet selected = $state(null);\n\tlet lightbox = $state(false);\n</script>\n\n<div class=\"gallery\">\n\t{#each images as img (img.id)}\n\t\t<button onclick={() => { selected = img; lightbox = true; }}>\n\t\t\t<img src={img.thumbnail} alt={img.alt} loading=\"lazy\" />\n\t\t</button>\n\t{/each}\n</div>\n\n{#if lightbox && selected}\n\t<div class=\"lightbox\" onclick={() => lightbox = false} transition:fade>\n\t\t<img src={selected.full} alt={selected.alt} />\n\t</div>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_calendar() {
+        let s = "<script>\n\tlet { year, month, onDateSelect } = $props();\n\tlet days = $derived(getDaysInMonth(year, month));\n\tlet firstDay = $derived(new Date(year, month, 1).getDay());\n</script>\n\n<div class=\"calendar\">\n\t<div class=\"header\">\n\t\t<button onclick={() => month--}>&lt;</button>\n\t\t<span>{year}-{String(month + 1).padStart(2, '0')}</span>\n\t\t<button onclick={() => month++}>&gt;</button>\n\t</div>\n\t<div class=\"grid\">\n\t\t{#each Array(firstDay) as _}<div />{/each}\n\t\t{#each Array(days) as _, i}\n\t\t\t<button onclick={() => onDateSelect?.(new Date(year, month, i + 1))}>{i + 1}</button>\n\t\t{/each}\n\t</div>\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_progress_tracker() {
+        let s = "<script>\n\tlet { steps, currentStep } = $props();\n\tlet progress = $derived(((currentStep + 1) / steps.length) * 100);\n</script>\n\n<div class=\"tracker\" role=\"progressbar\" aria-valuenow={progress} aria-valuemin=\"0\" aria-valuemax=\"100\">\n\t{#each steps as step, i}\n\t\t<div class=\"step\" class:completed={i < currentStep} class:active={i === currentStep} class:upcoming={i > currentStep}>\n\t\t\t<span class=\"number\">{i + 1}</span>\n\t\t\t<span class=\"label\">{step.label}</span>\n\t\t</div>\n\t\t{#if i < steps.length - 1}\n\t\t\t<div class=\"connector\" class:filled={i < currentStep} />\n\t\t{/if}\n\t{/each}\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_tag_input() {
+        let s = "<script>\n\tlet { tags = $bindable([]), maxTags = 10 } = $props();\n\tlet input = $state('');\n\tlet remaining = $derived(maxTags - tags.length);\n\tconst add = () => {\n\t\tconst tag = input.trim();\n\t\tif (tag && !tags.includes(tag) && tags.length < maxTags) {\n\t\t\ttags = [...tags, tag];\n\t\t\tinput = '';\n\t\t}\n\t};\n\tconst remove = (tag) => tags = tags.filter(t => t !== tag);\n</script>\n\n<div class=\"tags\">\n\t{#each tags as tag}\n\t\t<span class=\"tag\">{tag} <button onclick={() => remove(tag)}>&times;</button></span>\n\t{/each}\n\t{#if remaining > 0}\n\t\t<input bind:value={input} onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), add())} placeholder=\"Add tag...\" />\n\t{/if}\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_scroll_driven() {
+        let s = "<style>\n\t@keyframes reveal {\n\t\tfrom { opacity: 0; transform: translateY(20px); }\n\t\tto { opacity: 1; transform: translateY(0); }\n\t}\n\t.scroll-reveal {\n\t\tanimation: reveal linear both;\n\t\tanimation-timeline: view();\n\t\tanimation-range: entry 0% entry 100%;\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_sortable_table() {
+        let s = "<script lang=\"ts\">\n\ttype SortDir = 'asc' | 'desc' | null;\n\tlet { data, columns } = $props<{ data: any[]; columns: { key: string; label: string }[] }>();\n\tlet sortKey = $state<string | null>(null);\n\tlet sortDir = $state<SortDir>(null);\n\tlet sorted = $derived.by(() => {\n\t\tif (!sortKey || !sortDir) return data;\n\t\treturn [...data].sort((a, b) => {\n\t\t\tconst cmp = String(a[sortKey!]).localeCompare(String(b[sortKey!]));\n\t\t\treturn sortDir === 'desc' ? -cmp : cmp;\n\t\t});\n\t});\n\tconst toggleSort = (key: string) => {\n\t\tif (sortKey === key) {\n\t\t\tsortDir = sortDir === 'asc' ? 'desc' : sortDir === 'desc' ? null : 'asc';\n\t\t\tif (!sortDir) sortKey = null;\n\t\t} else {\n\t\t\tsortKey = key;\n\t\t\tsortDir = 'asc';\n\t\t}\n\t};\n</script>\n\n<table>\n\t<thead>\n\t\t<tr>\n\t\t\t{#each columns as col}\n\t\t\t\t<th onclick={() => toggleSort(col.key)} class:sorted={sortKey === col.key}>\n\t\t\t\t\t{col.label}\n\t\t\t\t\t{#if sortKey === col.key}\n\t\t\t\t\t\t<span>{sortDir === 'asc' ? '↑' : '↓'}</span>\n\t\t\t\t\t{/if}\n\t\t\t\t</th>\n\t\t\t{/each}\n\t\t</tr>\n\t</thead>\n\t<tbody>\n\t\t{#each sorted as row, i (i)}\n\t\t\t<tr>\n\t\t\t\t{#each columns as col}\n\t\t\t\t\t<td>{row[col.key]}</td>\n\t\t\t\t{/each}\n\t\t\t</tr>\n\t\t{/each}\n\t</tbody>\n</table>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_breadcrumbs_svelte5() {
+        let s = "<script>\n\tlet { items } = $props();\n</script>\n<nav aria-label=\"Breadcrumb\">\n\t<ol>\n\t\t{#each items as item, i (item.href)}\n\t\t\t<li>\n\t\t\t\t{#if i < items.length - 1}\n\t\t\t\t\t<a href={item.href}>{item.label}</a>\n\t\t\t\t\t<span aria-hidden=\"true\">/</span>\n\t\t\t\t{:else}\n\t\t\t\t\t<span aria-current=\"page\">{item.label}</span>\n\t\t\t\t{/if}\n\t\t\t</li>\n\t\t{/each}\n\t</ol>\n</nav>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_modern_all() {
+        let s = "<style>\n\t:root { color-scheme: light dark; }\n\t.container {\n\t\tcontainer-type: inline-size;\n\t\tmax-inline-size: 1200px;\n\t\tmargin-inline: auto;\n\t}\n\t@container (inline-size > 700px) {\n\t\t.grid { grid-template-columns: 1fr 1fr; }\n\t}\n\t.text {\n\t\ttext-wrap: balance;\n\t\toverscroll-behavior: contain;\n\t}\n\t@layer base, theme, utilities;\n\t@layer utilities {\n\t\t.sr-only { position: absolute; clip: rect(0,0,0,0); }\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_complete_store_migration() {
+        let s = "<script>\n\t// Svelte 4 store → Svelte 5 state\n\tlet count = $state(0);\n\tlet doubled = $derived(count * 2);\n\tlet message = $derived.by(() => {\n\t\tif (count === 0) return 'Zero';\n\t\tif (count < 10) return 'Low';\n\t\treturn 'High';\n\t});\n\t$effect(() => {\n\t\tconsole.log(`Count changed to ${count}`);\n\t});\n</script>\n\n<h1>{message} ({count})</h1>\n<p>Doubled: {doubled}</p>\n<button onclick={() => count++}>+1</button>\n<button onclick={() => count--}>-1</button>\n<button onclick={() => count = 0}>Reset</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_with_all_slot_types() {
+        let s = "<Widget>\n\t<!-- Default slot -->\n\t<p>Default content</p>\n\t<!-- Named slot (Svelte 4) -->\n\t<div slot=\"header\">Header</div>\n\t<!-- Snippet (Svelte 5) -->\n\t{#snippet footer()}\n\t\t<p>Footer</p>\n\t{/snippet}\n</Widget>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_dupe_else_if_complex() {
+        let s = "{#if x > 0 && y > 0}\n\tp1\n{:else if x < 0}\n\tp2\n{:else if x > 0 && y > 0}\n\tp3\n{/if}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-dupe-else-if-blocks"),
+            "Should flag duplicate complex condition");
+    }
+
+    #[test]
+    fn test_parse_expression_with_in_operator() {
+        let s = "<p>{'key' in obj ? 'has key' : 'no key'}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_state_with_generics() {
+        let s = "<script lang=\"ts\">\n\tlet items = $state<Array<{ id: number; name: string }>>([]);\n\tlet selected = $state<number | null>(null);\n\tlet current = $derived(items.find(i => i.id === selected) ?? null);\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_with_conditional_snippets() {
+        let s = "<Dialog>\n\t{#if mode === 'confirm'}\n\t\t{#snippet actions()}\n\t\t\t<button onclick={cancel}>Cancel</button>\n\t\t\t<button onclick={confirm}>Confirm</button>\n\t\t{/snippet}\n\t{:else}\n\t\t{#snippet actions()}\n\t\t\t<button onclick={close}>OK</button>\n\t\t{/snippet}\n\t{/if}\n\t<p>{message}</p>\n</Dialog>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     #[test]
     fn test_parse_component_with_render_prop() {
         let s = "<DataProvider url=\"/api\">\n\t{#snippet loading()}<Spinner />{/snippet}\n\t{#snippet error(err)}<p class=\"error\">{err.message}</p>{/snippet}\n\t{#snippet success(data)}\n\t\t{#each data as item}<p>{item}</p>{/each}\n\t{/snippet}\n</DataProvider>";
