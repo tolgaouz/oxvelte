@@ -14,6 +14,89 @@ const BROWSER_GLOBALS: &[&str] = &[
 
 pub struct NoTopLevelBrowserGlobals;
 
+/// Check if a position is inside a server-side block where browser globals are invalid:
+/// - `if (import.meta.env.SSR) { ... }`
+/// - `else { ... }` after `if (globalThis.X) { ... }`
+fn is_in_ssr_block(content: &str, pos: usize) -> bool {
+    let before = &content[..pos];
+    // Find the last unmatched { before pos
+    let mut depth = 0i32;
+    let mut last_open = None;
+    for (i, b) in before.bytes().enumerate().rev() {
+        match b {
+            b'}' => depth += 1,
+            b'{' => {
+                if depth == 0 { last_open = Some(i); break; }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    let brace_pos = match last_open { Some(p) => p, None => return false };
+    let before_brace = content[..brace_pos].trim_end();
+
+    // Case 1: if (import.meta.env.SSR) { ... }
+    if before_brace.ends_with(')') {
+        if let Some(paren_start) = before_brace.rfind('(') {
+            let cond = &before_brace[paren_start+1..before_brace.len()-1];
+            if cond.trim().contains("import.meta.env.SSR")
+                || cond.trim().contains("import.meta.env.DEV")
+            {
+                let before_paren = before_brace[..paren_start].trim_end();
+                if before_paren.ends_with("if") { return true; }
+            }
+        }
+    }
+
+    // Case 2: else { ... } after if (globalThis.X) { ... }
+    if before_brace.ends_with("else") || before_brace.ends_with("else ") {
+        // Look further back for the preceding if block: } else
+        // The } before "else" closes the if-true block
+        let before_else = before_brace.trim_end().strip_suffix("else").unwrap_or(before_brace).trim_end();
+        if before_else.ends_with('}') {
+            // Find the matching { for this }
+            let close_pos = before_else.len() - 1;
+            let mut d = 0i32;
+            let mut if_open = None;
+            for (i, b) in before_else.bytes().enumerate().rev() {
+                match b {
+                    b'}' => d += 1,
+                    b'{' => {
+                        d -= 1;
+                        if d == 0 { if_open = Some(i); break; }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(open) = if_open {
+                let before_if_block = content[..open].trim_end();
+                if before_if_block.ends_with(')') {
+                    if let Some(ps) = before_if_block.rfind('(') {
+                        let cond = &before_if_block[ps+1..before_if_block.len()-1];
+                        // if (globalThis.X) or if (browser) or if (BROWSER) or if (env.BROWSER)
+                        let cond_t = cond.trim();
+                        // Check for positive browser guard: else block = server-side
+                        // if (globalThis.X) { browser } else { SERVER }
+                        // if (BROWSER) { browser } else { SERVER }
+                        // BUT NOT: if (globalThis.X === undefined) { server } else { BROWSER }
+                        let is_positive_browser = (cond_t.starts_with("globalThis.")
+                            && !cond_t.contains("=== undefined") && !cond_t.contains("== undefined")
+                            && !cond_t.contains("=== null") && !cond_t.contains("== null"))
+                            || cond_t == "browser" || cond_t == "BROWSER"
+                            || cond_t.ends_with(".BROWSER") || cond_t.ends_with(".browser");
+                        if is_positive_browser {
+                            let kw = before_if_block[..ps].trim_end();
+                            if kw.ends_with("if") { return true; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    false
+}
+
 impl Rule for NoTopLevelBrowserGlobals {
     fn name(&self) -> &'static str {
         "svelte/no-top-level-browser-globals"
@@ -42,10 +125,16 @@ impl Rule for NoTopLevelBrowserGlobals {
                     if a.is_ascii_alphanumeric() || a == b'_' || a == b'$' { continue; }
                 }
 
-                // Only flag at depth 0 — simple brace count
+                // Only flag at depth 0, OR inside SSR-guarded blocks
                 let depth: i32 = content[..byte_offset].bytes()
                     .fold(0i32, |acc, b| match b { b'{' => acc + 1, b'}' => acc - 1, _ => acc });
-                if depth > 0 { continue; }
+                if depth > 0 {
+                    // Check if we're inside a server-side block where browser globals are invalid:
+                    // - if (import.meta.env.SSR) { ... }
+                    // - else { ... } after if (globalThis.X) { ... }
+                    let in_server_block = is_in_ssr_block(content, byte_offset);
+                    if !in_server_block { continue; }
+                }
 
                 // Skip if directly preceded by typeof
                 let before = content[..byte_offset].trim_end();
@@ -86,9 +175,33 @@ impl Rule for NoTopLevelBrowserGlobals {
                     }
                 }
 
-                // Browser/BROWSER guard with && or ternary
+                // Browser/BROWSER guard — check direction
                 let has_browser = line.contains("browser") || line.contains("BROWSER");
-                if has_browser && (line.contains('?') || line.contains("&&")) { continue; }
+                if has_browser {
+                    // Determine the guard's position relative to the global
+                    let global_pos_in_line = byte_offset - line_start;
+                    let before_global = &line[..global_pos_in_line];
+                    let has_neg = before_global.contains("!browser") || before_global.contains("!BROWSER");
+
+                    // browser && X — valid if browser is before && (positive guard)
+                    if before_global.contains("&&") && !has_neg { continue; }
+
+                    // browser ? X : Y — valid if global is in the true branch AND guard is positive
+                    if line.contains('?') {
+                        let q_pos = line.find('?').unwrap_or(line.len());
+                        if q_pos < global_pos_in_line {
+                            // Global is after ? — check which branch
+                            let colon_pos = line[q_pos..].find(':').map(|p| q_pos + p).unwrap_or(line.len());
+                            let in_true_branch = global_pos_in_line < colon_pos;
+                            let positive_guard = !line[..q_pos].contains('!');
+                            // browser ? TRUE : FALSE — global in true + positive guard = valid
+                            // !browser ? TRUE : FALSE — global in false + negative guard = valid
+                            if (in_true_branch && positive_guard) || (!in_true_branch && !positive_guard) {
+                                continue;
+                            }
+                        }
+                    }
+                }
 
                 let start = (content_offset + byte_offset) as u32;
                 let end = start + global.len() as u32;
