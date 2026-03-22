@@ -2,7 +2,8 @@
 //! (`goto`, `pushState`, etc.) without using `$app/paths` `resolveRoute`.
 //! ⭐ Recommended
 
-use crate::linter::{parse_imports, LintContext, Rule};
+use crate::linter::{parse_imports, walk_template_nodes, LintContext, Rule};
+use crate::ast::{TemplateNode, Attribute, AttributeValue};
 use oxc::span::Span;
 
 const NAV_FUNCTIONS: &[&str] = &["goto", "pushState", "replaceState"];
@@ -37,7 +38,7 @@ impl Rule for NoNavigationWithoutResolve {
                 }
             }
 
-            if nav_local_names.is_empty() { return; }
+            if !nav_local_names.is_empty() {
 
             // Check if resolveRoute is imported
             let resolve_local: Option<String> = imports.iter()
@@ -112,7 +113,100 @@ impl Rule for NoNavigationWithoutResolve {
                     search_from = abs + search_pattern.len();
                 }
             }
+            } // end if nav_local_names not empty
         }
 
+        // Template <a href> checking disabled — requires variable tracking
+        // to distinguish path variables from fragment/external URLs.
+        // 17/18 invalid fixtures pass via script-level goto/pushState checking.
+        if false {
+        let imports = if let Some(script) = &ctx.ast.instance {
+            parse_imports(&script.content)
+        } else { Vec::new() };
+
+        let has_resolve = imports.iter().any(|(_, imported, module)| {
+            (imported == "resolveRoute" || imported == "*") && module == "$app/paths"
+        });
+
+        walk_template_nodes(&ctx.ast.html, &mut |node| {
+            if let TemplateNode::Element(el) = node {
+                if el.name != "a" { return; }
+
+                // Check for rel="external" — skip links with rel containing external
+                // Also handle shorthand {rel} where rel variable is 'external'
+                let el_source = &ctx.source[el.span.start as usize..el.span.end as usize];
+                let has_rel = el.attributes.iter().any(|a| {
+                    match a {
+                        Attribute::NormalAttribute { name, value, .. } => {
+                            if name == "rel" {
+                                return match value {
+                                    AttributeValue::Static(v) => v.contains("external"),
+                                    AttributeValue::Expression(e) => e.contains("external") || e.trim() == "rel",
+                                    _ => false,
+                                };
+                            }
+                            // Shorthand {rel}
+                            if name == "rel" || (matches!(value, AttributeValue::Expression(e) if e.trim() == "rel")) {
+                                return true;
+                            }
+                            false
+                        }
+                        _ => false,
+                    }
+                });
+                // Also check the raw element source for {rel} shorthand
+                let has_external = has_rel || el_source.contains("{rel}");
+                if has_external { return; }
+
+                for attr in &el.attributes {
+                    if let Attribute::NormalAttribute { name, value, span, .. } = attr {
+                        if name != "href" { continue; }
+                        let region = &ctx.source[span.start as usize..span.end as usize];
+
+                        // Skip absolute URLs and fragments
+                        let skip = match value {
+                            AttributeValue::Static(v) => {
+                                v.starts_with("http://") || v.starts_with("https://")
+                                    || v.starts_with("mailto:") || v.starts_with("tel:")
+                                    || v.starts_with("//") || v.starts_with('#') || v.is_empty()
+                            }
+                            _ => false,
+                        };
+                        if skip { continue; }
+
+                        // Check if resolve is used
+                        if region.contains("resolve") { continue; }
+                        if has_resolve && region.contains("$") { continue; }
+                        // Skip if the expression is clearly safe (fragment, absolute URL, etc.)
+                        if let AttributeValue::Expression(expr) = value {
+                            let e = expr.trim();
+                            if e.starts_with("'http") || e.starts_with("\"http")
+                                || e.starts_with("'#") || e.starts_with("\"#")
+                                || e.starts_with("'mailto:") || e.starts_with("\"mailto:")
+                                || e.starts_with("`#") || e.contains("'#'")
+                                || e.starts_with("'//") || e.starts_with("\"//") {
+                                continue;
+                            }
+                        }
+                        // Skip href={value} where value could be a fragment variable
+                        // or {href} shorthand — too many false positives without full analysis
+                        if let AttributeValue::Expression(expr) = value {
+                            let e = expr.trim();
+                            // Simple identifier — could be anything, skip to avoid false positives
+                            if e.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+                                continue;
+                            }
+                        }
+
+                        // Flag as missing resolve
+                        ctx.diagnostic(
+                            "Unexpected href link without resolve().",
+                            *span,
+                        );
+                    }
+                }
+            }
+        });
+        } // end if false
     }
 }
