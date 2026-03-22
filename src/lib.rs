@@ -1011,7 +1011,304 @@ mod tests {
         assert!(bg.is_empty(), "Should NOT flag location inside guarded blocks, got: {:?}", bg.iter().map(|d| &d.message).collect::<Vec<_>>());
     }
 
-    // --- towards 1200 ---
+    #[test]
+    fn test_parse_component_with_render_prop() {
+        let s = "<DataProvider url=\"/api\">\n\t{#snippet loading()}<Spinner />{/snippet}\n\t{#snippet error(err)}<p class=\"error\">{err.message}</p>{/snippet}\n\t{#snippet success(data)}\n\t\t{#each data as item}<p>{item}</p>{/each}\n\t{/snippet}\n</DataProvider>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_scope_keyframes() {
+        let s = "<style>\n\t@keyframes -global-pulse {\n\t\t0% { opacity: 1; }\n\t\t50% { opacity: 0.5; }\n\t\t100% { opacity: 1; }\n\t}\n\t.pulsing { animation: -global-pulse 2s infinite; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_toast_system() {
+        let s = "<script>\n\tlet toasts = $state([]);\n\tconst add = (message, type = 'info') => {\n\t\tconst id = Date.now();\n\t\ttoasts.push({ id, message, type });\n\t\tsetTimeout(() => remove(id), 5000);\n\t};\n\tconst remove = (id) => toasts = toasts.filter(t => t.id !== id);\n</script>\n\n<div class=\"toasts\" aria-live=\"polite\">\n\t{#each toasts as toast (toast.id)}\n\t\t<div class=\"toast {toast.type}\" transition:fly={{y: -20}}>\n\t\t\t{toast.message}\n\t\t\t<button onclick={() => remove(toast.id)} aria-label=\"Dismiss\">&times;</button>\n\t\t</div>\n\t{/each}\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_destructure_inline() {
+        let s = "<p>{(() => { const { a, b } = obj; return a + b; })()}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_derived_with_cleanup() {
+        let s = "<script>\n\tlet url = $state('/api');\n\tlet data = $state(null);\n\t$effect(() => {\n\t\tconst controller = new AbortController();\n\t\tfetch(url, { signal: controller.signal })\n\t\t\t.then(r => r.json())\n\t\t\t.then(d => data = d);\n\t\treturn () => controller.abort();\n\t});\n</script>\n{#if data}<pre>{JSON.stringify(data)}</pre>{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_scope_deep() {
+        let s = "<style>\n\t.parent :global {\n\t\t.external-class { color: red; }\n\t\tp { margin: 0; }\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_svelte_internal_disallow() {
+        let s = "<script>\n\timport { set_current_component } from 'svelte/internal';\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-svelte-internal"));
+    }
+
+    #[test]
+    fn test_parse_real_world_theme_provider() {
+        let s = "<script>\n\timport { setContext } from 'svelte';\n\tlet { theme = 'light', children } = $props();\n\tsetContext('theme', {\n\t\tget value() { return theme; },\n\t\ttoggle: () => theme = theme === 'light' ? 'dark' : 'light',\n\t});\n</script>\n\n<div class=\"theme-{theme}\" data-theme={theme}>\n\t{@render children()}\n</div>\n\n<style>\n\t.theme-dark { background: #1a1a2e; color: #eee; }\n\t.theme-light { background: #fff; color: #333; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_with_index_key_pattern() {
+        let s = "{#each Object.entries(obj).sort(([a], [b]) => a.localeCompare(b)) as [key, value], index (key)}\n\t<p>{index}. {key} = {value}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_multiple_render_tags() {
+        let s = "{@render header?.()}\n<main>\n\t{@render content()}\n</main>\n{@render footer?.()}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_reactive_literal_object() {
+        let s = "<script>\n\t$: config = {};\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-reactive-literals"),
+            "Should flag reactive object literal");
+    }
+
+    #[test]
+    fn test_parse_css_color_scheme() {
+        let s = "<style>\n\t:root {\n\t\tcolor-scheme: light dark;\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_debounced_search() {
+        let s = "<script>\n\tlet query = $state('');\n\tlet debouncedQuery = $state('');\n\tlet timeout;\n\t$effect(() => {\n\t\tclearTimeout(timeout);\n\t\ttimeout = setTimeout(() => debouncedQuery = query, 300);\n\t\treturn () => clearTimeout(timeout);\n\t});\n\tlet results = $state([]);\n\t$effect(() => {\n\t\tif (!debouncedQuery) { results = []; return; }\n\t\tfetch(`/api/search?q=${debouncedQuery}`)\n\t\t\t.then(r => r.json())\n\t\t\t.then(d => results = d);\n\t});\n</script>\n<input bind:value={query} />\n{#each results as r (r.id)}<p>{r.name}</p>{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_dropdown() {
+        let s = "<script>\n\tlet { items, onselect } = $props();\n\tlet open = $state(false);\n</script>\n<div class=\"dropdown\">\n\t<button onclick={() => open = !open}>Menu</button>\n\t{#if open}\n\t\t<ul>\n\t\t\t{#each items as item}<li onclick={() => { onselect?.(item); open = false; }}>{item.label}</li>{/each}\n\t\t</ul>\n\t{/if}\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_nesting_modern() {
+        let s = "<style>\n\t.parent {\n\t\tcolor: red;\n\t\t& .child { color: blue; }\n\t\t&:hover { color: green; }\n\t\t@media (width > 600px) { & { display: flex; } }\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_inspect_derive() {
+        let s = "<script>\n\tlet items = $state([1,2,3]);\n\t$inspect(items);\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-inspect"));
+    }
+
+    #[test]
+    fn test_parse_real_world_command_palette() {
+        let s = "<script>\n\tlet { commands } = $props();\n\tlet open = $state(false);\n\tlet query = $state('');\n\tlet filtered = $derived(commands.filter(c => c.label.toLowerCase().includes(query.toLowerCase())));\n\tlet selected = $state(0);\n\t$effect(() => { selected = 0; });\n</script>\n\n{#if open}\n\t<div class=\"overlay\" onclick={() => open = false}>\n\t\t<div class=\"palette\" onclick|stopPropagation>\n\t\t\t<input bind:value={query} placeholder=\"Type a command...\" />\n\t\t\t<ul>\n\t\t\t\t{#each filtered as cmd, i (cmd.id)}\n\t\t\t\t\t<li class:selected={i === selected} onclick={() => { cmd.action(); open = false; }}>{cmd.label}</li>\n\t\t\t\t{/each}\n\t\t\t</ul>\n\t\t</div>\n\t</div>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_with_regex() {
+        let s = "<p>{value.replace(/[^a-z0-9]/gi, '-').toLowerCase()}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_state_map() {
+        let s = "<script>\n\tlet cache = $state(new Map());\n\tconst set = (k, v) => cache.set(k, v);\n\tconst get = (k) => cache.get(k);\n\tlet size = $derived(cache.size);\n</script>\n<p>Cache: {size} entries</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_with_sort_and_filter() {
+        let s = "{#each items\n\t.filter(i => i.active)\n\t.sort((a, b) => a.name.localeCompare(b.name))\n\t.slice(0, 10)\n\tas item (item.id)}\n\t<p>{item.name}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_comprehensive_clean_app() {
+        let s = "<script lang=\"ts\">\n\tlet { data } = $props();\n\tlet search = $state('');\n\tlet filtered = $derived(data.filter(d => d.name.includes(search)));\n</script>\n\n<input type=\"search\" bind:value={search} />\n{#each filtered as item (item.id)}\n\t<p>{item.name}</p>\n{/each}\n\n<style lang=\"scss\">\n\tp { margin: 0.5rem 0; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        let diags = Linter::recommended().lint(&r.ast, s);
+        let relevant: Vec<_> = diags.iter()
+            .filter(|d| d.rule_name != "svelte/no-unused-class-name")
+            .collect();
+        assert!(relevant.is_empty(), "Clean app should have no warnings: {:?}",
+            relevant.iter().map(|d| &d.rule_name).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_parse_real_world_data_grid() {
+        let s = "<script lang=\"ts\">\n\ttype Row = Record<string, unknown>;\n\tlet { rows, columns, onSort } = $props<{ rows: Row[]; columns: string[]; onSort?: (col: string) => void }>();\n\tlet selected = $state<Set<number>>(new Set());\n\tlet allSelected = $derived(selected.size === rows.length);\n\tconst toggleAll = () => {\n\t\tselected = allSelected ? new Set() : new Set(rows.map((_, i) => i));\n\t};\n</script>\n\n<table>\n\t<thead>\n\t\t<tr>\n\t\t\t<th><input type=\"checkbox\" checked={allSelected} onchange={toggleAll} /></th>\n\t\t\t{#each columns as col}\n\t\t\t\t<th onclick={() => onSort?.(col)}>{col}</th>\n\t\t\t{/each}\n\t\t</tr>\n\t</thead>\n\t<tbody>\n\t\t{#each rows as row, i (i)}\n\t\t\t<tr class:selected={selected.has(i)}>\n\t\t\t\t<td><input type=\"checkbox\" checked={selected.has(i)} onchange={() => {\n\t\t\t\t\tconst next = new Set(selected);\n\t\t\t\t\tnext.has(i) ? next.delete(i) : next.add(i);\n\t\t\t\t\tselected = next;\n\t\t\t\t}} /></td>\n\t\t\t\t{#each columns as col}\n\t\t\t\t\t<td>{row[col]}</td>\n\t\t\t\t{/each}\n\t\t\t</tr>\n\t\t{/each}\n\t</tbody>\n</table>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_markdown_editor() {
+        let s = "<script>\n\tlet source = $state('# Hello\\n\\nType **markdown** here');\n\tlet preview = $derived(marked(source));\n</script>\n\n<div class=\"editor\">\n\t<textarea bind:value={source} rows=\"20\" />\n\t<div class=\"preview\">{@html preview}</div>\n</div>\n\n<style>\n\t.editor { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }\n\ttextarea { font-family: monospace; resize: none; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_timer() {
+        let s = "<script>\n\tlet seconds = $state(0);\n\tlet running = $state(false);\n\tlet minutes = $derived(Math.floor(seconds / 60));\n\tlet secs = $derived(seconds % 60);\n\tlet display = $derived(`${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`);\n\t$effect(() => {\n\t\tif (!running) return;\n\t\tconst id = setInterval(() => seconds++, 1000);\n\t\treturn () => clearInterval(id);\n\t});\n</script>\n\n<div class=\"timer\">\n\t<span class=\"display\">{display}</span>\n\t<button onclick={() => running = !running}>{running ? 'Pause' : 'Start'}</button>\n\t<button onclick={() => { seconds = 0; running = false; }}>Reset</button>\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_combobox() {
+        let s = "<script>\n\tlet { options = [], value = '', onselect } = $props();\n\tlet open = $state(false);\n\tlet search = $state('');\n\tlet filtered = $derived(\n\t\toptions.filter(o => o.label.toLowerCase().includes(search.toLowerCase()))\n\t);\n\tlet selectedLabel = $derived(\n\t\toptions.find(o => o.value === value)?.label ?? ''\n\t);\n</script>\n\n<div class=\"combobox\">\n\t<input\n\t\tvalue={open ? search : selectedLabel}\n\t\tonfocus={() => { open = true; search = ''; }}\n\t\tonblur={() => setTimeout(() => open = false, 200)}\n\t\toninput={(e) => search = e.target.value}\n\t\tplaceholder=\"Select...\"\n\t/>\n\t{#if open && filtered.length > 0}\n\t\t<ul role=\"listbox\">\n\t\t\t{#each filtered as option (option.value)}\n\t\t\t\t<li\n\t\t\t\t\trole=\"option\"\n\t\t\t\t\taria-selected={option.value === value}\n\t\t\t\t\tonclick={() => { value = option.value; open = false; onselect?.(option.value); }}\n\t\t\t\t>{option.label}</li>\n\t\t\t{/each}\n\t\t</ul>\n\t{/if}\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_full_feature_demo() {
+        let s = "<script lang=\"ts\" generics=\"T extends { id: string }\">\n\timport { onMount } from 'svelte';\n\timport { fade } from 'svelte/transition';\n\tlet { items = [], selected = $bindable<T | null>(null), onchange }: {\n\t\titems?: T[]; selected?: T | null; onchange?: (item: T) => void\n\t} = $props();\n\tlet search = $state('');\n\tlet filtered = $derived(items.filter(i => JSON.stringify(i).includes(search)));\n\tlet count = $derived(filtered.length);\n\t$effect(() => { if (selected) onchange?.(selected); });\n\tonMount(() => console.log(`Mounted with ${items.length} items`));\n</script>\n\n<svelte:head><title>Items ({count})</title></svelte:head>\n\n<input type=\"search\" bind:value={search} placeholder=\"Search {items.length} items...\" />\n\n{#if count > 0}\n\t{#each filtered as item (item.id)}\n\t\t<div\n\t\t\tclass:selected={item === selected}\n\t\t\tonclick={() => selected = item}\n\t\t\ttransition:fade\n\t\t\trole=\"button\"\n\t\t\ttabindex=\"0\"\n\t\t>\n\t\t\t<slot {item} />\n\t\t</div>\n\t{/each}\n{:else}\n\t<p>No items match \"{search}\"</p>\n{/if}\n\n<style lang=\"scss\">\n\t.selected { background: var(--highlight, #eef); }\n\tdiv[role=button] { cursor: pointer; padding: 0.5rem; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_comprehensive_rule_coverage() {
+        // A single file that triggers many different rules
+        let s = "<script>\n\timport { writable } from 'svelte/store';\n\tconst store = writable(0);\n\t$: x = 42;\n\t$: fn = () => 0;\n\t$inspect(x);\n</script>\n{@html bad}\n{@debug x}\n<button>no type</button>\n<a href=\"/path\" target=\"_blank\">link</a>\n{#each items as item}<p>{item}</p>{/each}\n<div style=\"color: red; color: blue;\">dup style</div>\n<p>{store}</p>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        // Count unique rule names
+        let mut rules = std::collections::HashSet::new();
+        for d in &diags { rules.insert(d.rule_name.clone()); }
+        assert!(rules.len() >= 6, "Should trigger >= 6 different rules, got {}: {:?}", rules.len(), rules);
+    }
+
+    #[test]
+    fn test_parse_css_all_selector_types() {
+        let s = "<style>\n\t* { margin: 0; }\n\tp { color: black; }\n\t.class { color: red; }\n\t#id { color: blue; }\n\t[attr] { color: green; }\n\t[attr=val] { color: purple; }\n\t:root { --x: 1; }\n\t::before { content: ''; }\n\ta > b { color: cyan; }\n\ta + b { color: magenta; }\n\ta ~ b { color: yellow; }\n\ta b { color: gray; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_pagination_svelte5() {
+        let s = "<script>\n\tlet { page = 1, totalPages, onPageChange } = $props();\n\tlet pages = $derived(Array.from({length: totalPages}, (_, i) => i + 1));\n\tlet canPrev = $derived(page > 1);\n\tlet canNext = $derived(page < totalPages);\n</script>\n<nav aria-label=\"Pagination\">\n\t<button disabled={!canPrev} onclick={() => onPageChange(page - 1)}>←</button>\n\t{#each pages as p}\n\t\t<button class:active={p === page} onclick={() => onPageChange(p)}>{p}</button>\n\t{/each}\n\t<button disabled={!canNext} onclick={() => onPageChange(page + 1)}>→</button>\n</nav>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_script_with_generators() {
+        let s = "<script>\n\tfunction* range(start, end) {\n\t\tfor (let i = start; i < end; i++) yield i;\n\t}\n\tconst items = [...range(0, 10)];\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_tagged_template() {
+        let s = "<p>{css`color: ${primary}`}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_state_array_methods() {
+        let s = "<script>\n\tlet items = $state(['a', 'b', 'c']);\n\tconst add = (item) => items.push(item);\n\tconst remove = (i) => items.splice(i, 1);\n\tconst clear = () => items.length = 0;\n\tconst sort = () => items.sort();\n\tconst reverse = () => items.reverse();\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_writable_derived_no_state() {
+        let s = "<script>\n\tlet x = 0;\n\t$effect(() => { console.log(x); });\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/prefer-writable-derived"),
+            "Should NOT flag $effect without $state pattern");
+    }
+
+    #[test]
+    fn test_parse_component_with_style_props() {
+        let s = "<Card --card-bg=\"white\" --card-border=\"1px solid #eee\" --card-radius=\"8px\">\n\t<p>Styled card content</p>\n</Card>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_snippet_recursive() {
+        let s = "{#snippet tree(nodes, depth)}\n\t{#each nodes as node}\n\t\t<div style:margin-left=\"{depth * 20}px\">{node.name}</div>\n\t\t{#if node.children}\n\t\t\t{@render tree(node.children, depth + 1)}\n\t\t{/if}\n\t{/each}\n{/snippet}\n\n{@render tree(data, 0)}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_backdrop_filter() {
+        let s = "<style>\n\t.glass {\n\t\tbackdrop-filter: blur(10px) saturate(180%);\n\t\t-webkit-backdrop-filter: blur(10px) saturate(180%);\n\t\tbackground: rgba(255, 255, 255, 0.7);\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_nav_base_tel_ok() {
+        let s = "<a href=\"tel:+15551234567\">Call</a>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-navigation-without-base"),
+            "Should NOT flag tel: links");
+    }
+
+    #[test]
+    fn test_parse_each_with_nested_components() {
+        let s = "{#each categories as category (category.id)}\n\t<Section title={category.name}>\n\t\t{#each category.items as item (item.id)}\n\t\t\t<Card {item}>\n\t\t\t\t{#snippet footer()}\n\t\t\t\t\t<button onclick={() => select(item)}>Select</button>\n\t\t\t\t{/snippet}\n\t\t\t</Card>\n\t\t{/each}\n\t</Section>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_with_as_const() {
+        let s = "<script lang=\"ts\">\n\tconst COLORS = ['red', 'green', 'blue'] as const;\n\ttype Color = typeof COLORS[number];\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_form_with_validation_and_errors() {
+        let s = "<script>\n\tlet fields = $state({ name: '', email: '' });\n\tlet touched = $state({ name: false, email: false });\n\tlet errors = $derived({\n\t\tname: touched.name && !fields.name ? 'Required' : '',\n\t\temail: touched.email && !fields.email.includes('@') ? 'Invalid' : '',\n\t});\n</script>\n<form>\n\t<input\n\t\tbind:value={fields.name}\n\t\ton:blur={() => touched.name = true}\n\t\tclass:error={errors.name}\n\t\taria-invalid={!!errors.name}\n\t/>\n\t{#if errors.name}<span class=\"error\">{errors.name}</span>{/if}\n\t<input\n\t\ttype=\"email\"\n\t\tbind:value={fields.email}\n\t\ton:blur={() => touched.email = true}\n\t\tclass:error={errors.email}\n\t/>\n\t{#if errors.email}<span class=\"error\">{errors.email}</span>{/if}\n</form>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
 
     #[test]
     fn test_parse_real_world_color_picker() {
