@@ -1011,6 +1011,260 @@ mod tests {
         assert!(bg.is_empty(), "Should NOT flag location inside guarded blocks, got: {:?}", bg.iter().map(|d| &d.message).collect::<Vec<_>>());
     }
 
+    // --- hitting 900 ---
+
+    #[test]
+    fn test_parse_form_enhance() {
+        let s = "<form method=\"POST\" use:enhance>\n\t<input name=\"email\" type=\"email\" required />\n\t<button type=\"submit\">Submit</button>\n</form>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_slot_forwarding() {
+        let s = "<Wrapper>\n\t<slot />\n</Wrapper>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_bind_contentwidth() {
+        let s = "<div bind:contentRect={rect} bind:contentBoxSize={size}>resizable</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_prop_expression() {
+        let s = "<Chart data={items.map(i => ({ x: i.date, y: i.value }))} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_else_if_chain_long() {
+        let s = "{#if a === 1}\n\t<p>one</p>\n{:else if a === 2}\n\t<p>two</p>\n{:else if a === 3}\n\t<p>three</p>\n{:else if a === 4}\n\t<p>four</p>\n{:else if a === 5}\n\t<p>five</p>\n{:else}\n\t<p>other</p>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_pre_with_code() {
+        let s = "<pre><code class=\"language-js\">const x = 1;\nconst y = 2;\nconsole.log(x + y);</code></pre>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_nested_component_slots() {
+        let s = "<Layout>\n\t<Sidebar slot=\"sidebar\">\n\t\t<NavItem href=\"/\">Home</NavItem>\n\t\t<NavItem href=\"/about\">About</NavItem>\n\t</Sidebar>\n\t<slot />\n</Layout>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    // --- towards 900 ---
+
+    #[test]
+    fn test_parse_svelte5_class_with_derived() {
+        let s = "<script>\n\tclass Counter {\n\t\t#count = $state(0);\n\t\tget count() { return this.#count; }\n\t\tget doubled() { return $derived(this.#count * 2); }\n\t\tincrement() { this.#count++; }\n\t}\n\tconst counter = new Counter();\n</script>\n<p>{counter.count}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_action_complex() {
+        let s = "<div use:portal={'body'} use:clickOutside={{handler: close, exclude: ['.menu']}} use:tooltip>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_transition_params_complex() {
+        let s = "<div transition:fly={{y: -200, duration: 500, delay: 100, easing: cubicOut}}>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_typing() {
+        let s = "<script lang=\"ts\">\n\timport type { ComponentProps } from 'svelte';\n\timport MyComponent from './MyComponent.svelte';\n\ttype Props = ComponentProps<MyComponent>;\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_reactive_literal_boolean() {
+        let s = "<script>\n\t$: flag = true;\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-reactive-literals"),
+            "Should flag reactive boolean literal");
+    }
+
+    #[test]
+    fn test_linter_no_reactive_literal_null() {
+        let s = "<script>\n\t$: val = null;\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-reactive-literals"),
+            "Should flag reactive null literal");
+    }
+
+    #[test]
+    fn test_prefer_class_directive_svelte_element() {
+        let s = "<svelte:element this=\"div\" class={active ? 'active' : ''}>text</svelte:element>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/prefer-class-directive"),
+            "Should suggest class directive for svelte:element");
+    }
+
+    #[test]
+    fn test_parse_multiline_tag() {
+        let s = "<div\n\tclass=\"container\"\n\tid=\"main\"\n\trole=\"main\"\n\taria-label=\"Main content\"\n\tdata-testid=\"main-container\"\n>\n\t<p>Content</p>\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_with_arrow() {
+        let s = "<button on:click={() => { count++; display = count > 10 ? 'big' : 'small'; }}>click</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_nested_ternary_in_attr() {
+        let s = "<div class={a ? 'x' : b ? 'y' : 'z'}>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_style_with_var() {
+        let s = "<div style:--custom-color={color} style:--custom-size=\"{size}px\">styled</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_script_with_async() {
+        let s = "<script>\n\tasync function fetchData() {\n\t\tconst res = await fetch('/api');\n\t\treturn await res.json();\n\t}\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_event_dispatch() {
+        let s = "<script>\n\timport { createEventDispatcher } from 'svelte';\n\tconst dispatch = createEventDispatcher();\n\tconst click = () => dispatch('custom', { detail: 42 });\n</script>\n<button on:click={click}>fire event</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte_options_accessors() {
+        let s = "<svelte:options accessors={true} />\n<script>\n\texport let value = 0;\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_with_computed_key() {
+        let s = "{#each items as item (`${item.type}-${item.id}`)}\n\t<p>{item.name}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_with_snippets_and_render() {
+        let s = "<Dialog>\n\t{#snippet header()}\n\t\t<h2>Title</h2>\n\t{/snippet}\n\t{#snippet body()}\n\t\t<p>Content</p>\n\t{/snippet}\n\t{#snippet footer()}\n\t\t<button>OK</button>\n\t{/snippet}\n</Dialog>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_script_complex_imports() {
+        let s = "<script>\n\timport { onMount, onDestroy, beforeUpdate, afterUpdate, tick } from 'svelte';\n\timport { writable, readable, derived, get } from 'svelte/store';\n\timport { fade, fly, slide, scale, draw, crossfade } from 'svelte/transition';\n\timport { flip } from 'svelte/animate';\n\timport { cubicOut, elasticOut } from 'svelte/easing';\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_head_with_opengraph() {
+        let s = "<svelte:head>\n\t<title>{title}</title>\n\t<meta name=\"description\" content={description} />\n\t<meta property=\"og:title\" content={title} />\n\t<meta property=\"og:description\" content={description} />\n\t<meta property=\"og:image\" content={image} />\n\t<link rel=\"canonical\" href={url} />\n</svelte:head>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_body_with_events() {
+        let s = "<svelte:body\n\ton:mouseenter={() => hovered = true}\n\ton:mouseleave={() => hovered = false}\n/>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_window_with_bindings() {
+        let s = "<svelte:window\n\tbind:scrollY={y}\n\tbind:innerWidth={w}\n\tbind:innerHeight={h}\n\tbind:online={isOnline}\n/>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_clean_sveltekit_svelte5() {
+        let s = "<script lang=\"ts\">\n\tlet { data } = $props();\n\tlet count = $state(0);\n\tlet doubled = $derived(count * 2);\n</script>\n\n<h1>{data.title}</h1>\n<p>Count: {count}, Doubled: {doubled}</p>\n<button onclick={() => count++}>+1</button>\n\n<style lang=\"scss\">\n\th1 { color: var(--primary); }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        let diags = Linter::recommended().lint(&r.ast, s);
+        let relevant: Vec<_> = diags.iter()
+            .filter(|d| d.rule_name != "svelte/no-unused-class-name")
+            .collect();
+        assert!(relevant.is_empty(), "Clean SvelteKit+Svelte5 page: {:?}",
+            relevant.iter().map(|d| format!("{}: {}", d.rule_name, d.message)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_parse_conditional_class_multiple() {
+        let s = "<div\n\tclass=\"base\"\n\tclass:primary={variant === 'primary'}\n\tclass:secondary={variant === 'secondary'}\n\tclass:large={size === 'lg'}\n\tclass:small={size === 'sm'}\n>button</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_bind_media_elements() {
+        let s = "<video\n\tsrc={videoUrl}\n\tbind:duration\n\tbind:currentTime\n\tbind:paused\n\tbind:volume\n\tbind:muted\n\tbind:playbackRate\n\tbind:seeking\n\tbind:ended\n/>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_nested_3_levels() {
+        let s = "{#each departments as dept}\n\t<h2>{dept.name}</h2>\n\t{#each dept.teams as team}\n\t\t<h3>{team.name}</h3>\n\t\t{#each team.members as member (member.id)}\n\t\t\t<p>{member.name}</p>\n\t\t{/each}\n\t{/each}\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_await_with_loading_state() {
+        let s = "<script>\n\tlet promise = null;\n\tconst load = () => promise = fetch('/api').then(r => r.json());\n</script>\n\n<button onclick={load}>Load</button>\n{#if promise}\n\t{#await promise}\n\t\t<p>Loading...</p>\n\t{:then data}\n\t\t<pre>{JSON.stringify(data, null, 2)}</pre>\n\t{:catch err}\n\t\t<p class=\"error\">{err.message}</p>\n\t{/await}\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_key_block_with_transition() {
+        let s = "{#key selectedTab}\n\t<div transition:fade>\n\t\t{#if selectedTab === 'a'}\n\t\t\t<TabA />\n\t\t{:else}\n\t\t\t<TabB />\n\t\t{/if}\n\t</div>\n{/key}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_inline_component() {
+        let s = "<svelte:component this={isAdmin ? AdminPanel : UserPanel} {data} on:action={handleAction} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- CLI and integration tests ---
 
     #[test]
