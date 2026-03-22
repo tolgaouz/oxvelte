@@ -1,0 +1,98 @@
+
+======================================================================
+  shadcn-svelte
+======================================================================
+  Files: 1603 .svelte files
+
+  Both linters: 0 diagnostics (clean code!)
+  ESLint: 2453ms | Oxvelte: 16ms
+  Speedup: 153.3x
+
+
+======================================================================
+  open-webui
+======================================================================
+  Files: 549 .svelte files
+
+  Rule                                                ESLint Oxvelte  Match
+  -------------------------------------------------- ------- -------  -----
+  svelte/infinite-reactive-loop                            8       0   ✗
+  svelte/no-at-html-tags                                   4       0   ✗
+  svelte/no-unused-svelte-ignore                           2       0   ✗
+  svelte/no-useless-mustaches                             23       0   ✗
+  svelte/prefer-svelte-reactivity                          1       0   ≈
+  svelte/require-each-key                                 56       0   ✗
+
+  ESLint:     94 diagnostics  (2240ms)
+  Oxvelte:     0 diagnostics  (36ms)
+  Speedup: 62.2x faster
+  Match: 0/6 exact, 1/6 close, 5/6 mismatch
+
+  Mismatches (FP=false positive, FN=false negative):
+    svelte/infinite-reactive-loop: FN (-8)
+    svelte/no-at-html-tags: FN (-4)
+    svelte/no-unused-svelte-ignore: FN (-2)
+    svelte/no-useless-mustaches: FN (-23)
+    svelte/require-each-key: FN (-56)
+
+
+======================================================================
+  immich/web
+======================================================================
+  Files: 400 .svelte files
+
+  Rule                                                ESLint Oxvelte  Match
+  -------------------------------------------------- ------- -------  -----
+  svelte/no-dom-manipulating                               0       5   ✗
+  svelte/no-inner-declarations                             0       4   ✗
+  svelte/no-navigation-without-resolve                     0      11   ✗
+  svelte/no-unknown-style-directive-property               0       4   ✗
+  svelte/no-unused-props                                   0      64   ✗
+  svelte/require-store-reactive-access                     0       4   ✗
+  svelte/valid-each-key                                    0      17   ✗
+
+  ESLint:      0 diagnostics  (1121ms)
+  Oxvelte:   109 diagnostics  (230ms)
+  Speedup: 4.9x faster
+  Match: 0/7 exact, 0/7 close, 7/7 mismatch
+
+  Mismatches (FP=false positive, FN=false negative):
+    svelte/no-dom-manipulating: FP (+5)
+    svelte/no-inner-declarations: FP (+4)
+    svelte/no-navigation-without-resolve: FP (+11)
+    svelte/no-unknown-style-directive-property: FP (+4)
+    svelte/no-unused-props: FP (+64)
+    svelte/require-store-reactive-access: FP (+4)
+    svelte/valid-each-key: FP (+17)
+
+
+======================================================================
+  sveltejs/kit
+======================================================================
+  Files: 876 .svelte files
+
+  Rule                                                ESLint Oxvelte  Match
+  -------------------------------------------------- ------- -------  -----
+  svelte/no-at-html-tags                                   3       3   ✓
+  svelte/no-immutable-reactive-statements                  0       3   ✗
+  svelte/no-navigation-without-resolve                     0     298   ✗
+  svelte/no-useless-mustaches                              0       4   ✗
+  svelte/require-each-key                                 14      21   ✗
+  svelte/require-event-dispatcher-types                    0       4   ✗
+  svelte/system                                            0       3   ✗
+  svelte/valid-prop-names-in-kit-pages                     0       9   ✗
+
+  ESLint:     17 diagnostics  (1738ms)
+  Oxvelte:   345 diagnostics  (28ms)
+  Speedup: 62.1x faster
+  Match: 1/8 exact, 0/8 close, 7/8 mismatch
+
+  Mismatches (FP=false positive, FN=false negative):
+    svelte/no-immutable-reactive-statements: FP (+3)
+    svelte/no-navigation-without-resolve: FP (+298)
+    svelte/no-useless-mustaches: FP (+4)
+    svelte/require-each-key: FP (+7)
+    svelte/require-event-dispatcher-types: FP (+4)
+    svelte/system: FP (+3)
+    svelte/valid-prop-names-in-kit-pages: FP (+9)
+

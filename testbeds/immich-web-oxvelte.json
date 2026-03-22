@@ -1,0 +1,983 @@
+[
+  {
+    "column": 13,
+    "endColumn": 33,
+    "endLine": 60,
+    "file": "testbeds/immich/web/src/lib/modals/ObtainiumConfigModal.svelte",
+    "line": 60,
+    "message": "Unexpected href link without resolve().",
+    "rule": "svelte/no-navigation-without-resolve"
+  },
+  {
+    "column": 7,
+    "endColumn": 14,
+    "endLine": 40,
+    "file": "testbeds/immich/web/src/lib/modals/AvatarEditModal.svelte",
+    "line": 36,
+    "message": "Using the iteration variable 'color' directly as the key is not recommended. Use a unique identifier like 'color.id'.",
+    "rule": "svelte/valid-each-key"
+  },
+  {
+    "column": 5,
+    "endColumn": 12,
+    "endLine": 87,
+    "file": "testbeds/immich/web/src/lib/modals/AssetTagModal.svelte",
+    "line": 82,
+    "message": "Using the iteration variable 'tagId' directly as the key is not recommended. Use a unique identifier like 'tagId.id'.",
+    "rule": "svelte/valid-each-key"
+  },
+  {
+    "column": 19,
+    "endColumn": 26,
+    "endLine": 72,
+    "file": "testbeds/immich/web/src/lib/modals/ShortcutsModal.svelte",
+    "line": 66,
+    "message": "Using the iteration variable 'key' directly as the key is not recommended. Use a unique identifier like 'key.id'.",
+    "rule": "svelte/valid-each-key"
+  },
+  {
+    "column": 19,
+    "endColumn": 26,
+    "endLine": 93,
+    "file": "testbeds/immich/web/src/lib/modals/ShortcutsModal.svelte",
+    "line": 87,
+    "message": "Using the iteration variable 'key' directly as the key is not recommended. Use a unique identifier like 'key.id'.",
+    "rule": "svelte/valid-each-key"
+  },
+  {
+    "column": 8,
+    "endColumn": 18,
+    "endLine": 18,
+    "file": "testbeds/immich/web/src/lib/modals/HelpAndFeedbackModal.svelte",
+    "line": 18,
+    "message": "Unexpected href link without resolve().",
+    "rule": "svelte/no-navigation-without-resolve"
+  },
+  {
+    "column": 8,
+    "endColumn": 24,
+    "endLine": 27,
+    "file": "testbeds/immich/web/src/lib/components/utilities-page/utilities-menu.svelte",
+    "line": 27,
+    "message": "Unexpected href link without resolve().",
+    "rule": "svelte/no-navigation-without-resolve"
+  },
+  {
+    "column": 61,
+    "endColumn": 69,
+    "endLine": 115,
+    "file": "testbeds/immich/web/src/lib/components/album-page/album-viewer.svelte",
+    "line": 115,
+    "message": "Unexpected href link without resolve().",
+    "rule": "svelte/no-navigation-without-resolve"
+  },
+  {
+    "column": 5,
+    "endColumn": 18,
+    "endLine": 37,
+    "file": "testbeds/immich/web/src/lib/components/album-page/albums-list.svelte",
+    "line": 37,
+    "message": "'albumGroupIds' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 52,
+    "endColumn": 76,
+    "endLine": 287,
+    "file": "testbeds/immich/web/src/lib/components/album-page/albums-list.svelte",
+    "line": 287,
+    "message": "Use the $ prefix or the get function to access reactive values instead of accessing the raw store.",
+    "rule": "svelte/require-store-reactive-access"
+  },
+  {
+    "column": 3,
+    "endColumn": 10,
+    "endLine": 16,
+    "file": "testbeds/immich/web/src/lib/components/LoadingDots.svelte",
+    "line": 13,
+    "message": "Using the iteration variable 'i' directly as the key is not recommended. Use a unique identifier like 'i.id'.",
+    "rule": "svelte/valid-each-key"
+  },
+  {
+    "column": 63,
+    "endColumn": 71,
+    "endLine": 106,
+    "file": "testbeds/immich/web/src/lib/components/share-page/individual-shared-viewer.svelte",
+    "line": 106,
+    "message": "Unexpected href link without resolve().",
+    "rule": "svelte/no-navigation-without-resolve"
+  },
+  {
+    "column": 5,
+    "endColumn": 24,
+    "endLine": 38,
+    "file": "testbeds/immich/web/src/lib/components/faces-page/people-search.svelte",
+    "line": 38,
+    "message": "'searchedPeopleLocal' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 13,
+    "endLine": 45,
+    "file": "testbeds/immich/web/src/lib/components/faces-page/people-search.svelte",
+    "line": 45,
+    "message": "'onSearch' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 3,
+    "endColumn": 45,
+    "endLine": 219,
+    "file": "testbeds/immich/web/src/lib/components/asset-viewer/photo-viewer.svelte",
+    "line": 219,
+    "message": "Use the $ prefix or the get function to access reactive values instead of accessing the raw store.",
+    "rule": "svelte/require-store-reactive-access"
+  },
+  {
+    "column": 15,
+    "endColumn": 101,
+    "endLine": 503,
+    "file": "testbeds/immich/web/src/lib/components/asset-viewer/detail-panel.svelte",
+    "line": 503,
+    "message": "Unexpected href link without resolve().",
+    "rule": "svelte/no-navigation-without-resolve"
+  },
+  {
+    "column": 5,
+    "endColumn": 16,
+    "endLine": 26,
+    "file": "testbeds/immich/web/src/lib/components/asset-viewer/video-native-viewer.svelte",
+    "line": 26,
+    "message": "'onNextAsset' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 17,
+    "endLine": 27,
+    "file": "testbeds/immich/web/src/lib/components/asset-viewer/video-native-viewer.svelte",
+    "line": 27,
+    "message": "'onVideoEnded' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 19,
+    "endLine": 28,
+    "file": "testbeds/immich/web/src/lib/components/asset-viewer/video-native-viewer.svelte",
+    "line": 28,
+    "message": "'onVideoStarted' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 12,
+    "endLine": 29,
+    "file": "testbeds/immich/web/src/lib/components/asset-viewer/video-native-viewer.svelte",
+    "line": 29,
+    "message": "'onClose' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 15,
+    "endLine": 20,
+    "file": "testbeds/immich/web/src/lib/components/asset-viewer/slideshow-bar.svelte",
+    "line": 20,
+    "message": "'onPrevious' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 12,
+    "endLine": 21,
+    "file": "testbeds/immich/web/src/lib/components/asset-viewer/slideshow-bar.svelte",
+    "line": 21,
+    "message": "'onClose' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 22,
+    "endLine": 22,
+    "file": "testbeds/immich/web/src/lib/components/asset-viewer/slideshow-bar.svelte",
+    "line": 22,
+    "message": "'onSetToFullScreen' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 7,
+    "endColumn": 14,
+    "endLine": 56,
+    "file": "testbeds/immich/web/src/lib/components/asset-viewer/download-panel.svelte",
+    "line": 23,
+    "message": "Using the iteration variable 'downloadKey' directly as the key is not recommended. Use a unique identifier like 'downloadKey.id'.",
+    "rule": "svelte/valid-each-key"
+  },
+  {
+    "column": 7,
+    "endColumn": 14,
+    "endLine": 104,
+    "file": "testbeds/immich/web/src/lib/components/asset-viewer/editor/transform-tool/crop-area.svelte",
+    "line": 95,
+    "message": "Using the iteration variable 'edge' directly as the key is not recommended. Use a unique identifier like 'edge.id'.",
+    "rule": "svelte/valid-each-key"
+  },
+  {
+    "column": 7,
+    "endColumn": 14,
+    "endLine": 116,
+    "file": "testbeds/immich/web/src/lib/components/asset-viewer/editor/transform-tool/crop-area.svelte",
+    "line": 106,
+    "message": "Using the iteration variable 'corner' directly as the key is not recommended. Use a unique identifier like 'corner.id'.",
+    "rule": "svelte/valid-each-key"
+  },
+  {
+    "column": 3,
+    "endColumn": 25,
+    "endLine": 44,
+    "file": "testbeds/immich/web/src/lib/components/asset-viewer/editor/transform-tool/transform-tool.svelte",
+    "line": 44,
+    "message": "Move function declaration to program root.",
+    "rule": "svelte/no-inner-declarations"
+  },
+  {
+    "column": 3,
+    "endColumn": 29,
+    "endLine": 50,
+    "file": "testbeds/immich/web/src/lib/components/asset-viewer/editor/transform-tool/transform-tool.svelte",
+    "line": 50,
+    "message": "Move function declaration to program root.",
+    "rule": "svelte/no-inner-declarations"
+  },
+  {
+    "column": 9,
+    "endColumn": 29,
+    "endLine": 62,
+    "file": "testbeds/immich/web/src/lib/components/asset-viewer/editor/transform-tool/transform-tool.svelte",
+    "line": 62,
+    "message": "Move function declaration to program root.",
+    "rule": "svelte/no-inner-declarations"
+  },
+  {
+    "column": 3,
+    "endColumn": 23,
+    "endLine": 66,
+    "file": "testbeds/immich/web/src/lib/components/asset-viewer/editor/transform-tool/transform-tool.svelte",
+    "line": 66,
+    "message": "Move function declaration to program root.",
+    "rule": "svelte/no-inner-declarations"
+  },
+  {
+    "column": 7,
+    "endColumn": 14,
+    "endLine": 60,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/tree/breadcrumbs.svelte",
+    "line": 53,
+    "message": "Using the iteration variable 'parent' directly as the key is not recommended. Use a unique identifier like 'parent.id'.",
+    "rule": "svelte/valid-each-key"
+  },
+  {
+    "column": 24,
+    "endColumn": 29,
+    "endLine": 39,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/settings/setting-accordion-state.svelte",
+    "line": 39,
+    "message": "Use `resolveRoute` from `$app/paths` instead of passing a raw string to `goto`.",
+    "rule": "svelte/no-navigation-without-resolve"
+  },
+  {
+    "column": 5,
+    "endColumn": 13,
+    "endLine": 16,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/settings/setting-switch.svelte",
+    "line": 16,
+    "message": "'children' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 34,
+    "endLine": 96,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/side-bar/server-status.svelte",
+    "line": 96,
+    "message": "Unexpected href link without resolve().",
+    "rule": "svelte/no-navigation-without-resolve"
+  },
+  {
+    "column": 6,
+    "endColumn": 46,
+    "endLine": 41,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/combobox.svelte",
+    "line": 41,
+    "message": "'* whether creating new items is allowed.' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 6,
+    "endColumn": 8,
+    "endLine": 42,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/combobox.svelte",
+    "line": 42,
+    "message": "'*/' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 6,
+    "endColumn": 50,
+    "endLine": 45,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/combobox.svelte",
+    "line": 45,
+    "message": "'* select first matching option on enter key.' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 6,
+    "endColumn": 8,
+    "endLine": 42,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/combobox.svelte",
+    "line": 42,
+    "message": "'*/' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 15,
+    "endLine": 49,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/combobox.svelte",
+    "line": 49,
+    "message": "'forceFocus' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 7,
+    "endColumn": 14,
+    "endLine": 78,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/search-bar/search-tags-section.svelte",
+    "line": 73,
+    "message": "Using the iteration variable 'tagId' directly as the key is not recommended. Use a unique identifier like 'tagId.id'.",
+    "rule": "svelte/valid-each-key"
+  },
+  {
+    "column": 6,
+    "endColumn": 25,
+    "endLine": 10,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/progress-bar/progress-bar.svelte",
+    "line": 10,
+    "message": "'* Autoplay on mount' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 6,
+    "endColumn": 22,
+    "endLine": 11,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/progress-bar/progress-bar.svelte",
+    "line": 11,
+    "message": "'* @default false' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 6,
+    "endColumn": 8,
+    "endLine": 12,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/progress-bar/progress-bar.svelte",
+    "line": 12,
+    "message": "'*/' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 6,
+    "endColumn": 27,
+    "endLine": 15,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/progress-bar/progress-bar.svelte",
+    "line": 15,
+    "message": "'* Progress bar status' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 6,
+    "endColumn": 8,
+    "endLine": 12,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/progress-bar/progress-bar.svelte",
+    "line": 12,
+    "message": "'*/' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 13,
+    "endLine": 22,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/progress-bar/progress-bar.svelte",
+    "line": 22,
+    "message": "'onPaused' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 3,
+    "endColumn": 62,
+    "endLine": 74,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/context-menu/context-menu.svelte",
+    "line": 74,
+    "message": "Unknown CSS property 'scrollbar-color'.",
+    "rule": "svelte/no-unknown-style-directive-property"
+  },
+  {
+    "column": 5,
+    "endColumn": 20,
+    "endLine": 65,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/map/map.svelte",
+    "line": 65,
+    "message": "'onClusterSelect' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 17,
+    "endLine": 66,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/map/map.svelte",
+    "line": 66,
+    "message": "'onClickPoint' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 10,
+    "endLine": 67,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/map/map.svelte",
+    "line": 67,
+    "message": "'popup' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 12,
+    "endLine": 68,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/map/map.svelte",
+    "line": 68,
+    "message": "'rounded' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 23,
+    "endLine": 69,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/map/map.svelte",
+    "line": 69,
+    "message": "'showSimpleControls' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 18,
+    "endLine": 70,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/map/map.svelte",
+    "line": 70,
+    "message": "'autoFitBounds' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 17,
+    "endColumn": 22,
+    "endLine": 47,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/navigation-bar/notification-panel.svelte",
+    "line": 47,
+    "message": "Use `resolveRoute` from `$app/paths` instead of passing a raw string to `goto`.",
+    "rule": "svelte/no-navigation-without-resolve"
+  },
+  {
+    "column": 5,
+    "endColumn": 12,
+    "endLine": 16,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/control-app-bar.svelte",
+    "line": 16,
+    "message": "'leading' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 13,
+    "endLine": 17,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/control-app-bar.svelte",
+    "line": 17,
+    "message": "'children' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 13,
+    "endLine": 18,
+    "file": "testbeds/immich/web/src/lib/components/shared-components/control-app-bar.svelte",
+    "line": 18,
+    "message": "'trailing' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 7,
+    "endColumn": 34,
+    "endLine": 34,
+    "file": "testbeds/immich/web/src/lib/components/memory-page/memory-photo-viewer.svelte",
+    "line": 34,
+    "message": "Do not mutate the DOM directly. Use Svelte's reactivity instead.",
+    "rule": "svelte/no-dom-manipulating"
+  },
+  {
+    "column": 5,
+    "endColumn": 22,
+    "endLine": 16,
+    "file": "testbeds/immich/web/src/lib/components/places-page/places-list.svelte",
+    "line": 16,
+    "message": "'searchResultCount' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 19,
+    "endLine": 18,
+    "file": "testbeds/immich/web/src/lib/components/places-page/places-list.svelte",
+    "line": 18,
+    "message": "'placesGroupIds' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 13,
+    "endLine": 12,
+    "file": "testbeds/immich/web/src/lib/components/QueueCardButton.svelte",
+    "line": 12,
+    "message": "'children' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 33,
+    "endColumn": 60,
+    "endLine": 160,
+    "file": "testbeds/immich/web/src/lib/components/assets/thumbnail/thumbnail.svelte",
+    "line": 160,
+    "message": "Do not mutate the DOM directly. Use Svelte's reactivity instead.",
+    "rule": "svelte/no-dom-manipulating"
+  },
+  {
+    "column": 9,
+    "endColumn": 36,
+    "endLine": 176,
+    "file": "testbeds/immich/web/src/lib/components/assets/thumbnail/thumbnail.svelte",
+    "line": 176,
+    "message": "Do not mutate the DOM directly. Use Svelte's reactivity instead.",
+    "rule": "svelte/no-dom-manipulating"
+  },
+  {
+    "column": 9,
+    "endColumn": 36,
+    "endLine": 177,
+    "file": "testbeds/immich/web/src/lib/components/assets/thumbnail/thumbnail.svelte",
+    "line": 177,
+    "message": "Do not mutate the DOM directly. Use Svelte's reactivity instead.",
+    "rule": "svelte/no-dom-manipulating"
+  },
+  {
+    "column": 9,
+    "endColumn": 36,
+    "endLine": 178,
+    "file": "testbeds/immich/web/src/lib/components/assets/thumbnail/thumbnail.svelte",
+    "line": 178,
+    "message": "Do not mutate the DOM directly. Use Svelte's reactivity instead.",
+    "rule": "svelte/no-dom-manipulating"
+  },
+  {
+    "column": 5,
+    "endColumn": 18,
+    "endLine": 30,
+    "file": "testbeds/immich/web/src/lib/components/timeline/Scrubber.svelte",
+    "line": 30,
+    "message": "'scrubberWidth' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 7,
+    "endColumn": 54,
+    "endLine": 50,
+    "file": "testbeds/immich/web/src/lib/components/timeline/AssetLayout.svelte",
+    "line": 50,
+    "message": "Unknown CSS property 'inset-inline-start'.",
+    "rule": "svelte/no-unknown-style-directive-property"
+  },
+  {
+    "column": 5,
+    "endColumn": 17,
+    "endLine": 14,
+    "file": "testbeds/immich/web/src/lib/components/timeline/AssetLayout.svelte",
+    "line": 14,
+    "message": "'viewerAssets' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 10,
+    "endLine": 15,
+    "file": "testbeds/immich/web/src/lib/components/timeline/AssetLayout.svelte",
+    "line": 15,
+    "message": "'width' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 11,
+    "endLine": 16,
+    "file": "testbeds/immich/web/src/lib/components/timeline/AssetLayout.svelte",
+    "line": 16,
+    "message": "'height' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 12,
+    "endLine": 17,
+    "file": "testbeds/immich/web/src/lib/components/timeline/AssetLayout.svelte",
+    "line": 17,
+    "message": "'manager' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 14,
+    "endLine": 18,
+    "file": "testbeds/immich/web/src/lib/components/timeline/AssetLayout.svelte",
+    "line": 18,
+    "message": "'thumbnail' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 9,
+    "endColumn": 16,
+    "endLine": 21,
+    "file": "testbeds/immich/web/src/lib/components/timeline/AssetLayout.svelte",
+    "line": 20,
+    "message": "'{\n          asset' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 31,
+    "endColumn": 32,
+    "endLine": 14,
+    "file": "testbeds/immich/web/src/lib/components/timeline/AssetLayout.svelte",
+    "line": 14,
+    "message": "']' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 6,
+    "endLine": 25,
+    "file": "testbeds/immich/web/src/lib/components/timeline/AssetLayout.svelte",
+    "line": 25,
+    "message": "'>' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 26,
+    "endLine": 26,
+    "file": "testbeds/immich/web/src/lib/components/timeline/AssetLayout.svelte",
+    "line": 26,
+    "message": "'customThumbnailLayout' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 53,
+    "endLine": 65,
+    "file": "testbeds/immich/web/src/lib/components/timeline/Month.svelte",
+    "line": 65,
+    "message": "Unknown CSS property 'inset-inline-start'.",
+    "rule": "svelte/no-unknown-style-directive-property"
+  },
+  {
+    "column": 3,
+    "endColumn": 75,
+    "endLine": 620,
+    "file": "testbeds/immich/web/src/lib/components/timeline/Timeline.svelte",
+    "line": 620,
+    "message": "Unknown CSS property 'margin-inline-end'.",
+    "rule": "svelte/no-unknown-style-directive-property"
+  },
+  {
+    "column": 69,
+    "endColumn": 96,
+    "endLine": 33,
+    "file": "testbeds/immich/web/src/lib/components/timeline/Timeline.svelte",
+    "line": 33,
+    "message": "'if `true`, then look at the' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 6,
+    "endColumn": 90,
+    "endLine": 34,
+    "file": "testbeds/immich/web/src/lib/components/timeline/Timeline.svelte",
+    "line": 34,
+    "message": "'`AssetViewingStore.gridScrollTarget` and load and scroll to the asset specified, and' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 6,
+    "endColumn": 94,
+    "endLine": 35,
+    "file": "testbeds/immich/web/src/lib/components/timeline/Timeline.svelte",
+    "line": 35,
+    "message": "'additionally, update the page location/url with the asset as the timeline is scrolled */' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 13,
+    "endLine": 48,
+    "file": "testbeds/immich/web/src/lib/components/timeline/Timeline.svelte",
+    "line": 48,
+    "message": "'onEscape' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 13,
+    "endLine": 49,
+    "file": "testbeds/immich/web/src/lib/components/timeline/Timeline.svelte",
+    "line": 49,
+    "message": "'children' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 10,
+    "endLine": 50,
+    "file": "testbeds/immich/web/src/lib/components/timeline/Timeline.svelte",
+    "line": 50,
+    "message": "'empty' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 26,
+    "endLine": 51,
+    "file": "testbeds/immich/web/src/lib/components/timeline/Timeline.svelte",
+    "line": 51,
+    "message": "'customThumbnailLayout' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 21,
+    "endLine": 52,
+    "file": "testbeds/immich/web/src/lib/components/timeline/Timeline.svelte",
+    "line": 52,
+    "message": "'onThumbnailClick' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 5,
+    "endColumn": 14,
+    "endLine": 25,
+    "file": "testbeds/immich/web/src/lib/components/timeline/TimelineAssetViewer.svelte",
+    "line": 25,
+    "message": "'invisible' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 19,
+    "endColumn": 26,
+    "endLine": 218,
+    "file": "testbeds/immich/web/src/lib/components/admin-settings/StorageTemplateSettings.svelte",
+    "line": 216,
+    "message": "Using the iteration variable 'preset' directly as the key is not recommended. Use a unique identifier like 'preset.id'.",
+    "rule": "svelte/valid-each-key"
+  },
+  {
+    "column": 7,
+    "endColumn": 14,
+    "endLine": 81,
+    "file": "testbeds/immich/web/src/lib/components/admin-settings/JobSettings.svelte",
+    "line": 58,
+    "message": "Using the iteration variable 'queueName' directly as the key is not recommended. Use a unique identifier like 'queueName.id'.",
+    "rule": "svelte/valid-each-key"
+  },
+  {
+    "column": 61,
+    "endColumn": 69,
+    "endLine": 93,
+    "file": "testbeds/immich/web/src/lib/components/pages/SharedLinkPage.svelte",
+    "line": 93,
+    "message": "Unexpected href link without resolve().",
+    "rule": "svelte/no-navigation-without-resolve"
+  },
+  {
+    "column": 15,
+    "endColumn": 20,
+    "endLine": 29,
+    "file": "testbeds/immich/web/src/lib/components/user-settings-page/oauth-settings.svelte",
+    "line": 29,
+    "message": "Use `resolveRoute` from `$app/paths` instead of passing a raw string to `goto`.",
+    "rule": "svelte/no-navigation-without-resolve"
+  },
+  {
+    "column": 5,
+    "endColumn": 12,
+    "endLine": 55,
+    "file": "testbeds/immich/web/src/lib/components/user-settings-page/user-api-key-grid.svelte",
+    "line": 45,
+    "message": "Using the iteration variable 'item' directly as the key is not recommended. Use a unique identifier like 'item.id'.",
+    "rule": "svelte/valid-each-key"
+  },
+  {
+    "column": 5,
+    "endColumn": 11,
+    "endLine": 28,
+    "file": "testbeds/immich/web/src/lib/components/AdaptiveImage.svelte",
+    "line": 28,
+    "message": "'imgRef' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 6,
+    "endColumn": 50,
+    "endLine": 8,
+    "file": "testbeds/immich/web/src/lib/elements/SkipLink.svelte",
+    "line": 8,
+    "message": "'* Target for the skip link to move focus to.' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 6,
+    "endColumn": 8,
+    "endLine": 9,
+    "file": "testbeds/immich/web/src/lib/elements/SkipLink.svelte",
+    "line": 9,
+    "message": "'*/' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 6,
+    "endColumn": 38,
+    "endLine": 12,
+    "file": "testbeds/immich/web/src/lib/elements/SkipLink.svelte",
+    "line": 12,
+    "message": "'* Text for the skip link button.' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 6,
+    "endColumn": 8,
+    "endLine": 9,
+    "file": "testbeds/immich/web/src/lib/elements/SkipLink.svelte",
+    "line": 9,
+    "message": "'*/' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 6,
+    "endColumn": 87,
+    "endLine": 16,
+    "file": "testbeds/immich/web/src/lib/elements/SkipLink.svelte",
+    "line": 16,
+    "message": "'* Breakpoint at which the skip link is visible. Defaults to always being visible.' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 6,
+    "endColumn": 8,
+    "endLine": 9,
+    "file": "testbeds/immich/web/src/lib/elements/SkipLink.svelte",
+    "line": 9,
+    "message": "'*/' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 7,
+    "endColumn": 14,
+    "endLine": 137,
+    "file": "testbeds/immich/web/src/lib/elements/Dropdown.svelte",
+    "line": 114,
+    "message": "Using the iteration variable 'option' directly as the key is not recommended. Use a unique identifier like 'option.id'.",
+    "rule": "svelte/valid-each-key"
+  },
+  {
+    "column": 5,
+    "endColumn": 11,
+    "endLine": 31,
+    "file": "testbeds/immich/web/src/lib/elements/Dropdown.svelte",
+    "line": 31,
+    "message": "'render' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 6,
+    "endColumn": 35,
+    "endLine": 69,
+    "file": "testbeds/immich/web/src/lib/elements/Portal.svelte",
+    "line": 69,
+    "message": "'* DOM Element or CSS Selector' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 6,
+    "endColumn": 8,
+    "endLine": 70,
+    "file": "testbeds/immich/web/src/lib/elements/Portal.svelte",
+    "line": 70,
+    "message": "'*/' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 40,
+    "endColumn": 49,
+    "endLine": 45,
+    "file": "testbeds/immich/web/src/lib/elements/DurationInput.svelte",
+    "line": 45,
+    "message": "Use the $ prefix or the get function to access reactive values instead of accessing the raw store.",
+    "rule": "svelte/require-store-reactive-access"
+  },
+  {
+    "column": 5,
+    "endColumn": 12,
+    "endLine": 13,
+    "file": "testbeds/immich/web/src/lib/elements/SearchBar.svelte",
+    "line": 13,
+    "message": "'onReset' is an unused Props property.",
+    "rule": "svelte/no-unused-props"
+  },
+  {
+    "column": 15,
+    "endColumn": 22,
+    "endLine": 91,
+    "file": "testbeds/immich/web/src/routes/admin/library-management/[id]/+layout.svelte",
+    "line": 80,
+    "message": "Using the iteration variable 'folder' directly as the key is not recommended. Use a unique identifier like 'folder.id'.",
+    "rule": "svelte/valid-each-key"
+  },
+  {
+    "column": 13,
+    "endColumn": 20,
+    "endLine": 111,
+    "file": "testbeds/immich/web/src/routes/admin/library-management/[id]/+layout.svelte",
+    "line": 100,
+    "message": "Using the iteration variable 'exclusionPattern' directly as the key is not recommended. Use a unique identifier like 'exclusionPattern.id'.",
+    "rule": "svelte/valid-each-key"
+  },
+  {
+    "column": 5,
+    "endColumn": 12,
+    "endLine": 283,
+    "file": "testbeds/immich/web/src/routes/(user)/search/[[photos=photos]]/[[assetId=id]]/+page.svelte",
+    "line": 251,
+    "message": "Using the iteration variable 'searchKey' directly as the key is not recommended. Use a unique identifier like 'searchKey.id'.",
+    "rule": "svelte/valid-each-key"
+  },
+  {
+    "column": 39,
+    "endColumn": 40,
+    "endLine": 146,
+    "file": "testbeds/immich/web/src/routes/+layout.svelte",
+    "line": 146,
+    "message": "Use the $ prefix or the get function to access reactive values instead of accessing the raw store.",
+    "rule": "svelte/require-store-reactive-access"
+  }
+]
