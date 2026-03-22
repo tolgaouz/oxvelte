@@ -1002,6 +1002,83 @@ mod tests {
             "Should NOT flag window inside if block");
     }
 
+    // --- beyond 800 ---
+
+    #[test]
+    fn test_parse_each_object_destructure() {
+        let s = "{#each entries as { key, value }}\n\t<dt>{key}</dt><dd>{value}</dd>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_array_destructure() {
+        let s = "{#each pairs as [a, b] (a)}\n\t<p>{a} = {b}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_style_with_comments() {
+        let s = "<style>\n\t/* header styles */\n\th1 { color: blue; }\n\t/* footer */\n\tfooter { background: gray; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_multiple_buttons_no_type() {
+        let s = "<div>\n\t<button>A</button>\n\t<button type=\"button\">B</button>\n\t<button>C</button>\n</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let btn_diags: Vec<_> = diags.iter().filter(|d| d.rule_name == "svelte/button-has-type").collect();
+        assert_eq!(btn_diags.len(), 2, "Should flag 2 buttons without type");
+    }
+
+    #[test]
+    fn test_parse_svelte5_onclick_shorthand() {
+        let s = "<button {onclick}>text</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_derived_by_complex() {
+        let s = "<script>\n\tlet items = $state([1,2,3]);\n\tlet total = $derived.by(() => {\n\t\tlet sum = 0;\n\t\tfor (const i of items) sum += i;\n\t\treturn sum;\n\t});\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_effect_cleanup() {
+        let s = "<script>\n\t$effect(() => {\n\t\tconst handler = () => {};\n\t\twindow.addEventListener('resize', handler);\n\t\treturn () => window.removeEventListener('resize', handler);\n\t});\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_inspect_with_callback() {
+        let s = "<script>\n\t$inspect(count).with(console.trace);\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-inspect"),
+            "Should flag $inspect.with()");
+    }
+
+    #[test]
+    fn test_parse_attribute_with_at_sign() {
+        let s = "<div @click={handler}>text</div>";
+        let r = parser::parse(s);
+        // May or may not parse, but shouldn't panic
+        let _ = r.ast.html.nodes.len();
+    }
+
+    #[test]
+    fn test_parse_css_is_where() {
+        let s = "<style>\n\t:is(h1, h2, h3) { color: blue; }\n\t:where(.a, .b) { margin: 0; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- final push to 800 ---
 
     #[test]
