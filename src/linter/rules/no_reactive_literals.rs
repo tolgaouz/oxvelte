@@ -22,6 +22,13 @@ impl Rule for NoReactiveLiterals {
             while let Some(pos) = content[search_from..].find("$:") {
                 let abs_pos = search_from + pos;
                 let after = content[abs_pos + 2..].trim_start();
+
+                // Skip `$: { ... }` reactive blocks — they're not simple assignments
+                if after.starts_with('{') {
+                    search_from = abs_pos + 2;
+                    continue;
+                }
+
                 // Check if it's a simple assignment to a literal
                 if let Some(eq_pos) = after.find('=') {
                     let rhs = after[eq_pos + 1..].trim_start();
@@ -33,7 +40,7 @@ impl Rule for NoReactiveLiterals {
                         || rhs.starts_with("false;") || rhs.starts_with("false\n") || rhs == "false"
                         || rhs.starts_with("null;") || rhs.starts_with("null\n") || rhs == "null"
                         || rhs.starts_with("undefined;") || rhs.starts_with("undefined\n") || rhs == "undefined"
-                        || rhs.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+                        || is_numeric_literal(rhs)
                         || rhs.starts_with("[]") || rhs.starts_with("{}");
 
                     if is_literal && !after[..eq_pos].contains('(') {
@@ -53,4 +60,18 @@ impl Rule for NoReactiveLiterals {
             }
         }
     }
+}
+
+/// Check if the RHS is a standalone numeric literal (e.g., `42;`, `3.14\n`),
+/// not a numeric expression like `5 * viewScale`.
+fn is_numeric_literal(rhs: &str) -> bool {
+    let first = rhs.chars().next();
+    if !first.map(|c| c.is_ascii_digit() || c == '-').unwrap_or(false) {
+        return false;
+    }
+    // Consume digits, dots, underscores, hex prefix, exponent — then expect `;", newline, or end
+    let end = rhs.find(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '_' && c != '-' && c != '+')
+        .unwrap_or(rhs.len());
+    let after = rhs[end..].trim_start();
+    after.is_empty() || after.starts_with(';') || after.starts_with('\n')
 }

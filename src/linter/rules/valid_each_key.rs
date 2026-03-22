@@ -25,18 +25,6 @@ impl Rule for ValidEachKey {
                     // Extract the iteration variable names from the context pattern.
                     let iter_vars = extract_iter_vars(&block.context);
 
-                    // Check if the key uses the iteration variable itself
-                    if key_trimmed == block.context.trim() {
-                        ctx.diagnostic(
-                            format!(
-                                "Using the iteration variable '{}' directly as the key is not recommended. Use a unique identifier like '{}.id'.",
-                                block.context, block.context
-                            ),
-                            block.span,
-                        );
-                        return;
-                    }
-
                     // Check if the key expression references any of the iteration variables
                     let uses_iter_var = iter_vars.iter().any(|var| {
                         key_contains_var(key_trimmed, var)

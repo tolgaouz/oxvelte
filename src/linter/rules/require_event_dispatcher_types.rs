@@ -11,7 +11,10 @@ impl Rule for RequireEventDispatcherTypes {
     }
 
     fn is_recommended(&self) -> bool {
-        true
+        // The vendor rule is gated to svelteVersions: ['3/4'].
+        // createEventDispatcher is deprecated in Svelte 5, so this rule adds noise
+        // in Svelte 5 projects. Disable by default (opt-in).
+        false
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
