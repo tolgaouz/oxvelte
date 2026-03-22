@@ -87,17 +87,15 @@ impl Rule for RequireStoreReactiveAccess {
         let content_offset = tag_text.find('>').map(|p| script.span.start as usize + p + 1)
             .unwrap_or(script.span.start as usize);
         for var in &store_vars {
-            // Look for ${store} in template literals (not ${$store})
-            let raw_interpolation = format!("${{{}}}", var);
-            let reactive_interpolation = format!("${{${}}}", var);
-            for (pos, _) in content.match_indices(&raw_interpolation) {
-                if content[pos..].starts_with(&reactive_interpolation) { continue; }
-                // Check preceding char is not $
+            let raw_interp = format!("${{{}}}", var);
+            let reactive_interp = format!("${{${}}}", var);
+            for (pos, _) in content.match_indices(&raw_interp) {
+                if content[pos..].starts_with(&reactive_interp) { continue; }
                 if pos > 0 && content.as_bytes()[pos - 1] == b'$' { continue; }
                 let src_pos = content_offset + pos;
                 ctx.diagnostic(
                     "Use the $ prefix or the get function to access reactive values instead of accessing the raw store.",
-                    oxc::span::Span::new(src_pos as u32, (src_pos + raw_interpolation.len()) as u32),
+                    oxc::span::Span::new(src_pos as u32, (src_pos + raw_interp.len()) as u32),
                 );
             }
         }
