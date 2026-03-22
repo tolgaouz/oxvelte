@@ -1061,7 +1061,171 @@ mod tests {
         assert!(r.errors.is_empty());
     }
 
-    // --- to 1350 ---
+    // --- to 1400 ---
+
+    #[test]
+    fn test_parse_real_world_virtual_scroll() {
+        let s = "<script>\n\tlet { items, height = 40 } = $props();\n\tlet scrollTop = $state(0);\n\tlet containerHeight = $state(400);\n\tlet start = $derived(Math.floor(scrollTop / height));\n\tlet visible = $derived(Math.ceil(containerHeight / height) + 2);\n\tlet slice = $derived(items.slice(start, start + visible));\n\tlet paddingTop = $derived(start * height);\n\tlet paddingBottom = $derived(Math.max(0, (items.length - start - visible) * height));\n</script>\n<div class=\"viewport\" style:height=\"{containerHeight}px\" on:scroll={(e) => scrollTop = e.target.scrollTop}>\n\t<div style:padding-top=\"{paddingTop}px\" style:padding-bottom=\"{paddingBottom}px\">\n\t\t{#each slice as item, i (start + i)}\n\t\t\t<div style:height=\"{height}px\">{item.label}</div>\n\t\t{/each}\n\t</div>\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_multi_select() {
+        let s = "<script>\n\tlet { options, selected = $bindable([]) } = $props();\n\tlet search = $state('');\n\tlet filtered = $derived(options.filter(o => o.label.toLowerCase().includes(search.toLowerCase()) && !selected.includes(o.value)));\n\tconst add = (val) => selected = [...selected, val];\n\tconst remove = (val) => selected = selected.filter(v => v !== val);\n</script>\n<div class=\"multi-select\">\n\t{#each selected as val}\n\t\t<span class=\"tag\">{options.find(o => o.value === val)?.label} <button onclick={() => remove(val)}>×</button></span>\n\t{/each}\n\t<input bind:value={search} />\n</div>\n{#if search && filtered.length > 0}\n\t<ul>\n\t\t{#each filtered as opt (opt.value)}\n\t\t\t<li onclick={() => { add(opt.value); search = ''; }}>{opt.label}</li>\n\t\t{/each}\n\t</ul>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_scroll_snap_complete() {
+        let s = "<style>\n\t.carousel {\n\t\tscroll-snap-type: x mandatory;\n\t\toverflow-x: scroll;\n\t\t-webkit-overflow-scrolling: touch;\n\t\tscrollbar-width: none;\n\t}\n\t.carousel::-webkit-scrollbar { display: none; }\n\t.slide {\n\t\tscroll-snap-align: start;\n\t\tscroll-snap-stop: always;\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_derived_complex_chain() {
+        let s = "<script lang=\"ts\">\n\tlet items = $state<{price: number; qty: number}[]>([]);\n\tlet subtotals = $derived(items.map(i => i.price * i.qty));\n\tlet total = $derived(subtotals.reduce((a, b) => a + b, 0));\n\tlet tax = $derived(total * 0.08);\n\tlet grandTotal = $derived(total + tax);\n\tlet formatted = $derived(`$${grandTotal.toFixed(2)}`);\n</script>\n<p>Total: {formatted}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_breadcrumb_dynamic() {
+        let s = "<script>\n\tlet { segments } = $props();\n\tlet crumbs = $derived(segments.map((s, i) => ({\n\t\tlabel: s.charAt(0).toUpperCase() + s.slice(1),\n\t\thref: '/' + segments.slice(0, i + 1).join('/'),\n\t\tcurrent: i === segments.length - 1\n\t})));\n</script>\n<nav>\n\t{#each crumbs as crumb, i}\n\t\t{#if crumb.current}\n\t\t\t<span aria-current=\"page\">{crumb.label}</span>\n\t\t{:else}\n\t\t\t<a href={crumb.href}>{crumb.label}</a>\n\t\t\t<span aria-hidden=\"true\">/</span>\n\t\t{/if}\n\t{/each}\n</nav>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_indent_key_block() {
+        let s = "{#key id}\ntext\n{/key}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/indent"),
+            "Should flag unindented key block content");
+    }
+
+    #[test]
+    fn test_parse_real_world_network_status() {
+        let s = "<script>\n\tlet online = $state(true);\n\t$effect(() => {\n\t\tconst on = () => online = true;\n\t\tconst off = () => online = false;\n\t\twindow.addEventListener('online', on);\n\t\twindow.addEventListener('offline', off);\n\t\tonline = navigator.onLine;\n\t\treturn () => {\n\t\t\twindow.removeEventListener('online', on);\n\t\t\twindow.removeEventListener('offline', off);\n\t\t};\n\t});\n</script>\n{#if !online}\n\t<div class=\"offline-banner\" role=\"alert\">You are offline</div>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_event_types() {
+        let s = "<button\n\tonclick={(e: MouseEvent) => handle(e)}\n\tonkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter') handle(e); }}\n>click or press Enter</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_logical_complete() {
+        let s = "<style>\n\t.box {\n\t\tmargin-block: 1rem;\n\t\tmargin-inline: auto;\n\t\tpadding-block-start: 2rem;\n\t\tpadding-inline-end: 1rem;\n\t\tborder-block-start: 2px solid;\n\t\tborder-inline: 1px solid;\n\t\tinset-inline: 0;\n\t\tinset-block-start: 0;\n\t\tblock-size: 100vh;\n\t\tinline-size: 100%;\n\t\tmin-block-size: 50vh;\n\t\tmax-inline-size: 1200px;\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_idle_detector() {
+        let s = "<script>\n\tlet idle = $state(false);\n\tlet timeout = 60000;\n\tlet timer;\n\t$effect(() => {\n\t\tconst reset = () => { idle = false; clearTimeout(timer); timer = setTimeout(() => idle = true, timeout); };\n\t\t['mousemove', 'keydown', 'scroll', 'click'].forEach(e => window.addEventListener(e, reset));\n\t\treset();\n\t\treturn () => { clearTimeout(timer); ['mousemove', 'keydown', 'scroll', 'click'].forEach(e => window.removeEventListener(e, reset)); };\n\t});\n</script>\n{#if idle}<div class=\"idle-overlay\">Still there?</div>{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_with_conditional_attrs() {
+        let s = "<button\n\tclass=\"btn {variant}\"\n\tdisabled={loading || disabled}\n\taria-busy={loading}\n\taria-disabled={disabled}\n\tonclick={!loading && !disabled ? handler : undefined}\n>\n\t{#if loading}\n\t\t<Spinner />\n\t{:else}\n\t\t<slot />\n\t{/if}\n</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_valid_each_key_destructured() {
+        let s = "{#each items as { id, name } (id)}\n\t<p>{name}</p>\n{/each}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/valid-each-key"),
+            "Should NOT flag key using destructured property");
+    }
+
+    #[test]
+    fn test_parse_svelte5_state_with_computed() {
+        let s = "<script>\n\tlet form = $state({\n\t\tfirstName: '',\n\t\tlastName: '',\n\t});\n\tlet fullName = $derived(`${form.firstName} ${form.lastName}`.trim());\n\tlet isValid = $derived(form.firstName.length > 0 && form.lastName.length > 0);\n</script>\n<input bind:value={form.firstName} placeholder=\"First\" />\n<input bind:value={form.lastName} placeholder=\"Last\" />\n<p class:valid={isValid}>{fullName || 'Enter your name'}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_accessible_dialog() {
+        let s = "<script>\n\tlet { open = $bindable(false), title, children } = $props();\n</script>\n{#if open}\n\t<div class=\"backdrop\" onclick={() => open = false} role=\"presentation\" />\n\t<dialog {open} aria-labelledby=\"dialog-title\" aria-modal=\"true\">\n\t\t<h2 id=\"dialog-title\">{title}</h2>\n\t\t<div class=\"content\">{@render children()}</div>\n\t\t<button onclick={() => open = false} aria-label=\"Close\">×</button>\n\t</dialog>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_inert() {
+        let s = "<style>\n\t[inert] { opacity: 0.5; pointer-events: none; user-select: none; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_scroll_spy() {
+        let s = "<script>\n\tlet { sections } = $props();\n\tlet active = $state('');\n\t$effect(() => {\n\t\tconst obs = new IntersectionObserver((entries) => {\n\t\t\tentries.forEach(e => { if (e.isIntersecting) active = e.target.id; });\n\t\t}, { rootMargin: '-50% 0px' });\n\t\tsections.forEach(s => {\n\t\t\tconst el = document.getElementById(s.id);\n\t\t\tif (el) obs.observe(el);\n\t\t});\n\t\treturn () => obs.disconnect();\n\t});\n</script>\n<nav>\n\t{#each sections as section}\n\t\t<a href=\"#{section.id}\" class:active={active === section.id}>{section.label}</a>\n\t{/each}\n</nav>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_effect_cleanup_pattern() {
+        let s = "<script>\n\tlet ws;\n\tlet messages = $state([]);\n\tlet url = $state('ws://localhost:8080');\n\t$effect(() => {\n\t\tws = new WebSocket(url);\n\t\tws.onmessage = (e) => messages.push(JSON.parse(e.data));\n\t\tws.onerror = (e) => console.error(e);\n\t\treturn () => ws.close();\n\t});\n</script>\n{#each messages as msg (msg.id)}\n\t<p>{msg.text}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_with_forward_events() {
+        let s = "<script>\n\tlet { children, ...events } = $props();\n</script>\n<div {...events}>\n\t{@render children?.()}\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_color_mix_advanced() {
+        let s = "<style>\n\t.blend {\n\t\tcolor: color-mix(in oklch, var(--primary) 70%, white);\n\t\tbackground: color-mix(in srgb, currentColor 10%, transparent);\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_reactive_fn_arrow_in_reactive() {
+        let s = "<script>\n\t$: handler = () => console.log('reactive arrow');\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-reactive-functions"),
+            "Should flag arrow function in reactive declaration");
+    }
+
+    #[test]
+    fn test_parse_real_world_local_storage() {
+        let s = "<script>\n\tfunction persisted(key, initial) {\n\t\tlet value = $state(JSON.parse(localStorage.getItem(key) ?? JSON.stringify(initial)));\n\t\t$effect(() => {\n\t\t\tlocalStorage.setItem(key, JSON.stringify(value));\n\t\t});\n\t\treturn { get value() { return value; }, set value(v) { value = v; } };\n\t}\n\tconst settings = persisted('settings', { theme: 'light', fontSize: 16 });\n</script>\n<select bind:value={settings.value.theme}>\n\t<option>light</option>\n\t<option>dark</option>\n</select>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_complete_app() {
+        let s = "<script lang=\"ts\">\n\timport { onMount } from 'svelte';\n\tlet { data } = $props();\n\tlet search = $state('');\n\tlet filtered = $derived(data.filter(d => d.name.includes(search)));\n\tlet selected = $state<typeof data[0] | null>(null);\n\tonMount(() => console.log('App mounted'));\n</script>\n\n<svelte:head><title>{data.length} Items</title></svelte:head>\n\n<header>\n\t<h1>Items</h1>\n\t<input type=\"search\" bind:value={search} placeholder=\"Filter...\" />\n</header>\n\n<main>\n\t{#if filtered.length > 0}\n\t\t{#each filtered as item (item.id)}\n\t\t\t<div class:selected={item === selected} onclick={() => selected = item}>\n\t\t\t\t<h2>{item.name}</h2>\n\t\t\t\t<p>{item.description}</p>\n\t\t\t</div>\n\t\t{/each}\n\t{:else}\n\t\t<p>No items match \"{search}\"</p>\n\t{/if}\n</main>\n\n{#if selected}\n\t<aside>\n\t\t<h2>{selected.name}</h2>\n\t\t<p>{selected.description}</p>\n\t\t<button onclick={() => selected = null}>Close</button>\n\t</aside>\n{/if}\n\n<style lang=\"scss\">\n\theader { display: flex; justify-content: space-between; padding: 1rem; }\n\tmain { max-width: 960px; margin: 0 auto; }\n\t.selected { background: var(--highlight); }\n\taside { position: fixed; right: 0; top: 0; width: 300px; padding: 1rem; background: white; box-shadow: -2px 0 8px rgba(0,0,0,.1); }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        assert!(r.ast.instance.is_some());
+        assert!(r.ast.css.is_some());
+    }
+
+    // --- to 1400 ---
 
     #[test]
     fn test_parse_real_world_emoji_picker() {
