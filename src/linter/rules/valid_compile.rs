@@ -1,5 +1,5 @@
 //! `svelte/valid-compile` — report Svelte compilation errors / warnings.
-//! This is a placeholder; actual implementation would integrate with the Svelte compiler.
+//! Requires svelte-ignore comment support for full implementation.
 
 use crate::linter::{LintContext, Rule};
 
@@ -10,9 +10,8 @@ impl Rule for ValidCompile {
         "svelte/valid-compile"
     }
 
-    fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        // Placeholder: requires integration with the Svelte compiler to surface
-        // compile-time errors and warnings as lint diagnostics.
-        let _ = ctx;
+    fn run<'a>(&self, _ctx: &mut LintContext<'a>) {
+        // Requires integration with the Svelte compiler and svelte-ignore
+        // comment processing to surface compile-time warnings as diagnostics.
     }
 }
