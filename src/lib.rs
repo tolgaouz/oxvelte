@@ -1002,6 +1002,206 @@ mod tests {
             "Should NOT flag window inside if block");
     }
 
+    // --- pushing to 800 ---
+
+    #[test]
+    fn test_inner_decl_in_if() {
+        let s = "<script>\n\tif (true) {\n\t\tfunction inner() {}\n\t}\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-inner-declarations"),
+            "Should flag function declaration inside if");
+    }
+
+    #[test]
+    fn test_inner_decl_in_fn_ok() {
+        let s = "<script>\n\tfunction outer() {\n\t\tfunction inner() {}\n\t}\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-inner-declarations"),
+            "Should NOT flag function inside function body");
+    }
+
+    #[test]
+    fn test_inner_decl_fn_expression_ok() {
+        let s = "<script>\n\tif (true) {\n\t\tvar fn = function() {};\n\t}\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-inner-declarations"),
+            "Should NOT flag function expression inside if");
+    }
+
+    #[test]
+    fn test_inner_decl_top_level_ok() {
+        let s = "<script>\n\tfunction topLevel() {}\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-inner-declarations"),
+            "Should NOT flag top-level function");
+    }
+
+    #[test]
+    fn test_parse_snippet_inside_if() {
+        let s = "{#if show}\n\t{#snippet content()}\n\t\t<p>visible</p>\n\t{/snippet}\n\t{@render content()}\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_nested_each_with_keys() {
+        let s = "{#each categories as cat (cat.id)}\n\t<h2>{cat.name}</h2>\n\t{#each cat.items as item (item.id)}\n\t\t<p>{item.name}</p>\n\t{/each}\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_complex_conditional_class() {
+        let s = "<div\n\tclass=\"base\"\n\tclass:active={isActive}\n\tclass:disabled={!isEnabled}\n\tclass:highlight={isActive && isEnabled}\n>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte_options_with_tag() {
+        let s = "<svelte:options tag=\"my-element\" />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_multiple_event_handlers() {
+        let s = "<div\n\ton:mouseenter={enter}\n\ton:mouseleave={leave}\n\ton:click={click}\n\ton:keydown|preventDefault={key}\n>interactive</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_bind_dimensions() {
+        let s = "<div bind:clientWidth={w} bind:clientHeight={h} bind:offsetWidth={ow} bind:offsetHeight={oh}>{w}x{h}</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_style_with_at_rules() {
+        let s = "<style>\n\t@import './base.css';\n\t@font-face { font-family: 'Custom'; src: url('font.woff2'); }\n\t.content { font-family: 'Custom'; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_recommended_count() {
+        let rec = Linter::recommended();
+        assert!(rec.rules().len() >= 20, "Should have at least 20 recommended rules");
+    }
+
+    #[test]
+    fn test_parse_await_only_pending() {
+        let s = "{#await promise}\n\t<p>Loading...</p>\n{/await}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_with_else_and_key() {
+        let s = "{#each items as item (item.id)}\n\t<p>{item}</p>\n{:else}\n\t<p>Empty!</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_runes_in_class() {
+        let s = "<script>\n\tclass Todo {\n\t\ttext = $state('');\n\t\tdone = $state(false);\n\t\ttoggle() { this.done = !this.done; }\n\t}\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_conditional_slot() {
+        let s = "{#if $$slots.header}\n\t<slot name=\"header\" />\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_reactive_statement_block() {
+        let s = "<script>\n\tlet count = 0;\n\t$: {\n\t\tconst d = count * 2;\n\t\tconsole.log(d);\n\t}\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_with_generics() {
+        let s = "<script lang=\"ts\" generics=\"T extends { id: string }\">\n\tlet { items }: { items: T[] } = $props();\n</script>\n{#each items as item (item.id)}\n\t<slot {item} />\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_assignment() {
+        let s = "<button on:click={() => count = count + 1}>+1</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_shorthand_attr_same_name() {
+        let s = "<div class={className}>text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        // className != class, so should NOT flag
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/shorthand-attribute"),
+            "Should NOT flag when attr name != expression");
+    }
+
+    #[test]
+    fn test_parse_component_two_way_bind() {
+        let s = "<Counter bind:count />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_global_style_function() {
+        let s = "<style>\n\t:global(body) {\n\t\tmargin: 0;\n\t\tpadding: 0;\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_issues_plain_html() {
+        let s = "<h1>Title</h1>\n<p>Paragraph</p>\n<a href=\"https://example.com\">Link</a>\n<img src=\"img.jpg\" alt=\"photo\" />";
+        let r = parser::parse(s);
+        let diags = Linter::recommended().lint(&r.ast, s);
+        assert!(diags.is_empty(), "Plain HTML should have no recommended warnings");
+    }
+
+    #[test]
+    fn test_parse_mixed_script_template_style() {
+        let s = "<script>\n\tlet x = 1;\n</script>\n\n<p>{x}</p>\n\n<style>\n\tp { color: red; }\n</style>\n\nTrailing text";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        assert!(r.ast.instance.is_some());
+        assert!(r.ast.css.is_some());
+        assert!(!r.ast.html.nodes.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_event_callback() {
+        let s = "<button onclick={(e) => {\n\te.preventDefault();\n\thandle(e.target);\n}}>click</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_as_reserved() {
+        // Using reserved-ish names
+        let s = "{#each items as class}\n\t<p>{class}</p>\n{/each}";
+        let r = parser::parse(s);
+        // May or may not work, but shouldn't panic
+        let _ = r.ast.html.nodes.len();
+    }
+
     // --- pushing to 750 ---
 
     #[test]
