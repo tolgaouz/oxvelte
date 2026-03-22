@@ -64,61 +64,45 @@ impl Rule for NoDomManipulating {
             let tag_text = &source[script.span.start as usize..script.span.end as usize];
             let content_offset = tag_text.find('>').map(|p| script.span.start as usize + p + 1).unwrap_or(script.span.start as usize);
 
-            // Only check variables that are explicitly declared in the script
+            // Only check variables that are explicitly declared with `let` in the script
             let declared_bound: HashSet<_> = bound_vars.iter()
                 .filter(|var| {
-                    let decl_patterns = [
-                        format!("let {};", var),
-                        format!("let {}", var),
-                        format!("let {},", var),
-                        format!("let {}\n", var),
-                    ];
-                    decl_patterns.iter().any(|p| content.contains(p.as_str()))
+                    // Check if `let VAR` appears as a declaration (followed by ;, space, comma, or newline)
+                    let prefix = format!("let {}", var);
+                    content.contains(&prefix)
                 })
                 .collect();
 
             for var in &declared_bound {
-                // Check DOM method calls: var.method(, var?.method(, (var?.method)(
-                for method in DOM_METHODS {
-                    let patterns = [
-                        format!("{}.{}(", var, method),
-                        format!("{}?.{}(", var, method),
-                        format!("({}?.{})(", var, method),
-                    ];
-                    for pattern in &patterns {
-                        let mut search_from = 0;
-                        while let Some(pos) = content[search_from..].find(pattern.as_str()) {
-                            let abs = search_from + pos;
+                let var_dot = format!("{}.", var);
+                let var_opt = format!("{}?.", var);
+                let var_paren_opt = format!("({}?.", var);
+
+                // Check all occurrences of var. and var?. in content
+                for prefix in &[&var_dot, &var_opt, &var_paren_opt] {
+                    let mut search_from = 0;
+                    while let Some(pos) = content[search_from..].find(prefix.as_str()) {
+                        let abs = search_from + pos;
+                        let after = &content[abs + prefix.len()..];
+
+                        // Check if it's a DOM method call
+                        let is_method = DOM_METHODS.iter().any(|m| after.starts_with(m));
+                        // Check if it's a DOM property assignment
+                        let is_prop_assign = DOM_PROPS.iter().any(|p| {
+                            if !after.starts_with(p) { return false; }
+                            let rest = after[p.len()..].trim_start();
+                            rest.starts_with('=') && !rest.starts_with("==")
+                        });
+
+                        if is_method || is_prop_assign {
                             let source_pos = content_offset + abs;
+                            let end = source_pos + prefix.len() + after.find('(').or_else(|| after.find('=')).unwrap_or(4);
                             ctx.diagnostic(
                                 "Do not mutate the DOM directly. Use Svelte's reactivity instead.",
-                                oxc::span::Span::new(source_pos as u32, (source_pos + pattern.len()) as u32),
+                                oxc::span::Span::new(source_pos as u32, end as u32),
                             );
-                            search_from = abs + pattern.len();
                         }
-                    }
-                }
-
-                // Check DOM property assignments: var.prop =
-                for prop in DOM_PROPS {
-                    let patterns = [
-                        format!("{}.{}", var, prop),
-                        format!("{}?.{}", var, prop),
-                    ];
-                    for pattern in &patterns {
-                        let mut search_from = 0;
-                        while let Some(pos) = content[search_from..].find(pattern.as_str()) {
-                            let abs = search_from + pos;
-                            let after = content[abs + pattern.len()..].trim_start();
-                            if after.starts_with('=') && !after.starts_with("==") {
-                                let source_pos = content_offset + abs;
-                                ctx.diagnostic(
-                                    "Do not mutate the DOM directly. Use Svelte's reactivity instead.",
-                                    oxc::span::Span::new(source_pos as u32, (source_pos + pattern.len()) as u32),
-                                );
-                            }
-                            search_from = abs + pattern.len();
-                        }
+                        search_from = abs + prefix.len();
                     }
                 }
             }

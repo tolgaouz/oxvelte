@@ -24,43 +24,40 @@ impl Rule for NoReactiveReassign {
             let tag_text = &source[base..script.span.end as usize];
             let content_offset = tag_text.find('>').map(|p| base + p + 1).unwrap_or(base);
 
-            // Step 1: Find reactive variable names (declared with $: name = ...)
-            // Only flag variables that are NOT pre-declared with let/var/const
+            // Single pass: collect declarations and reactive vars
             let mut reactive_vars = HashSet::new();
             let mut declared_vars = HashSet::new();
 
-            // First pass: collect let/var/const declarations
             for line in content.lines() {
                 let trimmed = line.trim();
+                // Collect let/var/const declarations
                 for kw in &["let ", "var ", "const "] {
                     if trimmed.starts_with(kw) {
-                        let rest = trimmed[kw.len()..].trim_start();
+                        let rest = &trimmed[kw.len()..];
                         let name_end = rest.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
                             .unwrap_or(rest.len());
-                        let name = &rest[..name_end];
-                        if !name.is_empty() {
-                            declared_vars.insert(name.to_string());
+                        if name_end > 0 {
+                            declared_vars.insert(rest[..name_end].to_string());
+                        }
+                    }
+                }
+                // Collect reactive declarations
+                if trimmed.starts_with("$:") {
+                    let after = trimmed[2..].trim_start();
+                    if let Some(eq_pos) = after.find('=') {
+                        let name = after[..eq_pos].trim();
+                        if name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+                            && !name.is_empty()
+                        {
+                            // Will filter out pre-declared vars after the loop
+                            reactive_vars.insert(name.to_string());
                         }
                     }
                 }
             }
 
-            // Second pass: find reactive declarations
-            for line in content.lines() {
-                let trimmed = line.trim();
-                if trimmed.starts_with("$:") {
-                    let after = trimmed[2..].trim_start();
-                    if let Some(eq_pos) = after.find('=') {
-                        let before_eq = after[..eq_pos].trim();
-                        if before_eq.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
-                            && !before_eq.is_empty()
-                            && !declared_vars.contains(before_eq)
-                        {
-                            reactive_vars.insert(before_eq.to_string());
-                        }
-                    }
-                }
-            }
+            // Remove pre-declared vars from reactive set
+            reactive_vars.retain(|v| !declared_vars.contains(v));
 
             if reactive_vars.is_empty() { return; }
 
