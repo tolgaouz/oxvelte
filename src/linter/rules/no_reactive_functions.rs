@@ -37,8 +37,7 @@ impl Rule for NoReactiveFunctions {
                     {
                         let rhs = after[eq_pos + 1..].trim_start();
                         if rhs.starts_with("() =>")
-                            || rhs.starts_with("(")
-                            && rhs.contains("=>")
+                            || is_arrow_function(rhs)
                             || rhs.starts_with("function")
                         {
                             let source_pos = base + gt + 1 + abs;
@@ -53,4 +52,40 @@ impl Rule for NoReactiveFunctions {
             }
         }
     }
+}
+
+/// Check if `rhs` is an arrow function: `(params) => ...`
+/// Must NOT match expressions like `(expr).method((x) => ...)` where
+/// the `=>` is inside a nested callback, not the top-level expression.
+fn is_arrow_function(rhs: &str) -> bool {
+    if !rhs.starts_with('(') { return false; }
+    // Find the matching closing paren for the opening one
+    let bytes = rhs.as_bytes();
+    let mut depth = 0i32;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    // Check if followed by `=>`
+                    let rest = rhs[i + 1..].trim_start();
+                    return rest.starts_with("=>");
+                }
+            }
+            b'\'' | b'"' | b'`' => {
+                // Skip string literals
+                let q = bytes[i];
+                i += 1;
+                while i < bytes.len() && bytes[i] != q {
+                    if bytes[i] == b'\\' { i += 1; }
+                    i += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
 }

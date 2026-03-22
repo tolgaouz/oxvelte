@@ -22,6 +22,12 @@ impl Rule for RequireEventDispatcherTypes {
             }
 
             let content = &script.content;
+
+            // Skip Svelte 5 components that use $props() — they use callback props
+            // instead of createEventDispatcher.
+            if content.contains("$props()") {
+                return;
+            }
             let imports = parse_imports(content);
 
             // Find local names for createEventDispatcher from 'svelte'
