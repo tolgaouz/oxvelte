@@ -47,6 +47,7 @@ impl Rule for NoUnusedProps {
             let colon_pos = decl.find(':').unwrap_or(decl.len());
             brace_pos < colon_pos
         };
+
         if has_rest { return; }
 
         // For non-destructured patterns (const props = $props()), track props.X accesses
@@ -55,6 +56,7 @@ impl Rule for NoUnusedProps {
             let all_props = if let Some(ref tn) = &type_name {
                 extract_type_properties(content, tn)
             } else { Vec::new() };
+
             if all_props.is_empty() { return; }
 
             // Find the variable name: const VARNAME: Type = $props()
@@ -242,8 +244,8 @@ fn extract_type_name(before_props: &str) -> Option<String> {
     let mut last_colon = None;
     for (i, c) in before_eq.char_indices() {
         match c {
-            '{' | '(' | '<' => depth += 1,
-            '}' | ')' | '>' => depth -= 1,
+            '{' | '(' => depth += 1,
+            '}' | ')' => { depth -= 1; if depth < 0 { depth = 0; } }
             ':' if depth == 0 => last_colon = Some(i),
             _ => {}
         }
@@ -321,8 +323,8 @@ fn extract_props_from_block(content: &str, brace_start: usize, props: &mut Vec<(
     let mut line_start = 0;
     for (i, b) in block.bytes().enumerate() {
         match b {
-            b'{' | b'(' | b'<' => depth += 1,
-            b'}' | b')' | b'>' => depth -= 1,
+            b'{' | b'(' => depth += 1,
+            b'}' | b')' => { depth -= 1; if depth < 0 { depth = 0; } }
             b';' | b'\n' if depth == 0 => {
                 let segment = &block[line_start..i];
                 let trimmed = segment.trim();

@@ -9328,6 +9328,7 @@ mod linter_fixture_tests {
     #[test] fn linter_no_unnecessary_state_wrap_valid() { run_linter_valid("no-unnecessary-state-wrap"); }
     #[test] fn linter_no_unused_props_valid() { run_linter_valid("no-unused-props"); }
     // no-unused-props: 19/20 invalid pass (optional-unused needs non-destructured property tracking)
+    // no-unused-props: 19/20 pass (imported-type-check needs cross-file import resolution)
     // #[test] fn linter_no_unused_props_invalid() { run_linter_invalid("no-unused-props"); }
     #[test] fn linter_no_unused_class_name_valid() { run_linter_valid("no-unused-class-name"); }
     #[test] fn linter_no_unused_class_name_invalid() { run_linter_invalid("no-unused-class-name"); }
