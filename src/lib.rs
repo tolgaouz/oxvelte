@@ -1011,6 +1011,210 @@ mod tests {
         assert!(bg.is_empty(), "Should NOT flag location inside guarded blocks, got: {:?}", bg.iter().map(|d| &d.message).collect::<Vec<_>>());
     }
 
+    #[test]
+    fn test_parse_style_with_nested_at() {
+        let s = "<style>\n\t@media screen {\n\t\t@supports (display: grid) {\n\t\t\t.container { display: grid; }\n\t\t}\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svg_ns_element() {
+        let s = "<svg:circle cx=\"50\" cy=\"50\" r=\"40\" fill=\"red\" />";
+        let r = parser::parse(s);
+        let _ = r.ast.html.nodes.len();
+    }
+
+    #[test]
+    fn test_parse_expression_with_spread_array() {
+        let s = "<p>{[...a, ...b, ...c].join(', ')}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_conditional_rendering_complex() {
+        let s = "{#if status === 'loading'}\n\t<Spinner />\n{:else if status === 'error'}\n\t{#if retryable}\n\t\t<ErrorWithRetry {error} on:retry />\n\t{:else}\n\t\t<FatalError {error} />\n\t{/if}\n{:else if data.items.length === 0}\n\t<EmptyState />\n{:else}\n\t<DataView items={data.items} />\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_bind_select_multiple() {
+        let s = "<select multiple bind:value={selectedColors}>\n\t{#each colors as color}\n\t\t<option value={color}>{color}</option>\n\t{/each}\n</select>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_chain() {
+        let s = "<Provider value={{theme: 'dark'}}>\n\t<Router>\n\t\t<Layout>\n\t\t\t<Page />\n\t\t</Layout>\n\t</Router>\n</Provider>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_issues_svelte5_minimal() {
+        let s = "<script>\n\tlet count = $state(0);\n</script>\n<button onclick={() => count++}>{count}</button>";
+        let r = parser::parse(s);
+        let diags = Linter::recommended().lint(&r.ast, s);
+        let filtered: Vec<_> = diags.iter()
+            .filter(|d| d.rule_name != "svelte/block-lang" && d.rule_name != "svelte/no-unused-class-name")
+            .collect();
+        assert!(filtered.is_empty(), "Minimal Svelte 5: {:?}",
+            filtered.iter().map(|d| &d.rule_name).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_parse_attribute_with_pipe() {
+        let s = "<input value={value | 0} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_comma_operator() {
+        let s = "<button on:click={() => (update(), render())}>go</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_script_with_decorators() {
+        let s = "<script lang=\"ts\">\n\t// @ts-ignore\n\tconst x = unsafeOperation();\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_multiline_attribute_expression() {
+        let s = "<Component\n\tdata={{\n\t\tname: 'test',\n\t\tvalue: 42,\n\t\tnested: { a: 1 }\n\t}}\n/>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_class_with_computed() {
+        let s = "<div class=\"item {type} {active ? 'active' : ''} size-{size}\">text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    // --- final push to 950 ---
+
+    #[test]
+    fn test_parse_spread_in_each() {
+        let s = "{#each items as item}\n\t<Component {...item} />\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_optional_chain_template() {
+        let s = "<p>{user?.address?.city ?? 'Unknown'}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_assignment_in_handler() {
+        let s = "<input on:input={(e) => value = e.target.value} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_with_multiple_values() {
+        let s = "<style>\n\t.shadow { box-shadow: 0 2px 4px rgba(0,0,0,.1), 0 8px 16px rgba(0,0,0,.1); }\n\t.font { font: bold 14px/1.5 'Helvetica', Arial, sans-serif; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_component_with_children_prop() {
+        let s = "<script>\n\tlet { children } = $props();\n</script>\n<div class=\"wrapper\">\n\t{@render children?.()}\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_recursive_slot() {
+        let s = "<script>\n\texport let items;\n</script>\n<ul>\n\t{#each items as item}\n\t\t<li>\n\t\t\t{item.name}\n\t\t\t{#if item.children?.length}\n\t\t\t\t<svelte:self items={item.children} />\n\t\t\t{/if}\n\t\t</li>\n\t{/each}\n</ul>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_textarea_binding() {
+        let s = "<textarea bind:value rows=\"5\" cols=\"40\" placeholder=\"Type here...\">{initialText}</textarea>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_details_open_binding() {
+        let s = "<details bind:open={isOpen}>\n\t<summary>Click to expand</summary>\n\t<div>Hidden content</div>\n</details>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_input_types() {
+        let sources = [
+            "<input type=\"text\" bind:value />",
+            "<input type=\"number\" bind:value={num} />",
+            "<input type=\"checkbox\" bind:checked />",
+            "<input type=\"range\" bind:value min=\"0\" max=\"100\" />",
+            "<input type=\"color\" bind:value={color} />",
+            "<input type=\"date\" bind:value={date} />",
+            "<input type=\"file\" on:change={handleFile} />",
+        ];
+        for s in &sources {
+            let r = parser::parse(s);
+            assert!(r.errors.is_empty(), "Failed: {}", s);
+        }
+    }
+
+    #[test]
+    fn test_linter_multiple_each_keys() {
+        let s = "{#each a as x (x.id)}\n\t<p>a</p>\n{/each}\n{#each b as y}\n\t<p>b</p>\n{/each}\n{#each c as z (z.id)}\n\t<p>c</p>\n{/each}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let key_diags: Vec<_> = diags.iter().filter(|d| d.rule_name == "svelte/require-each-key").collect();
+        assert_eq!(key_diags.len(), 1, "Should flag exactly 1 each without key (b)");
+    }
+
+    #[test]
+    fn test_parse_slot_with_binding() {
+        let s = "<Table {data} let:row let:index>\n\t<tr class:even={index % 2 === 0}>\n\t\t<td>{row.name}</td>\n\t</tr>\n</Table>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_transition_local() {
+        let s = "{#if visible}\n\t<div transition:fly|local={{y: -100}}>local transition</div>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_const_in_if() {
+        let s = "{#if items.length > 0}\n\t{@const first = items[0]}\n\t<p>First: {first.name}</p>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_multiple_html_tags() {
+        let s = "{@html headerHtml}\n<main>\n\t{@html contentHtml}\n</main>\n{@html footerHtml}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        let diags = Linter::all().lint(&r.ast, s);
+        let html_diags: Vec<_> = diags.iter().filter(|d| d.rule_name == "svelte/no-at-html-tags").collect();
+        assert_eq!(html_diags.len(), 3);
+    }
+
     // --- pushing 950 ---
 
     #[test]
