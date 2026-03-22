@@ -9291,11 +9291,14 @@ mod linter_fixture_tests {
     #[test] fn linter_no_add_event_listener_invalid() { run_linter_invalid("no-add-event-listener"); }
 
     #[test] fn linter_max_lines_per_block_valid() { run_linter_valid("max-lines-per-block"); }
+    #[test] fn linter_max_lines_per_block_invalid() { run_linter_invalid("max-lines-per-block"); }
 
     #[test] fn linter_no_navigation_without_resolve_valid() { run_linter_valid("no-navigation-without-resolve"); }
-    
+
     #[test] fn linter_no_navigation_without_resolve_invalid() { run_linter_invalid("no-navigation-without-resolve"); }
     #[test] fn linter_prefer_svelte_reactivity_valid() { run_linter_valid("prefer-svelte-reactivity"); }
+    #[test] fn linter_prefer_svelte_reactivity_invalid() { run_linter_invalid("prefer-svelte-reactivity"); }
+    #[test] fn linter_infinite_reactive_loop_invalid() { run_linter_invalid("infinite-reactive-loop"); }
     #[test] fn linter_no_dynamic_slot_name_valid() { run_linter_valid("no-dynamic-slot-name"); }
     #[test] fn linter_no_goto_without_base_valid() { run_linter_valid("no-goto-without-base"); }
     #[test] fn linter_no_navigation_without_base_valid() { run_linter_valid("no-navigation-without-base"); }
