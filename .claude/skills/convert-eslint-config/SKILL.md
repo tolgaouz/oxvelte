@@ -22,14 +22,14 @@ Convert an ESLint config (with eslint-plugin-svelte rules) to an oxvelte.config.
 
 3. **For JSON configs**, run the oxvelte CLI converter:
    ```bash
-   cargo run -- convert-config <path>
+   cargo run -- migrate <path>
    ```
    This extracts only `svelte/*` rules, normalizes severity, and preserves settings.
 
 4. **For JS/MJS configs**, suggest the user resolve it first:
    ```bash
    npx eslint --print-config src/routes/+page.svelte > /tmp/eslint-resolved.json
-   cargo run -- convert-config /tmp/eslint-resolved.json --write
+   cargo run -- migrate /tmp/eslint-resolved.json --write
    ```
    Alternatively, read the JS file and manually extract any `svelte/*` rule entries.
 

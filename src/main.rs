@@ -44,8 +44,8 @@ enum Command {
     },
     /// List all available lint rules.
     Rules,
-    /// Convert an ESLint svelte config to oxvelte.config.json.
-    ConvertConfig {
+    /// Migrate an ESLint svelte config to oxvelte.config.json.
+    Migrate {
         /// Path to ESLint config file (.eslintrc.json, eslint.config.json, etc.)
         file: PathBuf,
         /// Write output to oxvelte.config.json instead of stdout.
@@ -61,7 +61,7 @@ fn main() -> ExitCode {
         Command::Parse { file, pretty, format } => cmd_parse(&file, pretty, &format),
         Command::Check { paths } => cmd_lint(&paths, false, false),
         Command::Rules => cmd_rules(),
-        Command::ConvertConfig { file, write } => cmd_convert_config(&file, write),
+        Command::Migrate { file, write } => cmd_convert_config(&file, write),
     }
 }
 
