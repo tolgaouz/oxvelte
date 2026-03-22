@@ -1011,6 +1011,218 @@ mod tests {
         assert!(bg.is_empty(), "Should NOT flag location inside guarded blocks, got: {:?}", bg.iter().map(|d| &d.message).collect::<Vec<_>>());
     }
 
+    // --- beyond 1000 ---
+
+    #[test]
+    fn test_linter_store_reactive_readable() {
+        let s = "<script>\n\timport { readable } from 'svelte/store';\n\tconst time = readable(new Date());\n</script>\n<p>{time}</p>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/require-store-reactive-access"),
+            "Should flag raw readable store in template");
+    }
+
+    #[test]
+    fn test_linter_no_at_html_in_component() {
+        let s = "<Component>\n\t{@html content}\n</Component>";
+        let r = parser::parse(s);
+        let diags = Linter::recommended().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-at-html-tags"));
+    }
+
+    #[test]
+    fn test_linter_multiple_stores_reactive() {
+        let s = "<script>\n\timport { writable } from 'svelte/store';\n\tconst a = writable(0);\n\tconst b = writable(1);\n</script>\n<p>{a}</p><p>{b}</p>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let store_diags: Vec<_> = diags.iter().filter(|d| d.rule_name == "svelte/require-store-reactive-access").collect();
+        assert_eq!(store_diags.len(), 2, "Should flag both raw store accesses");
+    }
+
+    #[test]
+    fn test_parse_each_with_expression_key() {
+        let s = "{#each items as item (item.type + '-' + item.id)}\n\t<p>{item.name}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_component_complete() {
+        let s = "<script lang=\"ts\">\n\ttype Props = { value: number; onchange: (v: number) => void };\n\tlet { value = $bindable(0), onchange }: Props = $props();\n</script>\n\n<input type=\"range\" bind:value oninput={() => onchange(value)} />\n<p>{value}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_where_not() {
+        let s = "<style>\n\t:where(p:not(.special)) { margin: 1rem; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_reactive_reassign_array_sort() {
+        let s = "<script>\n\tlet v = 'a';\n\t$: arr = [v];\n\tfunction fn() { arr.sort(); }\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-reactive-reassign"),
+            "Should flag .sort() on reactive array");
+    }
+
+    #[test]
+    fn test_linter_reactive_reassign_for_of() {
+        let s = "<script>\n\tlet v = 'a';\n\t$: obj = { key: v };\n\tlet o = [1];\n\tfunction fn() { for (obj.key of o) {} }\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-reactive-reassign"),
+            "Should flag for-of on reactive var member");
+    }
+
+    #[test]
+    fn test_linter_valid_each_key_fn() {
+        let s = "{#each items as item (getKey(item))}\n\t<p>{item}</p>\n{/each}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/valid-each-key"),
+            "Should NOT flag key with function using item");
+    }
+
+    #[test]
+    fn test_linter_immutable_reactive_fn_call() {
+        let s = "<script>\n\texport function greet() { return 'hi'; }\n\t$: msg = greet();\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-immutable-reactive-statements"),
+            "Should flag reactive calling immutable function");
+    }
+
+    #[test]
+    fn test_parse_svelte_window_events_all() {
+        let s = "<svelte:window\n\ton:resize={onResize}\n\ton:scroll={onScroll}\n\ton:keydown={onKey}\n\ton:keyup={onKeyUp}\n\ton:keypress={onKeyPress}\n/>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_effect_root() {
+        let s = "<script>\n\timport { effect } from 'svelte';\n\tconst cleanup = effect.root(() => {\n\t\t$effect(() => { console.log('root effect'); });\n\t});\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_element_with_newline_in_attr() {
+        let s = "<div\n\ttitle=\"Line 1\nLine 2\"\n>text</div>";
+        let r = parser::parse(s);
+        let _ = r.ast.html.nodes.len();
+    }
+
+    #[test]
+    fn test_linter_no_store_async_derived() {
+        let s = "<script>\n\timport { derived } from 'svelte/store';\n\tconst d = derived(count, async ($c) => await transform($c));\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-store-async"),
+            "Should flag async derived callback");
+    }
+
+    #[test]
+    fn test_parse_component_generic_slot() {
+        let s = "<Table data={items} let:row let:index>\n\t{#snippet cell(value)}\n\t\t<td>{value}</td>\n\t{/snippet}\n\t<tr>\n\t\t{@render cell(row.name)}\n\t\t{@render cell(String(index))}\n\t</tr>\n</Table>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_style_custom_property_fallback() {
+        let s = "<style>\n\t.themed {\n\t\tcolor: var(--text-color, #333);\n\t\tbackground: var(--bg-color, var(--fallback-bg, white));\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_prefer_const_used_in_template() {
+        let s = "<script>\n\tlet MAX = 100;\n</script>\n<p>{MAX}</p>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/prefer-const"),
+            "Should flag let that could be const");
+    }
+
+    #[test]
+    fn test_parse_expression_with_new() {
+        let s = "<p>{new Intl.NumberFormat('en-US').format(price)}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_with_nested_destructure() {
+        let s = "{#each data as { user: { name, email }, score }}\n\t<p>{name} ({email}): {score}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_with_onclick_and_bind() {
+        let s = "<CustomInput\n\tbind:value={inputValue}\n\tonchange={(e) => validate(e.target.value)}\n\tplaceholder=\"Enter text\"\n\tclass=\"custom-input\"\n/>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_trailing_spaces_empty_line() {
+        let s = "<p>text</p>\n  \n<p>more</p>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-trailing-spaces"),
+            "Should flag empty line with spaces");
+    }
+
+    #[test]
+    fn test_parse_css_logical_properties() {
+        let s = "<style>\n\t.box {\n\t\tmargin-inline: auto;\n\t\tpadding-block: 1rem;\n\t\tinset-inline-start: 0;\n\t\tborder-block-end: 1px solid;\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_with_await_inside() {
+        let s = "{#each urls as url}\n\t{#await fetch(url).then(r => r.text())}\n\t\t<p>Loading {url}...</p>\n\t{:then text}\n\t\t<pre>{text}</pre>\n\t{/await}\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_conditional_class() {
+        let s = "<Button\n\tclass=\"btn {variant} {size}\"\n\tclass:loading\n\tclass:disabled={!enabled}\n\tonclick={handleClick}\n>Click me</Button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_unstate() {
+        let s = "<script>\n\timport { unstate } from 'svelte';\n\tlet state = $state({ deep: { value: 42 } });\n\tconst snapshot = unstate(state);\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_dupe_style_directive() {
+        let s = "<div style:color=\"red\" style:color=\"blue\">text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-dupe-style-properties"),
+            "Should flag duplicate style directive properties");
+    }
+
+    #[test]
+    fn test_parse_expression_destructure_in_handler() {
+        let s = "<button on:click={() => { const { x, y } = getPosition(); moveTo(x, y); }}>move</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     #[test]
     fn test_1000th_milestone() {
         // The 1000th test! A complete Svelte component that exercises everything.
