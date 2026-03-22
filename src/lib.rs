@@ -9247,7 +9247,7 @@ mod linter_fixture_tests {
     #[test] fn linter_no_spaces_around_equal_signs_in_attribute_invalid() { run_linter_invalid("no-spaces-around-equal-signs-in-attribute"); }
     #[test] fn linter_prefer_class_directive_valid() { run_linter_valid("prefer-class-directive"); }
     // prefer-class-directive invalid needs nested ternary / multi-expression analysis
-    // #[test] fn linter_prefer_class_directive_invalid() { run_linter_invalid("prefer-class-directive"); }
+    #[test] fn linter_prefer_class_directive_invalid() { run_linter_invalid("prefer-class-directive"); }
     #[test] fn linter_prefer_style_directive_valid() { run_linter_valid("prefer-style-directive"); }
     #[test] fn linter_prefer_style_directive_invalid() { run_linter_invalid("prefer-style-directive"); }
     #[test] fn linter_no_trailing_spaces_valid() { run_linter_valid("no-trailing-spaces"); }
