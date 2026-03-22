@@ -116,10 +116,7 @@ impl Rule for NoNavigationWithoutResolve {
             } // end if nav_local_names not empty
         }
 
-        // Template <a href> checking disabled — requires variable tracking
-        // to distinguish path variables from fragment/external URLs.
-        // 17/18 invalid fixtures pass via script-level goto/pushState checking.
-        if false {
+        // Template <a href> checking: trace variable values to check if safe
         let imports = if let Some(script) = &ctx.ast.instance {
             parse_imports(&script.content)
         } else { Vec::new() };
@@ -174,9 +171,22 @@ impl Rule for NoNavigationWithoutResolve {
                         };
                         if skip { continue; }
 
-                        // Check if resolve is used
-                        if region.contains("resolve") { continue; }
+                        // Check if resolve/asset wraps the ENTIRE value (not partial)
+                        if let AttributeValue::Expression(expr) = value {
+                            let e = expr.trim();
+                            // resolve('/path') or asset('/path') as the entire expression
+                            if (e.starts_with("resolve") || e.starts_with("asset")) && e.ends_with(')') && !e.contains('+') {
+                                continue;
+                            }
+                        }
+                        if region.contains("resolve(") && !region.contains('+') { continue; }
                         if has_resolve && region.contains("$") { continue; }
+                        // Check if expression is a PURE function call (not concatenated)
+                        if let AttributeValue::Expression(expr) = value {
+                            let e = expr.trim();
+                            // Pure call: `fn(args)` — no concatenation
+                            if e.contains('(') && e.ends_with(')') && !e.contains('+') { continue; }
+                        }
                         // Skip if the expression is clearly safe (fragment, absolute URL, etc.)
                         if let AttributeValue::Expression(expr) = value {
                             let e = expr.trim();
@@ -184,21 +194,27 @@ impl Rule for NoNavigationWithoutResolve {
                                 || e.starts_with("'#") || e.starts_with("\"#")
                                 || e.starts_with("'mailto:") || e.starts_with("\"mailto:")
                                 || e.starts_with("`#") || e.contains("'#'")
-                                || e.starts_with("'//") || e.starts_with("\"//") {
+                                || e.starts_with("'//") || e.starts_with("\"//")
+                                // Template literal with URL protocol
+                                || (e.starts_with('`') && e.contains("://"))
+                                // Expression producing URL (contains protocol)
+                                || e.contains("://")
+                                // Nullish
+                                || e == "undefined" || e == "null"
+                                {
                                 continue;
                             }
                         }
-                        // Skip href={value} where value could be a fragment variable
-                        // or {href} shorthand — too many false positives without full analysis
+                        // For identifiers, trace to initializer value
                         if let AttributeValue::Expression(expr) = value {
                             let e = expr.trim();
-                            // Simple identifier — could be anything, skip to avoid false positives
                             if e.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
-                                continue;
+                                // Trace variable to its initializer
+                                let script_content = ctx.ast.instance.as_ref().map(|s| s.content.as_str()).unwrap_or("");
+                                if is_value_safe(e, script_content, 0) { continue; }
                             }
                         }
 
-                        // Flag as missing resolve
                         ctx.diagnostic(
                             "Unexpected href link without resolve().",
                             *span,
@@ -207,6 +223,47 @@ impl Rule for NoNavigationWithoutResolve {
                 }
             }
         });
-        } // end if false
     }
+}
+
+/// Trace a variable name to its initializer and check if the value is safe
+/// (resolve call, absolute URL, fragment, nullish, or asset call).
+fn is_value_safe(var_name: &str, script_content: &str, depth: usize) -> bool {
+    if depth > 5 { return false; } // prevent infinite recursion
+    // Find `const/let VAR = INIT;` in script
+    for kw in &["const ", "let ", "var "] {
+        let pattern = format!("{}{}", kw, var_name);
+        if let Some(pos) = script_content.find(&pattern) {
+            let rest = &script_content[pos + pattern.len()..];
+            let rest = rest.trim_start();
+            if !rest.starts_with('=') { continue; }
+            let init = rest[1..].trim_start();
+            // Get the initializer up to ; or newline
+            let end = init.find(|c| c == ';' || c == '\n').unwrap_or(init.len());
+            let init = init[..end].trim();
+            // Check if initializer is safe
+            if init.is_empty() { continue; }
+            // null/undefined → safe
+            if init == "null" || init == "undefined" { return true; }
+            // resolve() call → safe
+            if init.contains("resolve") || init.contains("asset") { return true; }
+            // Absolute URL → safe
+            if init.starts_with("'http") || init.starts_with("\"http")
+                || init.starts_with("'//") || init.starts_with("\"//")
+                || init.starts_with("'mailto:") || init.starts_with("'tel:") { return true; }
+            // Fragment → safe
+            if init.starts_with("'#") || init.starts_with("\"#") { return true; }
+            // Another identifier → trace recursively
+            if init.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+                return is_value_safe(init, script_content, depth + 1);
+            }
+            // Template literal with resolve → safe
+            if init.contains("resolve") { return true; }
+            // $page.url, $page.data → safe (SvelteKit stores)
+            if init.starts_with("$page") || init.starts_with("$app") { return true; }
+            // Not clearly safe
+            return false;
+        }
+    }
+    false // variable not found or not initialized
 }
