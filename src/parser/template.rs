@@ -266,7 +266,10 @@ impl<'a> TemplateParser<'a> {
                             break;
                         }
                     }
-                    self.pos += 1;
+                    // Advance by the full UTF-8 character length to avoid
+                    // landing inside a multi-byte character.
+                    let ch_len = utf8_char_len(self.source.as_bytes()[self.pos]);
+                    self.pos += ch_len;
                 }
                 let text = &self.source[text_start as usize..self.pos];
                 if !text.is_empty() {
@@ -684,8 +687,9 @@ impl<'a> TemplateParser<'a> {
             let attr_name = &self.source[attr_name_start..self.pos];
 
             if attr_name.is_empty() {
-                // Unexpected character
-                self.pos += 1;
+                // Unexpected character — advance by full UTF-8 char length
+                let ch_len = utf8_char_len(self.source.as_bytes()[self.pos]);
+                self.pos += ch_len;
                 continue;
             }
 
@@ -1117,6 +1121,17 @@ impl<'a> TemplateParser<'a> {
 
 // ─── Utility functions ─────────────────────────────────────────────────────
 
+/// Return the byte length of the UTF-8 character starting at `byte`.
+/// Falls back to 1 for continuation bytes (should not happen in valid UTF-8).
+#[inline]
+fn utf8_char_len(byte: u8) -> usize {
+    if byte < 0x80 { 1 }
+    else if byte < 0xC0 { 1 } // continuation byte — shouldn't be a start
+    else if byte < 0xE0 { 2 }
+    else if byte < 0xF0 { 3 }
+    else { 4 }
+}
+
 /// Parse an `{#each}` header like `items as item, i (item.id)`.
 fn parse_each_header(header: &str) -> (String, String, Option<String>, Option<String>) {
     let header = header.trim();
@@ -1384,6 +1399,27 @@ mod tests {
                 assert_eq!(block.key.as_deref(), Some("item.id"));
             }
             _ => panic!("expected EachBlock"),
+        }
+    }
+
+    #[test]
+    fn test_parse_title_with_multibyte_utf8() {
+        // Regression test: multi-byte UTF-8 chars in <title> caused a panic
+        // because parse_raw_text_children incremented pos by 1 byte instead of
+        // the full character length.
+        let source = "<title>{name} \u{2022} {site}</title>";
+        let result = parse_fragment(source).unwrap();
+        match &result.nodes[0] {
+            TemplateNode::Element(el) => {
+                assert_eq!(el.name, "title");
+                // Should have 3 children: mustache, text with bullet, mustache
+                assert_eq!(el.children.len(), 3);
+                match &el.children[1] {
+                    TemplateNode::Text(t) => assert!(t.data.contains('\u{2022}')),
+                    other => panic!("expected Text, got {:?}", other),
+                }
+            }
+            _ => panic!("expected Element"),
         }
     }
 
