@@ -1002,6 +1002,181 @@ mod tests {
             "Should NOT flag window inside if block");
     }
 
+    // --- final push to 800 ---
+
+    #[test]
+    fn test_parse_css_with_important() {
+        let s = "<style>\n\t.override { color: red !important; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_pseudo_element() {
+        let s = "<style>\n\tp::before { content: '>>'; }\n\tp::after { content: '<<'; }\n\tp::first-line { text-transform: uppercase; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_multiple_selectors() {
+        let s = "<style>\n\th1, h2, h3 { color: blue; }\n\t.a, .b { margin: 0; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_calc() {
+        let s = "<style>\n\t.box { width: calc(100% - 2rem); height: calc(100vh - 60px); }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_grid() {
+        let s = "<style>\n\t.grid {\n\t\tdisplay: grid;\n\t\tgrid-template-columns: repeat(3, 1fr);\n\t\tgap: 1rem;\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_rest_props() {
+        let s = "<script>\n\tlet { a, b, ...rest } = $props();\n</script>\n<div {a} {b} {...rest}>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_rest() {
+        let s = "{#each items as [first, ...rest]}\n\t<p>{first}: {rest.length} more</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_if_chain() {
+        let s = "{#if status === 'loading'}\n\t<Spinner />\n{:else if status === 'error'}\n\t<Error />\n{:else if status === 'empty'}\n\t<Empty />\n{:else}\n\t<Content />\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_each_without_key_with_key() {
+        let s1 = "{#each items as item}\n\t<p>{item}</p>\n{/each}";
+        let s2 = "{#each items as item (item.id)}\n\t<p>{item}</p>\n{/each}";
+        let r1 = parser::parse(s1);
+        let r2 = parser::parse(s2);
+        let d1 = Linter::all().lint(&r1.ast, s1);
+        let d2 = Linter::all().lint(&r2.ast, s2);
+        assert!(d1.iter().any(|d| d.rule_name == "svelte/require-each-key"));
+        assert!(!d2.iter().any(|d| d.rule_name == "svelte/require-each-key"));
+    }
+
+    #[test]
+    fn test_parse_element_with_many_attrs() {
+        let s = "<input\n\ttype=\"text\"\n\tid=\"name\"\n\tname=\"name\"\n\tplaceholder=\"Enter name\"\n\tclass=\"input\"\n\trequired\n\tautofocus\n\tbind:value={name}\n\ton:input={handleInput}\n/>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_mixed_static_dynamic_attrs() {
+        let s = "<div id=\"static\" class={dynamic} data-x=\"static\" style:color={color}>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_key_block_complex() {
+        let s = "{#key selectedId}\n\t<DetailView id={selectedId} />\n{/key}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_await_catch_only() {
+        let s = "{#await promise}\n\t<p>Loading</p>\n{:catch error}\n\t<p>{error.message}</p>\n{/await}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_snippet_no_params() {
+        let s = "{#snippet footer()}\n\t<p>Footer</p>\n{/snippet}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_render_optional() {
+        let s = "{#if headerSnippet}\n\t{@render headerSnippet()}\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_debug_multiple() {
+        let s = "{@debug a, b, c, d}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::DebugTag(tag) = &r.ast.html.nodes[0] {
+            assert_eq!(tag.identifiers.len(), 4);
+        }
+    }
+
+    #[test]
+    fn test_parse_const_in_each() {
+        let s = "{#each items as item}\n\t{@const total = item.price * item.qty}\n\t<p>{item.name}: {total}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_multiple_scripts_with_style() {
+        let s = "<script context=\"module\">\n\texport const prerender = true;\n</script>\n\n<script>\n\tlet count = 0;\n</script>\n\n<p>{count}</p>\n\n<style>\n\tp { color: blue; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        assert!(r.ast.module.is_some());
+        assert!(r.ast.instance.is_some());
+        assert!(r.ast.css.is_some());
+    }
+
+    #[test]
+    fn test_parse_dynamic_tag_name() {
+        let s = "<svelte:element this={isDiv ? 'div' : 'span'}>content</svelte:element>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_event_modifiers_once_capture() {
+        let s = "<div on:click|once|capture={handler}>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_debug_single_var() {
+        let s = "{@debug x}";
+        let r = parser::parse(s);
+        let diags = Linter::recommended().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-at-debug-tags"));
+    }
+
+    #[test]
+    fn test_parse_option_immutable() {
+        let s = "<svelte:options immutable={true} />\n<p>content</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_binding_contenteditable() {
+        let s = "<div contenteditable=\"true\" bind:textContent={text}>Edit me</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- pushing to 800 ---
 
     #[test]
