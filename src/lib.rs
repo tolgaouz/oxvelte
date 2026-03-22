@@ -9162,7 +9162,20 @@ mod linter_fixture_tests {
                     let path = entry.path();
                     if path.is_dir() {
                         let dirname = path.file_name().unwrap().to_string_lossy();
-                        if dirname == "ts" || dirname == "typescript" { continue; }
+                        // Skip ts/ dirs that need TypeScript type analysis (store detection)
+                        // Keep ts/ dirs for rules that just use TS as a config variant name
+                        if dirname == "typescript" { continue; }
+                        if dirname == "ts" {
+                            // Check parent path — only skip for rules needing type analysis
+                            let parent = path.parent().and_then(|p| p.parent())
+                                .and_then(|p| p.file_name())
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_default();
+                            let needs_type_analysis = parent == "require-store-reactive-access"
+                                || parent == "valid-compile"
+                                || parent == "indent";
+                            if needs_type_analysis { continue; }
+                        }
                         walk(&path, files);
                     } else {
                         let fname = path.file_name().unwrap().to_string_lossy().to_string();
