@@ -1011,6 +1011,237 @@ mod tests {
         assert!(bg.is_empty(), "Should NOT flag location inside guarded blocks, got: {:?}", bg.iter().map(|d| &d.message).collect::<Vec<_>>());
     }
 
+    #[test]
+    fn test_parse_script_with_top_level_await() {
+        let s = "<script>\n\tconst data = await fetch('/api').then(r => r.json());\n</script>\n<p>{JSON.stringify(data)}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_element_custom_events() {
+        let s = "<div on:customEvent={handler} on:anotherEvent|stopPropagation on:thirdEvent={(e) => log(e.detail)}>events</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_position_inset() {
+        let s = "<style>\n\t.overlay { position: fixed; inset: 0; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_inspect_with() {
+        let s = "<script>\n\tlet x = $state(0);\n\t$inspect(x).with(console.log);\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-inspect"));
+    }
+
+    // --- final push to 1100 ---
+
+    #[test]
+    fn test_parse_each_with_default_value() {
+        let s = "{#each items as { name = 'Unknown', age = 0 }}\n\t<p>{name}: {age}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_event_delegation() {
+        let s = "<div onclick={handleClick}>\n\t<button>A</button>\n\t<button>B</button>\n\t<button>C</button>\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_with_generics_constraint() {
+        let s = "<script lang=\"ts\" generics=\"T extends { id: string; name: string }\">\n\tlet { items }: { items: T[] } = $props();\n</script>\n{#each items as item (item.id)}\n\t<p>{item.name}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_layer_imports() {
+        let s = "<style>\n\t@layer utilities {\n\t\t.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; }\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_store_callback_writable_with_set() {
+        let s = "<script>\n\timport { writable } from 'svelte/store';\n\twritable(0, (set) => { set(1); return () => {}; });\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/require-store-callbacks-use-set-param"),
+            "Should NOT flag callback with set");
+    }
+
+    #[test]
+    fn test_parse_expression_with_ternary_chain() {
+        let s = "<p>{size === 'sm' ? '14px' : size === 'md' ? '16px' : size === 'lg' ? '20px' : '24px'}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_dynamic_import_component() {
+        let s = "<script>\n\timport { onMount } from 'svelte';\n\tlet LazyComponent;\n\tonMount(async () => {\n\t\tLazyComponent = (await import('./Lazy.svelte')).default;\n\t});\n</script>\n{#if LazyComponent}\n\t<svelte:component this={LazyComponent} />\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_element_with_data_sveltekit() {
+        let s = "<a href=\"/dashboard\" data-sveltekit-preload-data=\"hover\" data-sveltekit-preload-code=\"viewport\">Dashboard</a>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_snippet_with_typed_params() {
+        let s = "{#snippet cell(value: string, index: number)}\n\t<td class:first={index === 0}>{value}</td>\n{/snippet}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_object_in_text_complex() {
+        let s = "<p>{{ a: 1, b: 2 }}</p>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-object-in-text-mustaches"),
+            "Should flag complex object in text");
+    }
+
+    #[test]
+    fn test_parse_css_transform() {
+        let s = "<style>\n\t.rotate {\n\t\ttransform: rotate(45deg) translateX(10px) scale(1.2);\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_component_lifecycle() {
+        let s = "<script>\n\timport { onMount, onDestroy } from 'svelte';\n\tlet mounted = $state(false);\n\tonMount(() => {\n\t\tmounted = true;\n\t\treturn () => { mounted = false; };\n\t});\n</script>\n<p>{mounted ? 'Mounted' : 'Not mounted'}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_index_destructure() {
+        let s = "{#each matrix as row, y}\n\t{#each row as cell, x}\n\t\t<div style:grid-column={x + 1} style:grid-row={y + 1}>{cell}</div>\n\t{/each}\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_logical_assignment() {
+        let s = "<button on:click={() => count ??= 0}>init</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_attribute_with_entity() {
+        let s = "<div title=\"&lt;script&gt; injection\">{text}</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_svelte_internal_server() {
+        let s = "<script>\n\timport { something } from 'svelte/internal/server';\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-svelte-internal"),
+            "Should flag svelte/internal/server import");
+    }
+
+    #[test]
+    fn test_parse_svelte_boundary_with_fallback() {
+        let s = "<svelte:boundary>\n\t<Risky />\n\t{#snippet failed(error, reset)}\n\t\t<p>Error: {error.message}</p>\n\t\t<button onclick={reset}>Retry</button>\n\t{/snippet}\n</svelte:boundary>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_element_class_computed() {
+        let s = "<div class=\"item type-{type} state-{state} {active ? 'is-active' : ''}\">text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_render_tag_optional() {
+        let s = "{@render children?.()}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_nav_base_hash_ok() {
+        let s = "<a href=\"#top\">Back to top</a>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-navigation-without-base"),
+            "Should NOT flag hash links");
+    }
+
+    #[test]
+    fn test_parse_mixed_blocks_and_elements() {
+        let s = "<header>\n\t<h1>{title}</h1>\n</header>\n{#if showNav}\n\t<nav>\n\t\t{#each links as link (link.href)}\n\t\t\t<a href={link.href}>{link.text}</a>\n\t\t{/each}\n\t</nav>\n{/if}\n<main>\n\t<slot />\n</main>\n{#if showFooter}\n\t<footer>&copy; {year}</footer>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_position_sticky() {
+        let s = "<style>\n\t.sticky {\n\t\tposition: sticky;\n\t\ttop: 0;\n\t\tz-index: 10;\n\t\tbackground: white;\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_in_style_attr() {
+        let s = "<div style=\"transform: rotate({angle}deg); opacity: {visible ? 1 : 0}\">text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_with_events_svelte5() {
+        let s = "<script>\n\tlet { onclick, onhover, onfocus } = $props();\n</script>\n<div {onclick} {onfocus} on:mouseenter={onhover}>interactive</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_multiple_debug_tags() {
+        let s = "{@debug a}\n{@debug b}\n{@debug a, b, c}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        let diags = Linter::all().lint(&r.ast, s);
+        let debug_diags: Vec<_> = diags.iter().filter(|d| d.rule_name == "svelte/no-at-debug-tags").collect();
+        assert_eq!(debug_diags.len(), 3, "Should flag all 3 debug tags");
+    }
+
+    #[test]
+    fn test_parse_expression_template_nested() {
+        let s = "<p>{`${first} ${middle ? `(${middle}) ` : ''}${last}`}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_complete_form() {
+        let s = "<script lang=\"ts\">\n\tinterface FormData { name: string; email: string; message: string }\n\tlet form = $state<FormData>({ name: '', email: '', message: '' });\n\tlet errors = $derived({\n\t\tname: form.name.length < 2 ? 'Too short' : '',\n\t\temail: !form.email.includes('@') ? 'Invalid' : '',\n\t\tmessage: form.message.length < 10 ? 'Too short' : '',\n\t});\n\tlet valid = $derived(!errors.name && !errors.email && !errors.message);\n\tlet submitting = $state(false);\n\tconst submit = async () => {\n\t\tsubmitting = true;\n\t\tawait fetch('/api/contact', { method: 'POST', body: JSON.stringify(form) });\n\t\tsubmitting = false;\n\t};\n</script>\n\n<form onsubmit={(e) => { e.preventDefault(); submit(); }}>\n\t<label>Name <input bind:value={form.name} /></label>\n\t{#if errors.name}<span class=\"error\">{errors.name}</span>{/if}\n\t<label>Email <input type=\"email\" bind:value={form.email} /></label>\n\t{#if errors.email}<span class=\"error\">{errors.email}</span>{/if}\n\t<label>Message <textarea bind:value={form.message} /></label>\n\t{#if errors.message}<span class=\"error\">{errors.message}</span>{/if}\n\t<button type=\"submit\" disabled={!valid || submitting}>\n\t\t{submitting ? 'Sending...' : 'Send'}\n\t</button>\n</form>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- towards 1100 batch ---
 
     #[test]
