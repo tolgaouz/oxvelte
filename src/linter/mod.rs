@@ -89,37 +89,55 @@ impl Linter {
 pub fn walk_template_nodes<F>(fragment: &Fragment, visitor: &mut F)
 where F: FnMut(&TemplateNode)
 {
-    for node in &fragment.nodes {
+    walk_nodes(&fragment.nodes, visitor);
+}
+
+fn walk_nodes<F>(nodes: &[TemplateNode], visitor: &mut F)
+where F: FnMut(&TemplateNode)
+{
+    for node in nodes {
         visitor(node);
         match node {
             TemplateNode::Element(el) => {
-                let child_frag = Fragment { nodes: el.children.clone(), span: el.span };
-                walk_template_nodes(&child_frag, visitor);
+                walk_nodes(&el.children, visitor);
             }
             TemplateNode::IfBlock(block) => {
-                walk_template_nodes(&block.consequent, visitor);
+                walk_nodes(&block.consequent.nodes, visitor);
                 if let Some(alt) = &block.alternate {
-                    // Walk the alternate as if it were in a fragment so visitors see it
-                    let wrapper = Fragment {
-                        nodes: vec![*alt.clone()],
-                        span: block.span,
-                    };
-                    walk_template_nodes(&wrapper, visitor);
+                    visitor(alt);
+                    // Recurse into the alternate node
+                    match alt.as_ref() {
+                        TemplateNode::IfBlock(ib) => {
+                            walk_nodes(&ib.consequent.nodes, visitor);
+                            if let Some(a) = &ib.alternate { walk_alt(a, visitor); }
+                        }
+                        _ => {}
+                    }
                 }
             }
             TemplateNode::EachBlock(block) => {
-                walk_template_nodes(&block.body, visitor);
-                if let Some(fb) = &block.fallback { walk_template_nodes(fb, visitor); }
+                walk_nodes(&block.body.nodes, visitor);
+                if let Some(fb) = &block.fallback { walk_nodes(&fb.nodes, visitor); }
             }
             TemplateNode::AwaitBlock(block) => {
-                if let Some(p) = &block.pending { walk_template_nodes(p, visitor); }
-                if let Some(t) = &block.then { walk_template_nodes(t, visitor); }
-                if let Some(c) = &block.catch { walk_template_nodes(c, visitor); }
+                if let Some(p) = &block.pending { walk_nodes(&p.nodes, visitor); }
+                if let Some(t) = &block.then { walk_nodes(&t.nodes, visitor); }
+                if let Some(c) = &block.catch { walk_nodes(&c.nodes, visitor); }
             }
-            TemplateNode::KeyBlock(block) => walk_template_nodes(&block.body, visitor),
-            TemplateNode::SnippetBlock(block) => walk_template_nodes(&block.body, visitor),
+            TemplateNode::KeyBlock(block) => walk_nodes(&block.body.nodes, visitor),
+            TemplateNode::SnippetBlock(block) => walk_nodes(&block.body.nodes, visitor),
             _ => {}
         }
+    }
+}
+
+fn walk_alt<F>(alt: &Box<TemplateNode>, visitor: &mut F)
+where F: FnMut(&TemplateNode)
+{
+    visitor(alt);
+    if let TemplateNode::IfBlock(ib) = alt.as_ref() {
+        walk_nodes(&ib.consequent.nodes, visitor);
+        if let Some(a) = &ib.alternate { walk_alt(a, visitor); }
     }
 }
 

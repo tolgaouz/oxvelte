@@ -1003,6 +1003,15 @@ mod tests {
     }
 
     #[test]
+    fn test_browser_globals_guards03() {
+        let s = std::fs::read_to_string("fixtures/linter/no-top-level-browser-globals/valid/guards03-input.svelte").unwrap();
+        let r = parser::parse(&s);
+        let diags = Linter::all().lint(&r.ast, &s);
+        let bg: Vec<_> = diags.iter().filter(|d| d.rule_name == "svelte/no-top-level-browser-globals").collect();
+        assert!(bg.is_empty(), "Should NOT flag location inside guarded blocks, got: {:?}", bg.iter().map(|d| &d.message).collect::<Vec<_>>());
+    }
+
+    #[test]
     fn test_parse_nbsp_entity() {
         let s = "<p>Hello&nbsp;World</p>";
         let r = parser::parse(s);
