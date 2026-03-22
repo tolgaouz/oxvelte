@@ -51,10 +51,18 @@ impl Rule for NoUnusedProps {
         if has_rest { return; }
 
         // For non-destructured patterns (const props = $props()), track props.X accesses
+        let check_imported_early = ctx.config.options.as_ref()
+            .and_then(|o| o.as_array())
+            .and_then(|a| a.first())
+            .and_then(|o| o.get("checkImportedTypes"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let resolve_path_early = if check_imported_early { ctx.file_path.as_deref() } else { None };
+
         if !uses_destructuring {
             let type_name = extract_type_name(before_props);
             let all_props = if let Some(ref tn) = &type_name {
-                extract_type_properties(content, tn)
+                extract_type_properties_with_file(content, tn, resolve_path_early)
             } else { Vec::new() };
 
             if all_props.is_empty() { return; }
@@ -82,7 +90,19 @@ impl Rule for NoUnusedProps {
                 let bracket_access2 = format!("{}[\"{}\"]", var_name, prop_name);
                 if full_source.contains(&dot_access)
                     || full_source.contains(&bracket_access)
-                    || full_source.contains(&bracket_access2) { continue; }
+                    || full_source.contains(&bracket_access2) {
+                    // Property is used — but check nested sub-properties (unless disabled)
+                    let allow_nested = ctx.config.options.as_ref()
+                        .and_then(|o| o.as_array())
+                        .and_then(|a| a.first())
+                        .and_then(|o| o.get("allowUnusedNestedProperties"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if !allow_nested {
+                        check_nested_properties(content, content_offset, full_source, var_name, prop_name, ctx);
+                    }
+                    continue;
+                }
                 let src_pos = content_offset + prop_offset;
                 ctx.diagnostic(
                     format!("'{}' is an unused Props property.", prop_name),
@@ -95,15 +115,6 @@ impl Rule for NoUnusedProps {
         // Extract type name from `: TypeName = $props()`
         let type_name = extract_type_name(before_props);
 
-        // Get all type properties
-        let all_props = if let Some(ref tn) = type_name {
-            extract_type_properties(content, tn)
-        } else {
-            extract_inline_type_properties(before_props)
-        };
-
-        if all_props.is_empty() { return; }
-
         // Config: ignorePropertyPatterns, checkImportedTypes, ignoreTypePatterns
         let ignore_patterns = extract_ignore_patterns(&ctx.config.options);
         let ignore_type_patterns = extract_ignore_type_patterns(&ctx.config.options);
@@ -113,6 +124,17 @@ impl Rule for NoUnusedProps {
             .and_then(|o| o.get("checkImportedTypes"))
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+
+        // Get all type properties
+        // Only pass file_path for cross-file resolution when checkImportedTypes is true
+        let resolve_path = if check_imported { ctx.file_path.as_deref() } else { None };
+        let all_props = if let Some(ref tn) = type_name {
+            extract_type_properties_with_file(content, tn, resolve_path)
+        } else {
+            extract_inline_type_properties(before_props)
+        };
+
+        if all_props.is_empty() { return; }
 
         // Skip imported types unless checkImportedTypes is true
         if !check_imported {
@@ -258,24 +280,162 @@ fn extract_type_name(before_props: &str) -> Option<String> {
     Some(name.to_string())
 }
 
-fn extract_type_properties(content: &str, type_name: &str) -> Vec<(String, usize)> {
+fn extract_type_properties_with_file(content: &str, type_name: &str, file_path: Option<&str>) -> Vec<(String, usize)> {
     let mut props = Vec::new();
-    let patterns = [
+
+    // Check for interface declaration
+    let iface_patterns = [
         format!("interface {} ", type_name),
         format!("interface {} {{", type_name),
-        format!("type {} =", type_name),
+    ];
+    let iface_start = iface_patterns.iter()
+        .filter_map(|p| content.find(p.as_str()))
+        .min();
+
+    if let Some(start) = iface_start {
+        if let Some(brace_rel) = content[start..].find('{') {
+            let before_brace = &content[start..start + brace_rel];
+            // Check for `extends BaseType` before the opening brace
+            if let Some(ext_pos) = before_brace.find("extends ") {
+                let extends_part = before_brace[ext_pos + 8..].trim();
+                for base in extends_part.split(',') {
+                    let base_name = base.trim();
+                    if base_name.is_empty() { continue; }
+                    let base_props = extract_type_properties_with_file(content, base_name, None);
+                    if !base_props.is_empty() {
+                        props.extend(base_props);
+                    } else if let Some(fp) = file_path {
+                        let imported_props = resolve_imported_type_properties(content, base_name, fp);
+                        props.extend(imported_props);
+                    }
+                }
+            }
+            extract_props_from_block(content, start + brace_rel, &mut props);
+        }
+        return props;
+    }
+
+    // Check for type alias: type X = ...
+    let type_patterns = [
         format!("type {} =", type_name),
     ];
-    let type_start = patterns.iter()
+    let type_start = type_patterns.iter()
         .filter_map(|p| content.find(p.as_str()))
         .min();
 
     if let Some(start) = type_start {
-        if let Some(brace_start) = content[start..].find('{') {
-            extract_props_from_block(content, start + brace_start, &mut props);
+        let eq_pos = content[start..].find('=').unwrap_or(0);
+        let rhs_start = start + eq_pos + 1;
+        let rhs = content[rhs_start..].trim_start();
+
+        // Check if this is an intersection type: A & B & { ... }
+        if rhs.contains('&') {
+            // Find the full type expression (up to the matching ; or end of type)
+            let type_end = find_type_end(rhs);
+            let type_expr = &rhs[..type_end];
+
+            // Split on & at depth 0
+            let parts = split_intersection(type_expr);
+            for part in &parts {
+                let part = part.trim();
+                if part.is_empty() { continue; }
+                if part.starts_with('{') {
+                    // Inline object type
+                    let block_start = rhs_start + (content[rhs_start..].find(part).unwrap_or(0));
+                    extract_props_from_block(content, block_start, &mut props);
+                } else {
+                    // Named type reference
+                    let ref_name = part.split(|c: char| !c.is_alphanumeric() && c != '_').next().unwrap_or("");
+                    if !ref_name.is_empty() && ref_name != type_name {
+                        let ref_props = extract_type_properties_with_file(content, ref_name, file_path);
+                        if !ref_props.is_empty() {
+                            props.extend(ref_props);
+                        }
+                    }
+                }
+            }
+        } else if let Some(brace_rel) = content[start..].find('{') {
+            // Simple object type: type X = { ... }
+            extract_props_from_block(content, start + brace_rel, &mut props);
         }
     }
     props
+}
+
+/// Find the end of a type expression (handles nested braces, stops at `;` at depth 0)
+fn find_type_end(s: &str) -> usize {
+    let mut depth = 0i32;
+    for (i, c) in s.char_indices() {
+        match c {
+            '{' | '(' | '<' => depth += 1,
+            '}' | ')' | '>' => { depth -= 1; if depth < 0 { return i; } }
+            ';' if depth == 0 => return i,
+            _ => {}
+        }
+    }
+    s.len()
+}
+
+/// Split a type expression on `&` at depth 0
+fn split_intersection(s: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0;
+    for (i, c) in s.char_indices() {
+        match c {
+            '{' | '(' | '<' => depth += 1,
+            '}' | ')' | '>' => { depth -= 1; if depth < 0 { depth = 0; } }
+            '&' if depth == 0 => {
+                parts.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&s[start..]);
+    parts
+}
+
+/// Resolve type properties from an imported file.
+fn resolve_imported_type_properties(content: &str, type_name: &str, file_path: &str) -> Vec<(String, usize)> {
+    // Find import statement for this type
+    // Patterns: import type { TypeName } from './path'
+    //           import { TypeName } from './path'
+    let import_pattern = format!("import");
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("import") { continue; }
+        if !trimmed.contains(type_name) { continue; }
+        // Extract module path
+        let module = if let Some(from_pos) = trimmed.find("from ") {
+            let after_from = &trimmed[from_pos + 5..];
+            let after_from = after_from.trim().trim_end_matches(';');
+            after_from.trim_matches('\'').trim_matches('"')
+        } else { continue };
+
+        if !module.starts_with('.') { continue; } // Only resolve relative imports
+
+        // Resolve path relative to the current file
+        let dir = std::path::Path::new(file_path).parent().unwrap_or(std::path::Path::new("."));
+        // Try .ts, .d.ts extensions
+        for ext in &["", ".ts", ".d.ts"] {
+            let resolved = dir.join(format!("{}{}", module, ext));
+            if let Ok(imported_content) = std::fs::read_to_string(&resolved) {
+                let base_props = extract_type_properties_with_file(&imported_content, type_name, None);
+                if !base_props.is_empty() {
+                    // Return with offset 0 for imported props (they don't have meaningful offsets in the original file)
+                    return base_props.into_iter().map(|(name, _)| {
+                        // Use the offset of the `extends` clause in the original content as the span
+                        let offset = content.find(&format!("extends {}", type_name))
+                            .or_else(|| content.find(type_name))
+                            .unwrap_or(0);
+                        (name, offset)
+                    }).collect();
+                }
+            }
+        }
+    }
+    Vec::new()
 }
 
 fn extract_inline_type_properties(before_props: &str) -> Vec<(String, usize)> {
@@ -372,6 +532,48 @@ fn extract_ignore_type_patterns(options: &Option<serde_json::Value>) -> Vec<Stri
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default()
+}
+
+/// Check nested properties of a used top-level property.
+/// e.g., if `props.user` is accessed but `props.user.location` is not,
+/// flag `location` as unused.
+fn check_nested_properties(
+    content: &str, content_offset: usize, full_source: &str,
+    var_name: &str, prop_name: &str, ctx: &mut LintContext<'_>,
+) {
+    // Find the property type in the interface/type declaration
+    // Look for `prop_name: { sub1: ...; sub2: ... }`
+    // Search for the property declaration with a nested object type
+    let prop_pattern = format!("{}: {{", prop_name);
+    // Also handle `prop_name?: {`
+    let prop_pattern_opt = format!("{}?: {{", prop_name);
+
+    let prop_pos = content.find(&prop_pattern)
+        .or_else(|| content.find(&prop_pattern_opt));
+
+    if let Some(pos) = prop_pos {
+        let brace_start = content[pos..].find('{').map(|p| pos + p);
+        if let Some(brace_start) = brace_start {
+            let mut nested_props = Vec::new();
+            extract_props_from_block(content, brace_start, &mut nested_props);
+            if nested_props.is_empty() { return; }
+
+            let access_prefix = format!("{}.{}", var_name, prop_name);
+            for (sub_name, sub_offset) in &nested_props {
+                let dot_access = format!("{}.{}", access_prefix, sub_name);
+                let bracket_access = format!("{}['{}']", access_prefix, sub_name);
+                let bracket_access2 = format!("{}[\"{}\"]", access_prefix, sub_name);
+                if full_source.contains(&dot_access)
+                    || full_source.contains(&bracket_access)
+                    || full_source.contains(&bracket_access2) { continue; }
+                let src_pos = content_offset + sub_offset;
+                ctx.diagnostic(
+                    format!("'{}' in '{}' is an unused property.", sub_name, prop_name),
+                    oxc::span::Span::new(src_pos as u32, (src_pos + sub_name.len()) as u32),
+                );
+            }
+        }
+    }
 }
 
 fn matches_pattern(name: &str, pattern: &str) -> bool {

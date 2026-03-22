@@ -35,17 +35,19 @@ pub struct LintContext<'a> {
     pub ast: &'a SvelteAst,
     pub source: &'a str,
     pub config: RuleConfig,
+    /// Path to the file being linted (for cross-file resolution)
+    pub file_path: Option<String>,
     diagnostics: Vec<LintDiagnostic>,
     current_rule: &'static str,
 }
 
 impl<'a> LintContext<'a> {
     pub fn new(ast: &'a SvelteAst, source: &'a str) -> Self {
-        Self { ast, source, config: RuleConfig::default(), diagnostics: Vec::new(), current_rule: "" }
+        Self { ast, source, config: RuleConfig::default(), file_path: None, diagnostics: Vec::new(), current_rule: "" }
     }
 
     pub fn with_config(ast: &'a SvelteAst, source: &'a str, config: RuleConfig) -> Self {
-        Self { ast, source, config, diagnostics: Vec::new(), current_rule: "" }
+        Self { ast, source, config, file_path: None, diagnostics: Vec::new(), current_rule: "" }
     }
 
     pub fn diagnostic(&mut self, message: impl Into<String>, span: Span) {
@@ -100,6 +102,16 @@ impl Linter {
 
     pub fn lint_with_config(&self, ast: &SvelteAst, source: &str, config: RuleConfig) -> Vec<LintDiagnostic> {
         let mut ctx = LintContext::with_config(ast, source, config);
+        for rule in &self.rules {
+            ctx.set_rule(rule.name());
+            rule.run(&mut ctx);
+        }
+        ctx.into_diagnostics()
+    }
+
+    pub fn lint_with_config_and_path(&self, ast: &SvelteAst, source: &str, config: RuleConfig, file_path: &str) -> Vec<LintDiagnostic> {
+        let mut ctx = LintContext::with_config(ast, source, config);
+        ctx.file_path = Some(file_path.to_string());
         for rule in &self.rules {
             ctx.set_rule(rule.name());
             rule.run(&mut ctx);

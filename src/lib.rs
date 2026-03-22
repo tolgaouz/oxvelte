@@ -9165,7 +9165,8 @@ mod linter_fixture_tests {
                     let source = std::fs::read_to_string(&path).unwrap();
                     let result = parser::parse(&source);
                     let config = load_config(&valid_dir, &fname);
-                    let diags = lint.lint_with_config(&result.ast, &source, config);
+                    let file_path_str = path.to_string_lossy().to_string();
+                    let diags = lint.lint_with_config_and_path(&result.ast, &source, config, &file_path_str);
                     let rule_diags: Vec<_> = diags.iter().filter(|d| d.rule_name == format!("svelte/{}", rule_name)).collect();
                     assert!(rule_diags.is_empty(), "Rule {} should not fire on valid file {}: {:?}",
                         rule_name, path.display(), rule_diags.iter().map(|d| &d.message).collect::<Vec<_>>());
@@ -9186,7 +9187,8 @@ mod linter_fixture_tests {
                     let source = std::fs::read_to_string(&path).unwrap();
                     let result = parser::parse(&source);
                     let config = load_config(&invalid_dir, &fname);
-                    let diags = lint.lint_with_config(&result.ast, &source, config);
+                    let file_path_str = path.to_string_lossy().to_string();
+                    let diags = lint.lint_with_config_and_path(&result.ast, &source, config, &file_path_str);
                     let rule_diags: Vec<_> = diags.iter().filter(|d| d.rule_name == format!("svelte/{}", rule_name)).collect();
                     assert!(!rule_diags.is_empty(), "Rule {} should fire on invalid file {}", rule_name, path.display());
                 }
@@ -9286,8 +9288,7 @@ mod linter_fixture_tests {
     #[test] fn linter_require_store_callbacks_use_set_param_invalid() { run_linter_invalid("require-store-callbacks-use-set-param"); }
     #[test] fn linter_require_store_reactive_access_valid() { run_linter_valid("require-store-reactive-access"); }
     
-    // store-reactive-access: 18/19 (directives-store01 needs per-directive-type handling)
-    // #[test] fn linter_require_store_reactive_access_invalid() { run_linter_invalid("require-store-reactive-access"); }
+    #[test] fn linter_require_store_reactive_access_invalid() { run_linter_invalid("require-store-reactive-access"); }
 
     #[test] fn linter_no_dynamic_slot_name_invalid() { run_linter_invalid("no-dynamic-slot-name"); }
     #[test] fn linter_no_goto_without_base_invalid() { run_linter_invalid("no-goto-without-base"); }
@@ -9330,9 +9331,7 @@ mod linter_fixture_tests {
     #[test] fn linter_no_add_event_listener_valid() { run_linter_valid("no-add-event-listener"); }
     #[test] fn linter_no_unnecessary_state_wrap_valid() { run_linter_valid("no-unnecessary-state-wrap"); }
     #[test] fn linter_no_unused_props_valid() { run_linter_valid("no-unused-props"); }
-    // no-unused-props: 19/20 invalid pass (optional-unused needs non-destructured property tracking)
-    // no-unused-props: 19/20 pass (imported-type-check needs cross-file import resolution)
-    // #[test] fn linter_no_unused_props_invalid() { run_linter_invalid("no-unused-props"); }
+    #[test] fn linter_no_unused_props_invalid() { run_linter_invalid("no-unused-props"); }
     #[test] fn linter_no_unused_class_name_valid() { run_linter_valid("no-unused-class-name"); }
     #[test] fn linter_no_unused_class_name_invalid() { run_linter_invalid("no-unused-class-name"); }
     #[test] fn linter_require_event_dispatcher_types_valid() { run_linter_valid("require-event-dispatcher-types"); }
@@ -9364,6 +9363,22 @@ mod linter_fixture_tests {
     #[test] fn linter_indent_invalid() { run_linter_invalid("indent"); }
     #[test] fn linter_valid_compile_valid() { run_linter_valid("valid-compile"); }
     #[test] fn linter_valid_style_parse_valid() { run_linter_valid("valid-style-parse"); }
+
+    // Batch: previously untested rules with fixtures
+    #[test] fn linter_block_lang_valid() { run_linter_valid("block-lang"); }
+    #[test] fn linter_block_lang_invalid() { run_linter_invalid("block-lang"); }
+    #[test] fn linter_consistent_selector_style_valid() { run_linter_valid("consistent-selector-style"); }
+    #[test] fn linter_consistent_selector_style_invalid() { run_linter_invalid("consistent-selector-style"); }
+    #[test] fn linter_derived_has_same_inputs_outputs_valid() { run_linter_valid("derived-has-same-inputs-outputs"); }
+    #[test] fn linter_derived_has_same_inputs_outputs_invalid() { run_linter_invalid("derived-has-same-inputs-outputs"); }
+    #[test] fn linter_no_export_load_in_svelte_module_valid() { run_linter_valid("no-export-load-in-svelte-module-in-kit-pages"); }
+    #[test] fn linter_no_export_load_in_svelte_module_invalid() { run_linter_invalid("no-export-load-in-svelte-module-in-kit-pages"); }
+    #[test] fn linter_no_store_async_valid() { run_linter_valid("no-store-async"); }
+    #[test] fn linter_no_store_async_invalid() { run_linter_invalid("no-store-async"); }
+    #[test] fn linter_spaced_html_comment_valid() { run_linter_valid("spaced-html-comment"); }
+    #[test] fn linter_spaced_html_comment_invalid() { run_linter_invalid("spaced-html-comment"); }
+    #[test] fn linter_valid_prop_names_in_kit_pages_valid() { run_linter_valid("valid-prop-names-in-kit-pages"); }
+    #[test] fn linter_valid_prop_names_in_kit_pages_invalid() { run_linter_invalid("valid-prop-names-in-kit-pages"); }
 }
 
 #[cfg(test)]
