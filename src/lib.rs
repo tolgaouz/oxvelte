@@ -1011,6 +1011,104 @@ mod tests {
         assert!(bg.is_empty(), "Should NOT flag location inside guarded blocks, got: {:?}", bg.iter().map(|d| &d.message).collect::<Vec<_>>());
     }
 
+    // --- towards 1300 ---
+
+    #[test]
+    fn test_indent_template_basic() {
+        let s = "<div>\ntext\n</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/indent"),
+            "Should flag unindented text inside div");
+    }
+
+    #[test]
+    fn test_indent_template_correct_ok() {
+        let s = "<div>\n  text\n</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/indent"),
+            "Should NOT flag correctly indented text");
+    }
+
+    #[test]
+    fn test_indent_script_basic() {
+        let s = "<script>\nlet x = 0;\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/indent"),
+            "Should flag unindented script content");
+    }
+
+    #[test]
+    fn test_indent_if_block() {
+        let s = "{#if x}\ntext\n{/if}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/indent"),
+            "Should flag unindented if block content");
+    }
+
+    #[test]
+    fn test_indent_each_block() {
+        let s = "{#each items as item}\ntext\n{/each}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/indent"),
+            "Should flag unindented each block content");
+    }
+
+    #[test]
+    fn test_indent_nested_correct_ok() {
+        let s = "<div>\n  {#if x}\n    <p>text</p>\n  {/if}\n</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/indent"),
+            "Should NOT flag correctly nested indentation");
+    }
+
+    #[test]
+    fn test_parse_real_world_wizard() {
+        let s = "<script>\n\tlet { steps } = $props();\n\tlet current = $state(0);\n\tlet progress = $derived(((current + 1) / steps.length) * 100);\n</script>\n\n<div class=\"wizard\">\n\t<progress value={progress} max=\"100\" />\n\t{@render steps[current].content?.()}\n\t<div class=\"nav\">\n\t\t<button disabled={current === 0} onclick={() => current--}>Back</button>\n\t\t<span>{current + 1} / {steps.length}</span>\n\t\t<button onclick={() => current < steps.length - 1 ? current++ : null}>\n\t\t\t{current === steps.length - 1 ? 'Finish' : 'Next'}\n\t\t</button>\n\t</div>\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_status_badge() {
+        let s = "<script>\n\tconst STATUS_CONFIG = {\n\t\tactive: { color: 'green', label: 'Active' },\n\t\tinactive: { color: 'gray', label: 'Inactive' },\n\t\tpending: { color: 'yellow', label: 'Pending' },\n\t};\n\tlet { status } = $props();\n\tlet config = $derived(STATUS_CONFIG[status] ?? STATUS_CONFIG.inactive);\n</script>\n<span class=\"badge\" style:background-color={config.color}>{config.label}</span>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_date_formatter() {
+        let s = "<script>\n\tlet { date, format = 'relative' } = $props();\n\tlet formatted = $derived.by(() => {\n\t\tconst d = new Date(date);\n\t\tif (format === 'relative') {\n\t\t\tconst diff = Date.now() - d.getTime();\n\t\t\tif (diff < 60000) return 'just now';\n\t\t\tif (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;\n\t\t\treturn d.toLocaleDateString();\n\t\t}\n\t\treturn d.toISOString();\n\t});\n</script>\n<time datetime={new Date(date).toISOString()}>{formatted}</time>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_overscroll() {
+        let s = "<style>\n\t.scrollable {\n\t\toverscroll-behavior: contain;\n\t\t-webkit-overflow-scrolling: touch;\n\t\tscrollbar-gutter: stable;\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_typewriter() {
+        let s = "<script>\n\tlet { text, speed = 50 } = $props();\n\tlet displayed = $state('');\n\tlet index = $state(0);\n\t$effect(() => {\n\t\tif (index >= text.length) return;\n\t\tconst timer = setTimeout(() => {\n\t\t\tdisplayed += text[index];\n\t\t\tindex++;\n\t\t}, speed);\n\t\treturn () => clearTimeout(timer);\n\t});\n</script>\n<span>{displayed}<span class=\"cursor\">|</span></span>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_context_typed() {
+        let s = "<script lang=\"ts\">\n\timport { getContext, setContext } from 'svelte';\n\ttype ThemeContext = { primary: string; toggle: () => void };\n\tconst theme = getContext<ThemeContext>('theme');\n</script>\n<button onclick={theme.toggle} style:color={theme.primary}>Toggle</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     #[test]
     fn test_1250th_milestone() {
         // The 1250th test — a complete Svelte 5 SvelteKit page
