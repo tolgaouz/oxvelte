@@ -9348,7 +9348,6 @@ mod linter_fixture_tests {
     // browser-globals: 14/15 pass (guards06 needs early-return pattern analysis)
     // #[test] fn linter_no_top_level_browser_globals_invalid() { run_linter_invalid("no-top-level-browser-globals"); }
     // // browser-globals: 14/15 pass (guards06 needs early-return pattern analysis)
-    // #[test] fn linter_no_top_level_browser_globals_invalid() { run_linter_invalid("no-top-level-browser-globals"); }
     #[test] fn linter_require_event_prefix_valid() { run_linter_valid("require-event-prefix"); }
     #[test] fn linter_mustache_spacing_valid() { run_linter_valid("mustache-spacing"); }
     #[test] fn linter_first_attribute_linebreak_valid() { run_linter_valid("first-attribute-linebreak"); }
