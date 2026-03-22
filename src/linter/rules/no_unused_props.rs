@@ -37,7 +37,8 @@ impl Rule for NoUnusedProps {
 
         // Check if using destructuring (let { ... }: Type = $props())
         // vs plain assignment (let props: Type = $props())
-        let decl_start = before_props.rfind("let ").or_else(|| before_props.rfind("const ")).unwrap_or(0);
+        let decl_start = [before_props.rfind("let "), before_props.rfind("const ")]
+            .into_iter().flatten().max().unwrap_or(0);
         let decl = &before_props[decl_start..];
         // Find the first non-whitespace after let/const
         let after_kw = decl.find('{');
@@ -197,8 +198,9 @@ impl Rule for NoUnusedProps {
 
 fn extract_destructured_props(before_props: &str) -> HashSet<String> {
     let mut props = HashSet::new();
-    // Find the DESTRUCTURING { } — it follows `let` or `const`, not the type annotation
-    let decl_start = before_props.rfind("let ").or_else(|| before_props.rfind("const ")).unwrap_or(0);
+    // Find the DESTRUCTURING { } — pick whichever `let` or `const` is closest to $props()
+    let decl_start = [before_props.rfind("let "), before_props.rfind("const ")]
+        .into_iter().flatten().max().unwrap_or(0);
     let after_decl = &before_props[decl_start..];
     let open = match after_decl.find('{') { Some(p) => decl_start + p, None => return props };
     // Find matching } at depth 0
@@ -217,15 +219,27 @@ fn extract_destructured_props(before_props: &str) -> HashSet<String> {
             // Split on commas at depth 0 (skip commas inside nested {})
             let parts = split_at_depth0(inner, ',');
             for part in &parts {
+                // Strip line comments from the part (e.g. // eslint-disable-next-line ...)
+                let part = part.lines()
+                    .filter(|l| !l.trim().starts_with("//"))
+                    .collect::<Vec<_>>().join("\n");
                 let part = part.trim();
                 if part.starts_with("...") { continue; }
                 // Find : or = at depth 0
                 let mut name_end = part.len();
                 let mut d = 0i32;
+                let pbytes = part.as_bytes();
                 for (i, c) in part.char_indices() {
                     match c {
                         '{' | '(' | '[' | '<' => d += 1,
-                        '}' | ')' | ']' | '>' => d -= 1,
+                        '}' | ')' | ']' => { d -= 1; if d < 0 { d = 0; } }
+                        '>' => {
+                            if i > 0 && pbytes[i - 1] == b'=' {
+                                // `=>` arrow, not closing bracket
+                            } else {
+                                d -= 1; if d < 0 { d = 0; }
+                            }
+                        }
                         ':' | '=' if d == 0 => { name_end = i; break; }
                         _ => {}
                     }
@@ -244,10 +258,20 @@ fn split_at_depth0(s: &str, sep: char) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut depth = 0i32;
     let mut start = 0;
+    let bytes = s.as_bytes();
     for (i, c) in s.char_indices() {
         match c {
             '{' | '(' | '[' | '<' => depth += 1,
-            '}' | ')' | ']' | '>' => depth -= 1,
+            '}' | ')' | ']' => { depth -= 1; if depth < 0 { depth = 0; } }
+            // Don't treat `>` in `=>` as a bracket closer
+            '>' => {
+                if i > 0 && bytes[i - 1] == b'=' {
+                    // This is `=>` (arrow), not a closing angle bracket
+                } else {
+                    depth -= 1;
+                    if depth < 0 { depth = 0; }
+                }
+            }
             c if c == sep && depth == 0 => {
                 parts.push(&s[start..i]);
                 start = i + 1;
@@ -478,18 +502,31 @@ fn extract_props_from_block(content: &str, brace_start: usize, props: &mut Vec<(
     }
     let block = &after[..end];
 
+    // Strip block comments (/** ... */ and /* ... */) before parsing properties
+    let stripped = strip_block_comments(block);
+    let block_ref = stripped.as_str();
+
     // Only extract TOP-LEVEL properties (not nested)
     let mut depth = 0i32;
     let mut line_start = 0;
-    for (i, b) in block.bytes().enumerate() {
+    let block_bytes = block_ref.as_bytes();
+    for (i, b) in block_ref.bytes().enumerate() {
         match b {
-            b'{' | b'(' => depth += 1,
-            b'}' | b')' => { depth -= 1; if depth < 0 { depth = 0; } }
+            b'{' | b'(' | b'<' | b'[' => depth += 1,
+            b'}' | b')' | b']' => { depth -= 1; if depth < 0 { depth = 0; } }
+            b'>' => {
+                // Don't treat `=>` as a closing bracket
+                if i > 0 && block_bytes[i - 1] == b'=' {
+                    // arrow `=>`
+                } else {
+                    depth -= 1; if depth < 0 { depth = 0; }
+                }
+            }
             b';' | b'\n' if depth == 0 => {
-                let segment = &block[line_start..i];
+                let segment = &block_ref[line_start..i];
                 let trimmed = segment.trim();
                 line_start = i + 1;
-                if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with("/*") { continue; }
+                if trimmed.is_empty() || trimmed.starts_with("//") { continue; }
                 if trimmed.starts_with('[') { continue; }
 
                 let name = if trimmed.starts_with('\'') || trimmed.starts_with('"') {
@@ -502,9 +539,10 @@ fn extract_props_from_block(content: &str, brace_start: usize, props: &mut Vec<(
                 };
                 if let Some(name) = name {
                     let name = name.trim();
-                    if name.is_empty() || name.starts_with("//") { continue; }
-                    let offset = content[brace_start..].find(trimmed)
-                        .map(|p| brace_start + p)
+                    if name.is_empty() || name.starts_with("//") || name.starts_with('*') { continue; }
+                    // Use original block to find offset (not the stripped version)
+                    let offset = block.find(name)
+                        .map(|p| brace_start + 1 + p)
                         .unwrap_or(0);
                     props.push((name.to_string(), offset));
                 }
@@ -512,6 +550,34 @@ fn extract_props_from_block(content: &str, brace_start: usize, props: &mut Vec<(
             _ => {}
         }
     }
+}
+
+/// Strip block comments (/* ... */ and /** ... */) from text, preserving newlines
+fn strip_block_comments(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+            // Skip until */
+            i += 2;
+            while i + 1 < bytes.len() {
+                if bytes[i] == b'*' && bytes[i + 1] == b'/' {
+                    i += 2;
+                    break;
+                }
+                // Preserve newlines so line-based parsing still works
+                if bytes[i] == b'\n' {
+                    result.push('\n');
+                }
+                i += 1;
+            }
+        } else {
+            result.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    result
 }
 
 fn extract_ignore_patterns(options: &Option<serde_json::Value>) -> Vec<String> {
