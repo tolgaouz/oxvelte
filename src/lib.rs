@@ -1002,6 +1002,135 @@ mod tests {
             "Should NOT flag window inside if block");
     }
 
+    #[test]
+    fn test_parse_nbsp_entity() {
+        let s = "<p>Hello&nbsp;World</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    // --- final stretch ---
+
+    #[test]
+    fn test_parse_css_transition() {
+        let s = "<style>\n\t.fade { transition: opacity 0.3s ease; }\n\t.slide { transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1); }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_animation() {
+        let s = "<style>\n\t@keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }\n\t.spinner { animation: spin 1s linear infinite; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_flex() {
+        let s = "<style>\n\t.flex {\n\t\tdisplay: flex;\n\t\tflex-direction: column;\n\t\talign-items: center;\n\t\tjustify-content: space-between;\n\t\tflex-wrap: wrap;\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_clean_sveltekit_page() {
+        let s = "<script lang=\"ts\">\n\texport let data;\n</script>\n\n<h1>{data.title}</h1>\n{#each data.items as item (item.id)}\n\t<p>{item.name}</p>\n{/each}\n\n<style lang=\"scss\">\n\th1 { color: var(--primary); }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        let diags = Linter::recommended().lint(&r.ast, s);
+        let relevant: Vec<_> = diags.iter()
+            .filter(|d| d.rule_name != "svelte/no-unused-class-name")
+            .collect();
+        assert!(relevant.is_empty(), "Clean SvelteKit page: {:?}",
+            relevant.iter().map(|d| format!("{}: {}", d.rule_name, d.message)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_parse_component_with_all_features() {
+        let s = "<script lang=\"ts\" generics=\"T\">\n\timport { onMount, createEventDispatcher } from 'svelte';\n\timport { fade } from 'svelte/transition';\n\tinterface $$Props { items: T[]; selected?: T }\n\texport let items: T[] = [];\n\texport let selected: T | undefined = undefined;\n\tconst dispatch = createEventDispatcher<{ select: T }>();\n\tlet container: HTMLDivElement;\n\tonMount(() => { console.log('mounted', container); });\n</script>\n\n<div bind:this={container}>\n\t{#each items as item (item)}\n\t\t<button\n\t\t\tclass:selected={item === selected}\n\t\t\ton:click={() => dispatch('select', item)}\n\t\t\ttransition:fade\n\t\t>\n\t\t\t<slot {item} />\n\t\t</button>\n\t{:else}\n\t\t<p>No items</p>\n\t{/each}\n</div>\n\n<style>\n\t.selected { background: var(--highlight); font-weight: bold; }\n\tbutton { cursor: pointer; border: none; padding: 0.5rem; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte_boundary_with_error() {
+        let s = "<svelte:boundary onerror={(e) => console.error(e)}>\n\t<FallibleComponent />\n</svelte:boundary>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_render_with_fallback() {
+        let s = "{#if children}\n\t{@render children()}\n{:else}\n\t<p>Default content</p>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_diagnostic_span_valid() {
+        let s = "{@html danger}\n<button>no type</button>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        for d in &diags {
+            assert!(d.span.start < d.span.end, "Diagnostic span should be valid: {:?}", d);
+            assert!((d.span.end as usize) <= s.len() + 50, "Span should not exceed source length by much");
+        }
+    }
+
+    #[test]
+    fn test_parse_whitespace_sensitivity() {
+        let s = "<p>Hello   World</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::Element(el) = &r.ast.html.nodes[0] {
+            if let Some(ast::TemplateNode::Text(t)) = el.children.first() {
+                assert!(t.data.contains("Hello"));
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_interpolation_in_style() {
+        let s = "<div style=\"color: {color}; font-size: {size}px;\">styled</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_children() {
+        let s = "<Card>\n\t<h2 slot=\"title\">Card Title</h2>\n\t<p>Card body content</p>\n\t<button slot=\"footer\">OK</button>\n</Card>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_with_objects_and_arrays() {
+        let s = "<p>{[1, 2, 3].map(x => x * 2).join(', ')}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_empty_each() {
+        let s = "{#each [] as x}{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_if_false() {
+        let s = "{#if false}<p>never</p>{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_raw_mustache_complex() {
+        let s = "{@html `<div class=\"${className}\">${content}</div>`}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- Svelte 5 migration patterns ---
 
     #[test]
