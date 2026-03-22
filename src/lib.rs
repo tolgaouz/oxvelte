@@ -1011,6 +1011,272 @@ mod tests {
         assert!(bg.is_empty(), "Should NOT flag location inside guarded blocks, got: {:?}", bg.iter().map(|d| &d.message).collect::<Vec<_>>());
     }
 
+    #[test]
+    fn test_1250th_milestone() {
+        // The 1250th test — a complete Svelte 5 SvelteKit page
+        let s = "<script lang=\"ts\">\n\tlet { data } = $props();\n\tlet search = $state('');\n\tlet filtered = $derived(data.items.filter(i => i.name.includes(search)));\n\tlet count = $derived(filtered.length);\n</script>\n\n<svelte:head><title>Items ({count})</title></svelte:head>\n\n<main>\n\t<input type=\"search\" bind:value={search} placeholder=\"Search {data.items.length} items\" />\n\t{#each filtered as item (item.id)}\n\t\t<article>\n\t\t\t<h2>{item.name}</h2>\n\t\t\t<p>{item.description}</p>\n\t\t</article>\n\t{:else}\n\t\t<p>No items match \"{search}\"</p>\n\t{/each}\n</main>\n\n<style lang=\"scss\">\n\tmain { max-width: 800px; margin: 0 auto; padding: 1rem; }\n\tarticle { border-bottom: 1px solid #eee; padding: 1rem 0; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        assert!(r.ast.instance.is_some());
+        assert!(r.ast.css.is_some());
+    }
+
+    #[test]
+    fn test_parse_real_world_clipboard() {
+        let s = "<script>\n\tlet { code } = $props();\n\tlet copied = $state(false);\n\tconst copy = async () => { await navigator.clipboard.writeText(code); copied = true; setTimeout(() => copied = false, 2000); };\n</script>\n<div class=\"code-block\">\n\t<pre><code>{code}</code></pre>\n\t<button onclick={copy}>{copied ? 'Copied!' : 'Copy'}</button>\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_countdown() {
+        let s = "<script>\n\tlet { targetDate } = $props();\n\tlet now = $state(Date.now());\n\tlet diff = $derived(Math.max(0, targetDate - now));\n\tlet days = $derived(Math.floor(diff / 86400000));\n\tlet hours = $derived(Math.floor((diff % 86400000) / 3600000));\n\tlet minutes = $derived(Math.floor((diff % 3600000) / 60000));\n\tlet seconds = $derived(Math.floor((diff % 60000) / 1000));\n\t$effect(() => {\n\t\tconst id = setInterval(() => now = Date.now(), 1000);\n\t\treturn () => clearInterval(id);\n\t});\n</script>\n<div class=\"countdown\">\n\t<span>{days}d</span><span>{hours}h</span><span>{minutes}m</span><span>{seconds}s</span>\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_with_slot_children() {
+        let s = "{#each items as item (item.id)}\n\t<Card>\n\t\t<h3 slot=\"title\">{item.title}</h3>\n\t\t<p>{item.body}</p>\n\t\t<svelte:fragment slot=\"footer\">\n\t\t\t<button onclick={() => edit(item)}>Edit</button>\n\t\t\t<button onclick={() => del(item.id)}>Delete</button>\n\t\t</svelte:fragment>\n\t</Card>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_scope_at_rules() {
+        let s = "<style>\n\t@font-face {\n\t\tfont-family: 'MyFont';\n\t\tsrc: url('/fonts/myfont.woff2') format('woff2');\n\t\tfont-display: swap;\n\t}\n\t@import url('https://fonts.googleapis.com/css2?family=Inter');\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_signal_pattern() {
+        let s = "<script>\n\tfunction createSignal(initial) {\n\t\tlet value = $state(initial);\n\t\treturn {\n\t\t\tget value() { return value; },\n\t\t\tset value(v) { value = v; }\n\t\t};\n\t}\n\tconst count = createSignal(0);\n</script>\n<p>{count.value}</p>\n<button onclick={() => count.value++}>+</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_error_boundary() {
+        let s = "<svelte:boundary onerror={(error) => console.error(error)}>\n\t<Router>\n\t\t{#if page === 'home'}\n\t\t\t<Home />\n\t\t{:else if page === 'about'}\n\t\t\t<About />\n\t\t{:else}\n\t\t\t<NotFound />\n\t\t{/if}\n\t</Router>\n\t{#snippet failed(error, reset)}\n\t\t<div class=\"error-page\">\n\t\t\t<h1>Something went wrong</h1>\n\t\t\t<pre>{error.message}</pre>\n\t\t\t<button onclick={reset}>Try again</button>\n\t\t</div>\n\t{/snippet}\n</svelte:boundary>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_button_type_on_input() {
+        let s = "<input type=\"button\" value=\"Click\" />";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/button-has-type"),
+            "Should NOT flag input type=button");
+    }
+
+    #[test]
+    fn test_parse_expression_comma_sequence() {
+        let s = "<button on:click={() => (a++, b++, c++)}>all</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_attribute_spread_conditional() {
+        let s = "<input {...(readonly ? { readonly: true, tabindex: -1 } : { tabindex: 0 })} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_accent_color() {
+        let s = "<style>\n\tinput[type=checkbox] { accent-color: var(--primary); }\n\tprogress { accent-color: green; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_responsive_grid() {
+        let s = "<script>\n\tlet { items, columns = 3 } = $props();\n</script>\n<div class=\"grid\" style:--cols={columns}>\n\t{#each items as item (item.id)}\n\t\t<div class=\"cell\">{@render item.render?.()}</div>\n\t{/each}\n</div>\n<style>\n\t.grid {\n\t\tdisplay: grid;\n\t\tgrid-template-columns: repeat(var(--cols, 3), 1fr);\n\t\tgap: 1rem;\n\t}\n\t@container (max-width: 500px) { .grid { grid-template-columns: 1fr; } }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_state_class_methods() {
+        let s = "<script lang=\"ts\">\n\tclass TodoList {\n\t\titems = $state<string[]>([]);\n\t\tget count() { return this.items.length; }\n\t\tadd(text: string) { this.items.push(text); }\n\t\tremove(i: number) { this.items.splice(i, 1); }\n\t\tclear() { this.items = []; }\n\t}\n\tconst list = new TodoList();\n\tlet input = $state('');\n</script>\n<form onsubmit={(e) => { e.preventDefault(); list.add(input); input = ''; }}>\n\t<input bind:value={input} />\n</form>\n{#each list.items as item, i}\n\t<p>{item} <button onclick={() => list.remove(i)}>×</button></p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_all_rules_present() {
+        let all = Linter::all();
+        let count = all.rules().len();
+        // We should have at least 79 rules
+        assert!(count >= 79, "Expected >= 79 rules, got {}", count);
+    }
+
+    #[test]
+    fn test_parse_real_world_ssr_guard() {
+        let s = "<script>\n\timport { browser } from '$app/environment';\n\tlet width = $state(0);\n\t$effect(() => {\n\t\tif (browser) width = window.innerWidth;\n\t});\n</script>\n{#if browser}\n\t<p>Width: {width}px</p>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_with_index_binding() {
+        let s = "{#each items as item, index (item.id)}\n\t<div data-index={index} class:first={index === 0} class:last={index === items.length - 1}>{item.name}</div>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_on_vs_onclick() {
+        let s = "<!-- Svelte 4 style -->\n<button on:click={handle}>Old</button>\n<!-- Svelte 5 style -->\n<button onclick={handle}>New</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_dark_mode() {
+        let s = "<script>\n\tlet dark = $state(false);\n\t$effect(() => {\n\t\tdocument.documentElement.classList.toggle('dark', dark);\n\t});\n\t$effect(() => {\n\t\tconst mq = window.matchMedia('(prefers-color-scheme: dark)');\n\t\tdark = mq.matches;\n\t\tconst handler = (e) => dark = e.matches;\n\t\tmq.addEventListener('change', handler);\n\t\treturn () => mq.removeEventListener('change', handler);\n\t});\n</script>\n<button onclick={() => dark = !dark}>{dark ? '☀️ Light' : '🌙 Dark'}</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_with_render_fallback() {
+        let s = "<Widget>\n\t{#snippet content()}\n\t\t<p>Custom content</p>\n\t{/snippet}\n</Widget>\n\n<!-- Without snippet, uses default slot -->\n<Widget>\n\t<p>Default slot content</p>\n</Widget>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    // --- FINAL BATCH TO 1250 ---
+
+    #[test]
+    fn test_parse_real_world_resizable_panel() {
+        let s = "<script>\n\tlet width = $state(300);\n\tlet dragging = $state(false);\n\tconst startDrag = (e) => {\n\t\tdragging = true;\n\t\tconst startX = e.clientX;\n\t\tconst startWidth = width;\n\t\tconst onMove = (e) => width = Math.max(100, startWidth + e.clientX - startX);\n\t\tconst onUp = () => { dragging = false; window.removeEventListener('mousemove', onMove); };\n\t\twindow.addEventListener('mousemove', onMove);\n\t\twindow.addEventListener('mouseup', onUp, { once: true });\n\t};\n</script>\n<div class=\"panel\" style:width=\"{width}px\">\n\t<slot />\n\t<div class=\"handle\" class:dragging on:mousedown={startDrag} />\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_copy_button() {
+        let s = "<script>\n\tlet { text } = $props();\n\tlet copied = $state(false);\n\tconst copy = async () => {\n\t\tawait navigator.clipboard.writeText(text);\n\t\tcopied = true;\n\t\tsetTimeout(() => copied = false, 2000);\n\t};\n</script>\n<button onclick={copy} aria-label=\"Copy\">\n\t{copied ? '✓ Copied!' : '📋 Copy'}\n</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_snapshots() {
+        let s = "<script>\n\timport { unstate } from 'svelte';\n\tlet state = $state({ count: 0, items: [1, 2, 3] });\n\tconst getSnapshot = () => JSON.parse(JSON.stringify(unstate(state)));\n\tconst restore = (snapshot) => { state.count = snapshot.count; state.items = [...snapshot.items]; };\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_with_async_content() {
+        let s = "{#each items as item (item.id)}\n\t{#await loadDetails(item.id)}\n\t\t<div class=\"skeleton\" />\n\t{:then details}\n\t\t<div class=\"item\">\n\t\t\t<h3>{item.name}</h3>\n\t\t\t<p>{details.description}</p>\n\t\t</div>\n\t{:catch}\n\t\t<div class=\"error\">Failed to load</div>\n\t{/await}\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_container_style() {
+        let s = "<style>\n\t.card {\n\t\tcontainer: card / inline-size;\n\t\tpadding: 1rem;\n\t}\n\t@container card (min-width: 400px) {\n\t\t.card-content { display: grid; grid-template-columns: 1fr 1fr; }\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_toast_notification() {
+        let s = "<script>\n\tlet { message, type = 'info', duration = 3000, onclose } = $props();\n\tlet visible = $state(true);\n\t$effect(() => {\n\t\tconst timer = setTimeout(() => {\n\t\t\tvisible = false;\n\t\t\tonclose?.();\n\t\t}, duration);\n\t\treturn () => clearTimeout(timer);\n\t});\n</script>\n{#if visible}\n\t<div class=\"toast {type}\" role=\"alert\" transition:fly={{y: -20, duration: 200}}>\n\t\t<p>{message}</p>\n\t\t<button onclick={() => { visible = false; onclose?.(); }} aria-label=\"Close\">&times;</button>\n\t</div>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_comprehensive_check_all() {
+        // Multiple rules in one file
+        let s = "<script>\n\timport { writable } from 'svelte/store';\n\tconst store = writable(0);\n\t$: literal = 42;\n\t$inspect(literal);\n</script>\n{@html content}\n{@debug literal}\n<button>click</button>\n<p>{store}</p>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let mut rules_hit = std::collections::HashSet::new();
+        for d in &diags { rules_hit.insert(d.rule_name.clone()); }
+        assert!(rules_hit.len() >= 5, "Expected >= 5 rules, got {}: {:?}", rules_hit.len(), rules_hit);
+    }
+
+    #[test]
+    fn test_parse_element_with_all_bindings() {
+        let s = "<div\n\tbind:this={el}\n\tbind:clientWidth={w}\n\tbind:clientHeight={h}\n\tbind:offsetWidth={ow}\n\tbind:offsetHeight={oh}\n\tbind:contentRect={rect}\n>content</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_form_with_enhance() {
+        let s = "<script>\n\timport { enhance } from '$app/forms';\n\tlet form;\n</script>\n<form method=\"POST\" action=\"?/login\" use:enhance>\n\t<input name=\"email\" type=\"email\" required />\n\t<input name=\"password\" type=\"password\" required />\n\t<button type=\"submit\">Login</button>\n\t{#if form?.error}\n\t\t<p class=\"error\">{form.error}</p>\n\t{/if}\n</form>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_counter_family() {
+        let s = "<script>\n\tclass Counter {\n\t\tcount = $state(0);\n\t\tincrement() { this.count++; }\n\t\tdecrement() { this.count--; }\n\t\treset() { this.count = 0; }\n\t}\n\tconst a = new Counter();\n\tconst b = new Counter();\n</script>\n<div>\n\t<p>A: {a.count}</p>\n\t<button onclick={() => a.increment()}>A+</button>\n\t<p>B: {b.count}</p>\n\t<button onclick={() => b.increment()}>B+</button>\n\t<p>Total: {a.count + b.count}</p>\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_scope_all_features() {
+        let s = "<style>\n\t:root { --spacing: 1rem; }\n\t:global(body) { margin: 0; }\n\t.local { padding: var(--spacing); }\n\t.local :global(.external) { color: blue; }\n\t:global(body.dark) .local { background: #333; }\n\t@media (prefers-color-scheme: dark) { .local { background: #111; } }\n\t@keyframes fade { from { opacity: 0; } to { opacity: 1; } }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_skeleton_loader() {
+        let s = "<script>\n\tlet { loading = true, lines = 3 } = $props();\n</script>\n{#if loading}\n\t<div class=\"skeleton\" aria-busy=\"true\" role=\"status\">\n\t\t{#each Array(lines) as _, i}\n\t\t\t<div class=\"line\" style:width=\"{i === lines - 1 ? '60%' : '100%'}\" />\n\t\t{/each}\n\t</div>\n{:else}\n\t<slot />\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_reactive_fn_svelte5_ok() {
+        let s = "<script>\n\tconst helper = () => 42;\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-reactive-functions"),
+            "Should NOT flag regular const arrow");
+    }
+
+    #[test]
+    fn test_parse_svelte5_deep_reactive() {
+        let s = "<script>\n\tlet form = $state({\n\t\tuser: {\n\t\t\tname: '',\n\t\t\taddress: { city: '', country: '' }\n\t\t},\n\t\tpreferences: {\n\t\t\ttheme: 'light',\n\t\t\tnotifications: true\n\t\t}\n\t});\n</script>\n<input bind:value={form.user.name} />\n<input bind:value={form.user.address.city} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_with_key_expression() {
+        let s = "{#each items as item (JSON.stringify([item.type, item.id]))}\n\t<p>{item.name}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_render_with_spread() {
+        let s = "{@render header?.(...headerProps)}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_responsive_nav() {
+        let s = "<script>\n\tlet open = $state(false);\n\tlet { items } = $props();\n</script>\n<nav>\n\t<button class=\"hamburger\" onclick={() => open = !open} aria-expanded={open} aria-label=\"Toggle menu\">\n\t\t<span /><span /><span />\n\t</button>\n\t<ul class:open>\n\t\t{#each items as item (item.href)}\n\t\t\t<li><a href={item.href} class:active={item.active}>{item.label}</a></li>\n\t\t{/each}\n\t</ul>\n</nav>\n<style>\n\t.hamburger { display: none; }\n\t@media (max-width: 768px) {\n\t\t.hamburger { display: block; }\n\t\tul { display: none; }\n\t\tul.open { display: flex; flex-direction: column; }\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- towards 1250 ---
 
     #[test]
