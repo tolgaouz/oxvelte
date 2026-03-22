@@ -18,13 +18,21 @@ impl Rule for RequireEventPrefix {
         let tag_text = &source[base..script.span.end as usize];
         let content_offset = tag_text.find('>').map(|p| base + p + 1).unwrap_or(base);
 
+        // Config: { "checkAsyncFunctions": true } — also check async (Promise<void>) function props
+        let check_async = ctx.config.options.as_ref()
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|v| v.get("checkAsyncFunctions"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         // Find function-typed properties in Props type definitions
         // Patterns:
         // 1. interface Props { name(): void; }
         // 2. interface Props { name: () => void; }
         // 3. type Props = { name(): void; }
         // 4. Inline: let { name }: { name(): void } = $props();
-        let fn_props = extract_function_props(content);
+        let fn_props = extract_function_props(content, check_async);
 
         for (prop_name, prop_offset) in &fn_props {
             if !prop_name.starts_with("on") {
@@ -40,7 +48,7 @@ impl Rule for RequireEventPrefix {
 
 /// Extract function-typed property names from TS type definitions.
 /// Returns vec of (property_name, byte_offset_in_content).
-fn extract_function_props(content: &str) -> Vec<(String, usize)> {
+fn extract_function_props(content: &str, check_async: bool) -> Vec<(String, usize)> {
     let mut props = Vec::new();
 
     // Find interface/type blocks and inline types
@@ -82,16 +90,22 @@ fn extract_function_props(content: &str) -> Vec<(String, usize)> {
                     // name(): RETURN_TYPE — check return type is void
                     let after_parens = if rest.starts_with("():") { &rest[3..] } else { &rest[2..] };
                     let after_parens = after_parens.trim_start().trim_start_matches(':').trim_start();
-                    after_parens.starts_with("void") && !after_parens.starts_with("void;")
-                        || after_parens.starts_with("void;") || after_parens.starts_with("void\n")
+                    let is_void_ret = after_parens.starts_with("void") && !after_parens.starts_with("void;")
+                        || after_parens.starts_with("void;") || after_parens.starts_with("void\n");
+                    let is_promise_void_ret = check_async && (
+                        after_parens.starts_with("Promise<void>")
+                    );
+                    is_void_ret || is_promise_void_ret
                 } else { false }
             };
             let is_fn_type = rest.starts_with(':') && {
                 let after_colon = rest[1..].trim_start();
                 // : () => void or : (e: Event) => void
                 if after_colon.starts_with("()") || after_colon.starts_with("(e") || after_colon.starts_with("(arg") {
-                    // Check return type contains void
-                    after_colon.contains("=> void")
+                    // Check return type contains void or Promise<void>
+                    let has_void = after_colon.contains("=> void");
+                    let has_promise_void = check_async && after_colon.contains("=> Promise<void>");
+                    has_void || has_promise_void
                 } else { false }
             };
 

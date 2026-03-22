@@ -7,6 +7,16 @@ const NAV_FUNCTIONS: &[&str] = &["goto", "pushState", "replaceState"];
 
 pub struct NoNavigationWithoutBase;
 
+/// Check if a navigation function should be ignored based on config.
+fn is_nav_ignored(name: &str, ignore_goto: bool, ignore_push_state: bool, ignore_replace_state: bool) -> bool {
+    match name {
+        "goto" => ignore_goto,
+        "pushState" => ignore_push_state,
+        "replaceState" => ignore_replace_state,
+        _ => false,
+    }
+}
+
 /// Check if a string value is an absolute URI or fragment (should not be flagged).
 fn is_exempt_href(s: &str) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
@@ -21,6 +31,19 @@ impl Rule for NoNavigationWithoutBase {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
+        // Config options: ignoreGoto, ignorePushState, ignoreReplaceState, ignoreLinks
+        let (ignore_goto, ignore_push_state, ignore_replace_state, ignore_links) = {
+            let opts = ctx.config.options.as_ref()
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.first());
+            (
+                opts.and_then(|v| v.get("ignoreGoto")).and_then(|v| v.as_bool()).unwrap_or(false),
+                opts.and_then(|v| v.get("ignorePushState")).and_then(|v| v.as_bool()).unwrap_or(false),
+                opts.and_then(|v| v.get("ignoreReplaceState")).and_then(|v| v.as_bool()).unwrap_or(false),
+                opts.and_then(|v| v.get("ignoreLinks")).and_then(|v| v.as_bool()).unwrap_or(false),
+            )
+        };
+
         // Parse imports to find base and navigation functions
         let imports = if let Some(script) = &ctx.ast.instance {
             parse_imports(&script.content)
@@ -44,10 +67,13 @@ impl Rule for NoNavigationWithoutBase {
                 if module == "$app/navigation" {
                     if imported == "*" {
                         for nav_fn in NAV_FUNCTIONS {
+                            if is_nav_ignored(nav_fn, ignore_goto, ignore_push_state, ignore_replace_state) { continue; }
                             nav_local_names.push((format!("{}.{}", local, nav_fn), nav_fn));
                         }
                     } else if NAV_FUNCTIONS.contains(&imported.as_str()) {
-                        nav_local_names.push((local.clone(), imported.as_str()));
+                        if !is_nav_ignored(&imported, ignore_goto, ignore_push_state, ignore_replace_state) {
+                            nav_local_names.push((local.clone(), imported.as_str()));
+                        }
                     }
                 }
             }
@@ -105,6 +131,8 @@ impl Rule for NoNavigationWithoutBase {
                 }
             }
         }
+
+        if ignore_links { return; }
 
         // Check <a> elements for href values that are paths without base
         let base_local_clone = base_local.clone();

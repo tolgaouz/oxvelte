@@ -20,6 +20,19 @@ impl Rule for NoNavigationWithoutResolve {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
+        // Config options: ignoreGoto, ignorePushState, ignoreReplaceState, ignoreLinks
+        let (ignore_goto, ignore_push_state, ignore_replace_state, ignore_links) = {
+            let opts = ctx.config.options.as_ref()
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.first());
+            (
+                opts.and_then(|v| v.get("ignoreGoto")).and_then(|v| v.as_bool()).unwrap_or(false),
+                opts.and_then(|v| v.get("ignorePushState")).and_then(|v| v.as_bool()).unwrap_or(false),
+                opts.and_then(|v| v.get("ignoreReplaceState")).and_then(|v| v.as_bool()).unwrap_or(false),
+                opts.and_then(|v| v.get("ignoreLinks")).and_then(|v| v.as_bool()).unwrap_or(false),
+            )
+        };
+
         if let Some(script) = &ctx.ast.instance {
             let content = &script.content;
             let imports = parse_imports(content);
@@ -30,10 +43,13 @@ impl Rule for NoNavigationWithoutResolve {
                 if module == "$app/navigation" {
                     if imported == "*" {
                         for nav_fn in NAV_FUNCTIONS {
+                            if is_nav_ignored_resolve(nav_fn, ignore_goto, ignore_push_state, ignore_replace_state) { continue; }
                             nav_local_names.push((format!("{}.{}", local, nav_fn), nav_fn));
                         }
                     } else if NAV_FUNCTIONS.contains(&imported.as_str()) {
-                        nav_local_names.push((local.clone(), imported.as_str()));
+                        if !is_nav_ignored_resolve(&imported, ignore_goto, ignore_push_state, ignore_replace_state) {
+                            nav_local_names.push((local.clone(), imported.as_str()));
+                        }
                     }
                 }
             }
@@ -115,6 +131,9 @@ impl Rule for NoNavigationWithoutResolve {
             }
             } // end if nav_local_names not empty
         }
+
+        // If ignoreLinks is set, skip template <a> checking
+        if ignore_links { return; }
 
         // Template <a href> checking: trace variable values to check if safe
         let imports = if let Some(script) = &ctx.ast.instance {
@@ -266,4 +285,14 @@ fn is_value_safe(var_name: &str, script_content: &str, depth: usize) -> bool {
         }
     }
     false // variable not found or not initialized
+}
+
+/// Check if a navigation function should be ignored based on config.
+fn is_nav_ignored_resolve(name: &str, ignore_goto: bool, ignore_push_state: bool, ignore_replace_state: bool) -> bool {
+    match name {
+        "goto" => ignore_goto,
+        "pushState" => ignore_push_state,
+        "replaceState" => ignore_replace_state,
+        _ => false,
+    }
 }

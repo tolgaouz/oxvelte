@@ -15,6 +15,29 @@ impl Rule for NoExportLoadInSvelteModuleInKitPages {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
+        // Only check files that are SvelteKit page/layout files.
+        // If settings.svelte.kit.files.routes is set, the file must be under that routes dir.
+        // The file must be named +page.svelte or +layout.svelte.
+        if let Some(file_path) = &ctx.file_path {
+            let fname = file_path.rsplit('/').next().unwrap_or(file_path);
+            if fname != "+page.svelte" && fname != "+layout.svelte"
+                && !fname.ends_with("+page.svelte") && !fname.ends_with("+layout.svelte") {
+                return;
+            }
+            // Check settings for custom routes directory
+            if let Some(routes_dir) = ctx.config.settings.as_ref()
+                .and_then(|s| s.get("svelte"))
+                .and_then(|s| s.get("kit"))
+                .and_then(|s| s.get("files"))
+                .and_then(|s| s.get("routes"))
+                .and_then(|s| s.as_str())
+            {
+                if !file_path.contains(routes_dir) {
+                    return;
+                }
+            }
+        }
+
         if let Some(module) = &ctx.ast.module {
             if module.content.contains("export") && module.content.contains("load") {
                 // Simple heuristic: check if "export" and "load" appear together

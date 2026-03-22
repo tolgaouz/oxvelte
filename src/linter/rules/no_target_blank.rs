@@ -43,22 +43,41 @@ impl Rule for NoTargetBlank {
                 let is_dynamic = el.attributes.iter().any(|attr| {
                     matches!(attr, Attribute::NormalAttribute { name, value: AttributeValue::Expression(_), .. } if name == "href")
                 });
+                // Config: { "enforceDynamicLinks": "never" } — skip dynamic href checks
+                let enforce_dynamic = ctx.config.options.as_ref()
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|v| v.get("enforceDynamicLinks"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("always");
+
                 if !is_external && !is_dynamic {
                     return;
                 }
+                if is_dynamic && enforce_dynamic == "never" {
+                    return;
+                }
 
-                let has_rel_noopener = el.attributes.iter().any(|attr| {
+                // Config: { "allowReferrer": true } — only require noopener, not noreferrer
+                let allow_referrer = ctx.config.options.as_ref()
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|v| v.get("allowReferrer"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+                let has_safe_rel = el.attributes.iter().any(|attr| {
                     matches!(
                         attr,
                         Attribute::NormalAttribute {
                             name,
                             value: AttributeValue::Static(v),
                             ..
-                        } if name == "rel" && v.contains("noopener") && v.contains("noreferrer")
+                        } if name == "rel" && v.contains("noopener") && (allow_referrer || v.contains("noreferrer"))
                     )
                 });
 
-                if !has_rel_noopener {
+                if !has_safe_rel {
                     ctx.diagnostic(
                         "Using `target=\"_blank\"` without `rel=\"noopener noreferrer\"` is a security risk.",
                         el.span,

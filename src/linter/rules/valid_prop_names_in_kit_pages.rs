@@ -20,6 +20,26 @@ impl Rule for ValidPropNamesInKitPages {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
+        // Only check files that are SvelteKit page/layout files (+page.svelte, +layout.svelte).
+        if let Some(file_path) = &ctx.file_path {
+            let fname = file_path.rsplit('/').next().unwrap_or(file_path);
+            if fname != "+page.svelte" && fname != "+layout.svelte" {
+                return;
+            }
+            // Check settings for custom routes directory
+            if let Some(routes_dir) = ctx.config.settings.as_ref()
+                .and_then(|s| s.get("svelte"))
+                .and_then(|s| s.get("kit"))
+                .and_then(|s| s.get("files"))
+                .and_then(|s| s.get("routes"))
+                .and_then(|s| s.as_str())
+            {
+                if !file_path.contains(routes_dir) {
+                    return;
+                }
+            }
+        }
+
         if let Some(script) = &ctx.ast.instance {
             let content = &script.content;
             let base = script.span.start as usize;

@@ -32,6 +32,15 @@ impl Rule for Indent {
         let mut multiline_tag_column = 0usize;
         let mut multiline_brace_depth = 0i32;
 
+        // Parse config options
+        let opts = ctx.config.options.as_ref()
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first());
+        let indent_script = opts
+            .and_then(|o| o.get("indentScript"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
         for &line in &lines {
             let line_start = offset;
             offset += line.len() + 1;
@@ -50,13 +59,19 @@ impl Rule for Indent {
             }
             // Script tags: just skip the tag line itself, not content
             if trimmed.starts_with("<script") || trimmed.starts_with("</script") {
+                // Consume prettier-ignore if it was set for this line
+                if skip_next_line { skip_next_line = false; }
                 // Track depth for script open/close
                 if trimmed.starts_with("<script") && !trimmed.ends_with("/>") {
-                    depth += 1;
+                    if indent_script {
+                        depth += 1;
+                    }
                 }
                 if trimmed.starts_with("</script") {
-                    depth -= 1;
-                    if depth < 0 { depth = 0; }
+                    if indent_script {
+                        depth -= 1;
+                        if depth < 0 { depth = 0; }
+                    }
                 }
                 continue;
             }

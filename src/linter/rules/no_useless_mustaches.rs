@@ -20,10 +20,23 @@ impl Rule for NoUselessMustaches {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
+        // Config: { "ignoreIncludesComment": true, "ignoreStringEscape": true }
+        let opts = ctx.config.options.as_ref()
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first());
+        let ignore_includes_comment = opts
+            .and_then(|v| v.get("ignoreIncludesComment"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let ignore_string_escape = opts
+            .and_then(|v| v.get("ignoreStringEscape"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             // Check text-level mustache tags
             if let TemplateNode::MustacheTag(tag) = node {
-                check_expression(&tag.expression, tag.span, ctx);
+                check_expression(&tag.expression, tag.span, ctx, ignore_includes_comment, ignore_string_escape);
             }
             // Check attribute-level mustache expressions
             if let TemplateNode::Element(el) = node {
@@ -31,14 +44,14 @@ impl Rule for NoUselessMustaches {
                     if let Attribute::NormalAttribute { value, span, .. } = attr {
                         match value {
                             AttributeValue::Expression(expr) => {
-                                check_expression(expr, *span, ctx);
+                                check_expression(expr, *span, ctx, ignore_includes_comment, ignore_string_escape);
                             }
                             AttributeValue::Concat(parts) => {
                                 for part in parts {
                                     if let AttributeValuePart::Expression(expr) = part {
                                         // For concat parts we don't have individual spans,
                                         // so use the attribute span
-                                        check_expression(expr, *span, ctx);
+                                        check_expression(expr, *span, ctx, ignore_includes_comment, ignore_string_escape);
                                     }
                                 }
                             }
@@ -51,10 +64,19 @@ impl Rule for NoUselessMustaches {
     }
 }
 
-fn check_expression(expr: &str, span: oxc::span::Span, ctx: &mut LintContext<'_>) {
-    let stripped = strip_leading_js_comments(expr.trim());
+fn check_expression(expr: &str, span: oxc::span::Span, ctx: &mut LintContext<'_>, ignore_includes_comment: bool, ignore_string_escape: bool) {
+    let trimmed = expr.trim();
+    // If ignoreIncludesComment is true, skip expressions containing JS comments
+    if ignore_includes_comment && (trimmed.contains("//") || trimmed.contains("/*")) {
+        return;
+    }
+    let stripped = strip_leading_js_comments(trimmed);
     let stripped = stripped.trim();
     if let Some(inner) = extract_simple_string_literal(stripped) {
+        // If ignoreStringEscape is true, skip strings containing escape sequences
+        if ignore_string_escape && inner.contains('\\') {
+            return;
+        }
         // Don't flag strings containing { or } — they can't be
         // used as raw text in Svelte templates.
         if inner.contains('{') || inner.contains('}') {

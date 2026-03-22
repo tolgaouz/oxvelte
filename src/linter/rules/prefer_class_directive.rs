@@ -16,6 +16,15 @@ impl Rule for PreferClassDirective {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
+        // Config: { "prefer": "empty" } — only flag ternaries with empty false branch
+        let prefer_empty = ctx.config.options.as_ref()
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|v| v.get("prefer"))
+            .and_then(|v| v.as_str())
+            .map(|s| s == "empty")
+            .unwrap_or(false);
+
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
                 // Skip components (uppercase) but allow svelte:element
@@ -28,7 +37,7 @@ impl Rule for PreferClassDirective {
                         if name == "class" {
                             match value {
                                 AttributeValue::Expression(expr) => {
-                                    if is_simple_class_ternary(expr) || is_dual_class_ternary(expr) {
+                                    if is_simple_class_ternary(expr) || (!prefer_empty && is_dual_class_ternary(expr)) {
                                         ctx.diagnostic(
                                             "Unexpected class using the ternary operator.",
                                             *span,
@@ -61,7 +70,7 @@ impl Rule for PreferClassDirective {
                                             }
                                             // Check dual-class ternary only if ALL other expression parts
                                             // have empty-string false branches (not spaces)
-                                            else if is_dual_class_ternary(expr) {
+                                            else if !prefer_empty && is_dual_class_ternary(expr) {
                                                 let all_others_empty = parts.iter().enumerate().all(|(j, p)| {
                                                     if j == i { return true; }
                                                     match p {

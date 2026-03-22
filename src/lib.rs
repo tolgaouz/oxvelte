@@ -9153,46 +9153,61 @@ mod linter_fixture_tests {
         RuleConfig::default()
     }
 
-    fn run_linter_valid(rule_name: &str) {
-        let valid_dir = format!("fixtures/linter/{}/valid", rule_name);
-        if let Ok(entries) = std::fs::read_dir(&valid_dir) {
-            let lint = Linter::all();
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() { continue; }
-                let fname = path.file_name().unwrap().to_string_lossy().to_string();
-                if fname.ends_with("-input.svelte") {
-                    let source = std::fs::read_to_string(&path).unwrap();
-                    let result = parser::parse(&source);
-                    let config = load_config(&valid_dir, &fname);
-                    let file_path_str = path.to_string_lossy().to_string();
-                    let diags = lint.lint_with_config_and_path(&result.ast, &source, config, &file_path_str);
-                    let rule_diags: Vec<_> = diags.iter().filter(|d| d.rule_name == format!("svelte/{}", rule_name)).collect();
-                    assert!(rule_diags.is_empty(), "Rule {} should not fire on valid file {}: {:?}",
-                        rule_name, path.display(), rule_diags.iter().map(|d| &d.message).collect::<Vec<_>>());
+    /// Collect fixture files — walks into subdirectories but skips ts/typescript dirs.
+    fn collect_fixture_files(dir: &str) -> Vec<std::path::PathBuf> {
+        let mut files = Vec::new();
+        fn walk(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        let dirname = path.file_name().unwrap().to_string_lossy();
+                        if dirname == "ts" || dirname == "typescript" { continue; }
+                        walk(&path, files);
+                    } else {
+                        let fname = path.file_name().unwrap().to_string_lossy().to_string();
+                        if fname.ends_with("-input.svelte") {
+                            files.push(path);
+                        }
+                    }
                 }
             }
+        }
+        walk(std::path::Path::new(dir), &mut files);
+        files.sort();
+        files
+    }
+
+    fn run_linter_valid(rule_name: &str) {
+        let valid_dir = format!("fixtures/linter/{}/valid", rule_name);
+        let lint = Linter::all();
+        for path in collect_fixture_files(&valid_dir) {
+            let fname = path.file_name().unwrap().to_string_lossy().to_string();
+            let source = std::fs::read_to_string(&path).unwrap();
+            let result = parser::parse(&source);
+            let parent_dir = path.parent().unwrap().to_string_lossy().to_string();
+            let config = load_config(&parent_dir, &fname);
+            let file_path_str = path.to_string_lossy().to_string();
+            let diags = lint.lint_with_config_and_path(&result.ast, &source, config, &file_path_str);
+            let rule_diags: Vec<_> = diags.iter().filter(|d| d.rule_name == format!("svelte/{}", rule_name)).collect();
+            assert!(rule_diags.is_empty(), "Rule {} should not fire on valid file {}: {:?}",
+                rule_name, path.display(), rule_diags.iter().map(|d| &d.message).collect::<Vec<_>>());
         }
     }
 
     fn run_linter_invalid(rule_name: &str) {
         let invalid_dir = format!("fixtures/linter/{}/invalid", rule_name);
-        if let Ok(entries) = std::fs::read_dir(&invalid_dir) {
-            let lint = Linter::all();
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() { continue; }
-                let fname = path.file_name().unwrap().to_string_lossy().to_string();
-                if fname.ends_with("-input.svelte") {
-                    let source = std::fs::read_to_string(&path).unwrap();
-                    let result = parser::parse(&source);
-                    let config = load_config(&invalid_dir, &fname);
-                    let file_path_str = path.to_string_lossy().to_string();
-                    let diags = lint.lint_with_config_and_path(&result.ast, &source, config, &file_path_str);
-                    let rule_diags: Vec<_> = diags.iter().filter(|d| d.rule_name == format!("svelte/{}", rule_name)).collect();
-                    assert!(!rule_diags.is_empty(), "Rule {} should fire on invalid file {}", rule_name, path.display());
-                }
-            }
+        let lint = Linter::all();
+        for path in collect_fixture_files(&invalid_dir) {
+            let fname = path.file_name().unwrap().to_string_lossy().to_string();
+            let source = std::fs::read_to_string(&path).unwrap();
+            let result = parser::parse(&source);
+            let parent_dir = path.parent().unwrap().to_string_lossy().to_string();
+            let config = load_config(&parent_dir, &fname);
+            let file_path_str = path.to_string_lossy().to_string();
+            let diags = lint.lint_with_config_and_path(&result.ast, &source, config, &file_path_str);
+            let rule_diags: Vec<_> = diags.iter().filter(|d| d.rule_name == format!("svelte/{}", rule_name)).collect();
+            assert!(!rule_diags.is_empty(), "Rule {} should fire on invalid file {}", rule_name, path.display());
         }
     }
 

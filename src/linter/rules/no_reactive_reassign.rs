@@ -17,6 +17,14 @@ impl Rule for NoReactiveReassign {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
+        // Config: { "props": false } — skip checking property mutations on reactive vars
+        let check_props = ctx.config.options.as_ref()
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|v| v.get("props"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
         if let Some(script) = &ctx.ast.instance {
             let content = &script.content;
             let base = script.span.start as usize;
@@ -112,7 +120,8 @@ impl Rule for NoReactiveReassign {
                 }
             }
 
-            // Step 2b: Check for mutating method calls on reactive vars
+            // Step 2b: Check for mutating method calls on reactive vars (only if props checking enabled)
+            if check_props {
             let mutating_methods = [
                 "push(", "pop(", "shift(", "unshift(", "splice(",
                 "sort(", "reverse(", "fill(", "copyWithin(",
@@ -218,6 +227,7 @@ impl Rule for NoReactiveReassign {
                     );
                 }
             }
+            } // end if check_props (step 2b)
 
             // Step 2c: Check for destructuring assignments targeting reactive vars
             for var in &reactive_vars {
@@ -252,11 +262,15 @@ impl Rule for NoReactiveReassign {
                     format!("for (let {} ", var),
                 ];
                 // Also check for (reactiveValue.key of/in ...)
-                let member_for = [
-                    format!("for ({}.", var),
-                    format!("for (const {}.", var),
-                    format!("for (let {}.", var),
-                ];
+                let member_for = if check_props {
+                    vec![
+                        format!("for ({}.", var),
+                        format!("for (const {}.", var),
+                        format!("for (let {}.", var),
+                    ]
+                } else {
+                    vec![]
+                };
                 for pattern in member_for.iter().chain(for_patterns.iter()) {
                     if let Some(pos) = content.find(pattern.as_str()) {
                         let after = &content[pos + pattern.len()..];
@@ -272,7 +286,7 @@ impl Rule for NoReactiveReassign {
             }
 
             // Step 2d: Check for conditional member assignment: (x ? reactiveVar : y).prop =
-            for var in &reactive_vars {
+            if check_props { for var in &reactive_vars {
                 for line in content.lines() {
                     let trimmed = line.trim();
                     if trimmed.starts_with("$:") { continue; }
@@ -298,6 +312,7 @@ impl Rule for NoReactiveReassign {
                     }
                 }
             }
+            } // end if check_props (conditional member assignment)
 
             // Step 3: Check template for bind: directives on reactive vars
             walk_template_nodes(&ctx.ast.html, &mut |node| {
@@ -311,7 +326,8 @@ impl Rule for NoReactiveReassign {
                                         let bound_var = region[open+1..close].trim();
                                         // Check both direct var and var.member
                                         let base_var = bound_var.split('.').next().unwrap_or(bound_var);
-                                        if reactive_vars.contains(bound_var) || reactive_vars.contains(base_var) {
+                                        let is_member = bound_var.contains('.');
+                                        if reactive_vars.contains(bound_var) || (reactive_vars.contains(base_var) && (check_props || !is_member)) {
                                             ctx.diagnostic(
                                                 format!("Do not bind to the reactive variable `{}`. It is derived from a reactive declaration.", bound_var),
                                                 *span,
