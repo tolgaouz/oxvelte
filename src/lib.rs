@@ -1002,6 +1002,88 @@ mod tests {
             "Should NOT flag window inside if block");
     }
 
+    // --- Svelte 5 migration patterns ---
+
+    #[test]
+    fn test_svelte5_migration_state() {
+        // Svelte 4: let count = 0; → Svelte 5: let count = $state(0);
+        let s = "<script>\n\tlet count = $state(0);\n\tconst increment = () => count++;\n</script>\n<button onclick={increment}>{count}</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_svelte5_migration_derived() {
+        let s = "<script>\n\tlet count = $state(0);\n\tlet doubled = $derived(count * 2);\n\tlet quadrupled = $derived(doubled * 2);\n</script>\n<p>{count} → {doubled} → {quadrupled}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_svelte5_migration_props() {
+        let s = "<script lang=\"ts\">\n\tlet { title, count = 0, items = [] }: {\n\t\ttitle: string;\n\t\tcount?: number;\n\t\titems?: string[];\n\t} = $props();\n</script>\n<h1>{title}</h1>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_svelte5_migration_events() {
+        let s = "<script>\n\tlet { onclick }: { onclick?: (e: MouseEvent) => void } = $props();\n</script>\n<button {onclick}>Click</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_svelte5_untrack() {
+        let s = "<script>\n\timport { untrack } from 'svelte';\n\tlet count = $state(0);\n\t$effect(() => {\n\t\tconst prev = untrack(() => count);\n\t\tconsole.log(prev);\n\t});\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    // --- complex real-world components ---
+
+    #[test]
+    fn test_search_component() {
+        let s = "<script>\n\tlet query = $state('');\n\tlet results = $derived(\n\t\titems.filter(i => i.name.toLowerCase().includes(query.toLowerCase()))\n\t);\n</script>\n\n<input type=\"search\" bind:value={query} placeholder=\"Search...\" />\n{#if query.length > 0}\n\t<ul>\n\t\t{#each results as result (result.id)}\n\t\t\t<li>{result.name}</li>\n\t\t{:else}\n\t\t\t<li>No results found</li>\n\t\t{/each}\n\t</ul>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_pagination_component() {
+        let s = "<script>\n\tlet { page = 1, total, perPage = 10, onchange } = $props();\n\tlet pages = $derived(Math.ceil(total / perPage));\n</script>\n\n<nav>\n\t<button onclick={() => onchange(page - 1)} disabled={page <= 1}>Prev</button>\n\t{#each Array.from({length: pages}) as _, i}\n\t\t<button class:active={page === i + 1} onclick={() => onchange(i + 1)}>{i + 1}</button>\n\t{/each}\n\t<button onclick={() => onchange(page + 1)} disabled={page >= pages}>Next</button>\n</nav>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_theme_switcher() {
+        let s = "<script>\n\tlet theme = $state('light');\n\tconst toggle = () => theme = theme === 'light' ? 'dark' : 'light';\n\t$effect(() => {\n\t\tdocument.documentElement.setAttribute('data-theme', theme);\n\t});\n</script>\n\n<button onclick={toggle}>{theme === 'light' ? '🌙' : '☀️'}</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_infinite_scroll() {
+        let s = "<script>\n\tlet items = $state([]);\n\tlet loading = $state(false);\n\tlet page = $state(1);\n\tconst loadMore = async () => {\n\t\tloading = true;\n\t\tconst res = await fetch(`/api?page=${page}`);\n\t\tconst data = await res.json();\n\t\titems = [...items, ...data];\n\t\tpage++;\n\t\tloading = false;\n\t};\n</script>\n\n{#each items as item (item.id)}\n\t<div>{item.text}</div>\n{/each}\n{#if loading}<p>Loading...</p>{/if}\n<button onclick={loadMore}>Load more</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_form_validation() {
+        let s = "<script>\n\tlet email = $state('');\n\tlet password = $state('');\n\tlet errors = $derived({\n\t\temail: !email.includes('@') ? 'Invalid email' : '',\n\t\tpassword: password.length < 8 ? 'Too short' : '',\n\t});\n\tlet valid = $derived(!errors.email && !errors.password);\n</script>\n\n<form>\n\t<input bind:value={email} type=\"email\" />\n\t{#if errors.email}<p class=\"error\">{errors.email}</p>{/if}\n\t<input bind:value={password} type=\"password\" />\n\t{#if errors.password}<p class=\"error\">{errors.password}</p>{/if}\n\t<button type=\"submit\" disabled={!valid}>Submit</button>\n</form>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_drag_and_drop() {
+        let s = "<script>\n\tlet items = $state(['A', 'B', 'C', 'D']);\n\tlet dragging = $state(null);\n</script>\n\n{#each items as item, i (item)}\n\t<div\n\t\tdraggable=\"true\"\n\t\ton:dragstart={() => dragging = i}\n\t\ton:drop={() => { const temp = items[i]; items[i] = items[dragging]; items[dragging] = temp; }}\n\t\ton:dragover|preventDefault\n\t\tclass:dragging={dragging === i}\n\t>\n\t\t{item}\n\t</div>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- SvelteKit integration tests ---
 
     #[test]
