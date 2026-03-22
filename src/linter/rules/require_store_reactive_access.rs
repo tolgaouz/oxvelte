@@ -2,10 +2,32 @@
 //! ⭐ Recommended 🔧 Fixable
 
 use crate::linter::{parse_imports, walk_template_nodes, LintContext, Rule};
-use crate::ast::TemplateNode;
+use crate::ast::{TemplateNode, Attribute, AttributeValue, AttributeValuePart};
 use std::collections::HashSet;
 
 const STORE_FACTORIES: &[&str] = &["writable", "readable", "derived"];
+
+fn check_expr_for_raw_store(
+    expr: &str, span: oxc::span::Span,
+    store_vars: &HashSet<String>, ctx: &mut LintContext<'_>,
+) {
+    let expr = expr.trim();
+    for var in store_vars {
+        if expr == var
+            || expr.starts_with(&format!("{}.", var))
+            || expr.starts_with(&format!("{}[", var))
+        {
+            if !expr.contains(&format!("${}", var))
+                && !expr.contains(&format!("get({})", var))
+            {
+                ctx.diagnostic(
+                    "Use the $ prefix or the get function to access reactive values instead of accessing the raw store.",
+                    span,
+                );
+            }
+        }
+    }
+}
 
 pub struct RequireStoreReactiveAccess;
 
@@ -61,27 +83,47 @@ impl Rule for RequireStoreReactiveAccess {
         if store_vars.is_empty() { return; }
 
         // Check template for raw store references (without $ prefix or get())
+        let store_vars_clone = store_vars.clone();
         walk_template_nodes(&ctx.ast.html, &mut |node| {
-            if let TemplateNode::MustacheTag(tag) = node {
-                let expr = tag.expression.trim();
-                // Check if the expression is a raw store variable reference
-                for var in &store_vars {
-                    if expr == var
-                        || expr.starts_with(&format!("{}.", var))
-                        || expr.starts_with(&format!("{}[", var))
-                    {
-                        // Make sure it's not $var or get(var)
-                        let full_region = &ctx.source[tag.span.start as usize..tag.span.end as usize];
-                        if !full_region.contains(&format!("${}", var))
-                            && !full_region.contains(&format!("get({})", var))
-                        {
-                            ctx.diagnostic(
-                                "Use the $ prefix or the get function to access reactive values instead of accessing the raw store.",
-                                tag.span,
-                            );
+            match node {
+                TemplateNode::MustacheTag(tag) => {
+                    check_expr_for_raw_store(&tag.expression, tag.span, &store_vars_clone, ctx);
+                }
+                TemplateNode::Element(el) => {
+                    // Skip components — passing stores as props is valid
+                    let is_component = el.name.chars().next().map_or(false, |c| c.is_uppercase())
+                        || el.name.contains('.');
+                    if is_component { return; }
+                    for attr in &el.attributes {
+                        if let Attribute::NormalAttribute { value, span, .. } = attr {
+                            match value {
+                                AttributeValue::Expression(expr) => {
+                                    check_expr_for_raw_store(expr, *span, &store_vars_clone, ctx);
+                                }
+                                AttributeValue::Concat(parts) => {
+                                    for part in parts {
+                                        if let AttributeValuePart::Expression(expr) = part {
+                                            check_expr_for_raw_store(expr, *span, &store_vars_clone, ctx);
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        if let Attribute::Spread { span } = attr {
+                            let region = &ctx.source[span.start as usize..span.end as usize];
+                            for var in &store_vars_clone {
+                                if region.contains(var.as_str()) && !region.contains(&format!("${}", var)) {
+                                    ctx.diagnostic(
+                                        "Use the $ prefix or the get function to access reactive values instead of accessing the raw store.",
+                                        *span,
+                                    );
+                                }
+                            }
                         }
                     }
                 }
+                _ => {}
             }
         });
     }
