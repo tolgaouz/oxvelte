@@ -1011,6 +1011,115 @@ mod tests {
         assert!(bg.is_empty(), "Should NOT flag location inside guarded blocks, got: {:?}", bg.iter().map(|d| &d.message).collect::<Vec<_>>());
     }
 
+    // --- linter rule exhaustive tests ---
+
+    #[test]
+    fn test_linter_all_rules_run_without_panic() {
+        // Test that ALL rules can run on various inputs without panicking
+        let inputs = [
+            "",
+            "<p>text</p>",
+            "<script>\n\tlet x = 0;\n</script>",
+            "<script lang=\"ts\">\n\tlet x: number = 0;\n</script>\n<p>{x}</p>\n<style>\n\tp { color: red; }\n</style>",
+            "{#if true}<p>yes</p>{/if}",
+            "{#each [1] as n}<p>{n}</p>{/each}",
+            "{@html '<b>bold</b>'}",
+            "{@debug x}",
+            "<button>click</button>",
+            "<a href=\"/\" target=\"_blank\">link</a>",
+            "<div style=\"color: red\">styled</div>",
+        ];
+        let linter = Linter::all();
+        for input in &inputs {
+            let r = parser::parse(input);
+            let _ = linter.lint(&r.ast, input);
+        }
+    }
+
+    #[test]
+    fn test_linter_recommended_runs_without_panic() {
+        let inputs = [
+            "<script>\n\timport { writable } from 'svelte/store';\n\tconst s = writable(0);\n</script>\n{$s}\n{s}",
+            "<script>\n\t$: x = 42;\n\t$: fn = () => {};\n\t$inspect(x);\n</script>",
+            "<script>\n\tlet v = 0;\n\t$: r = v * 2;\n\tfunction f() { r = 3; }\n</script>",
+        ];
+        let linter = Linter::recommended();
+        for input in &inputs {
+            let r = parser::parse(input);
+            let _ = linter.lint(&r.ast, input);
+        }
+    }
+
+    #[test]
+    fn test_parse_every_block_type_nested() {
+        let s = "{#if a}\n\t{#each bs as b}\n\t\t{#await p}\n\t\t\t{#key k}\n\t\t\t\t{#snippet s()}\n\t\t\t\t\t<p>{b}</p>\n\t\t\t\t{/snippet}\n\t\t\t\t{@render s()}\n\t\t\t{/key}\n\t\t{:then v}\n\t\t\t<p>{v}</p>\n\t\t{/await}\n\t{/each}\n{:else}\n\t<p>none</p>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_full_app_structure() {
+        let s = "<script context=\"module\">\n\texport const prerender = true;\n</script>\n\n<script lang=\"ts\">\n\tlet { data } = $props();\n\tlet count = $state(0);\n</script>\n\n<svelte:head>\n\t<title>App</title>\n</svelte:head>\n\n<svelte:window on:keydown={(e) => {}} />\n\n<main>\n\t{#each data.items as item (item.id)}\n\t\t<p>{item.name}</p>\n\t{/each}\n</main>\n\n<style lang=\"scss\">\n\tmain { padding: 1rem; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        assert!(r.ast.module.is_some());
+        assert!(r.ast.instance.is_some());
+        assert!(r.ast.css.is_some());
+    }
+
+    #[test]
+    fn test_linter_dom_manip_multiple_methods() {
+        let s = "<script>\n\tlet el;\n\tconst fn = () => {\n\t\tel.appendChild(document.createElement('p'));\n\t\tel.insertBefore(null, null);\n\t\tel.removeChild(null);\n\t};\n</script>\n<div bind:this={el} />";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let dom: Vec<_> = diags.iter().filter(|d| d.rule_name == "svelte/no-dom-manipulating").collect();
+        assert!(dom.len() >= 3, "Should flag multiple DOM methods, got {}", dom.len());
+    }
+
+    #[test]
+    fn test_linter_no_reactive_reassign_complex() {
+        let s = "<script>\n\tlet v = 0;\n\t$: obj = { a: v, b: { c: v } };\n\tfunction fn() {\n\t\tobj.a = 1;\n\t\tobj.b.c = 2;\n\t\tdelete obj.a;\n\t}\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let reassign: Vec<_> = diags.iter().filter(|d| d.rule_name == "svelte/no-reactive-reassign").collect();
+        assert!(reassign.len() >= 2, "Should flag multiple reactive mutations, got {}", reassign.len());
+    }
+
+    #[test]
+    fn test_parse_component_with_everything() {
+        let s = "<Widget\n\t{prop}\n\tvalue={expr}\n\tbind:value\n\ton:click={handler}\n\ton:custom\n\tuse:action\n\ttransition:fade\n\tclass:active\n\tstyle:color=\"red\"\n\tlet:item\n\t{...rest}\n/>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_complete() {
+        let s = "<style>\n\t:root { --primary: blue; }\n\t* { box-sizing: border-box; }\n\th1 { color: var(--primary); }\n\t.card { border: 1px solid #eee; border-radius: 8px; }\n\t.card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.1); }\n\t@media (max-width: 768px) { .card { width: 100%; } }\n\t@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_dashboard() {
+        let s = "<script lang=\"ts\">\n\tlet { data } = $props();\n\tlet search = $state('');\n\tlet filtered = $derived(\n\t\tdata.users.filter(u => u.name.toLowerCase().includes(search.toLowerCase()))\n\t);\n\tlet total = $derived(filtered.length);\n</script>\n\n<div class=\"dashboard\">\n\t<header>\n\t\t<h1>Users ({total})</h1>\n\t\t<input type=\"search\" bind:value={search} placeholder=\"Filter...\" />\n\t</header>\n\t{#if filtered.length > 0}\n\t\t<table>\n\t\t\t<thead><tr><th>Name</th><th>Email</th><th>Role</th></tr></thead>\n\t\t\t<tbody>\n\t\t\t\t{#each filtered as user (user.id)}\n\t\t\t\t\t<tr class:admin={user.role === 'admin'}>\n\t\t\t\t\t\t<td>{user.name}</td>\n\t\t\t\t\t\t<td>{user.email}</td>\n\t\t\t\t\t\t<td>{user.role}</td>\n\t\t\t\t\t</tr>\n\t\t\t\t{/each}\n\t\t\t</tbody>\n\t\t</table>\n\t{:else}\n\t\t<p class=\"empty\">No users match \"{search}\"</p>\n\t{/if}\n</div>\n\n<style>\n\t.dashboard { max-width: 960px; margin: 0 auto; }\n\theader { display: flex; justify-content: space-between; align-items: center; }\n\ttable { width: 100%; border-collapse: collapse; }\n\tth, td { padding: 0.5rem; text-align: left; border-bottom: 1px solid #eee; }\n\t.admin { font-weight: bold; }\n\t.empty { color: #999; font-style: italic; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_auth_page() {
+        let s = "<script lang=\"ts\">\n\tlet mode = $state<'login' | 'register'>('login');\n\tlet email = $state('');\n\tlet password = $state('');\n\tlet confirmPassword = $state('');\n\tlet errors = $derived({\n\t\temail: !email.includes('@') ? 'Invalid email' : '',\n\t\tpassword: password.length < 8 ? 'Min 8 characters' : '',\n\t\tconfirm: mode === 'register' && password !== confirmPassword ? 'Passwords must match' : '',\n\t});\n\tlet valid = $derived(!errors.email && !errors.password && (mode === 'login' || !errors.confirm));\n</script>\n\n<div class=\"auth\">\n\t<h1>{mode === 'login' ? 'Sign In' : 'Create Account'}</h1>\n\t<form onsubmit={(e) => { e.preventDefault(); /* submit */ }}>\n\t\t<label>Email <input type=\"email\" bind:value={email} /></label>\n\t\t{#if errors.email}<span class=\"error\">{errors.email}</span>{/if}\n\t\t<label>Password <input type=\"password\" bind:value={password} /></label>\n\t\t{#if errors.password}<span class=\"error\">{errors.password}</span>{/if}\n\t\t{#if mode === 'register'}\n\t\t\t<label>Confirm <input type=\"password\" bind:value={confirmPassword} /></label>\n\t\t\t{#if errors.confirm}<span class=\"error\">{errors.confirm}</span>{/if}\n\t\t{/if}\n\t\t<button type=\"submit\" disabled={!valid}>{mode === 'login' ? 'Sign In' : 'Register'}</button>\n\t</form>\n\t<p>\n\t\t{mode === 'login' ? 'Need an account?' : 'Already have one?'}\n\t\t<button onclick={() => mode = mode === 'login' ? 'register' : 'login'}>\n\t\t\t{mode === 'login' ? 'Register' : 'Sign In'}\n\t\t</button>\n\t</p>\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_carousel() {
+        let s = "<script>\n\tlet { images = [] } = $props();\n\tlet currentIndex = $state(0);\n\tlet count = $derived(images.length);\n\tconst prev = () => currentIndex = (currentIndex - 1 + count) % count;\n\tconst next = () => currentIndex = (currentIndex + 1) % count;\n</script>\n\n<div class=\"carousel\">\n\t<button onclick={prev} aria-label=\"Previous\">&larr;</button>\n\t{#each images as img, i (img.src)}\n\t\t{#if i === currentIndex}\n\t\t\t<img src={img.src} alt={img.alt} transition:fade />\n\t\t{/if}\n\t{/each}\n\t<button onclick={next} aria-label=\"Next\">&rarr;</button>\n\t<div class=\"dots\">\n\t\t{#each images as _, i}\n\t\t\t<button class:active={i === currentIndex} onclick={() => currentIndex = i} aria-label=\"Go to slide {i + 1}\" />\n\t\t{/each}\n\t</div>\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     #[test]
     fn test_parse_script_with_top_level_await() {
         let s = "<script>\n\tconst data = await fetch('/api').then(r => r.json());\n</script>\n<p>{JSON.stringify(data)}</p>";
