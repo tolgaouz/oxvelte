@@ -65,11 +65,9 @@ impl Rule for Indent {
                 continue;
             }
 
-            // Multiline tag: check attribute indentation
+            // Multiline tag: skip attribute lines
             if in_multiline_tag {
-                let is_end = trimmed.ends_with(">") || trimmed.ends_with("/>") || trimmed == ">" || trimmed == "/>";
-                // Attribute indentation is complex (uses column-based positioning)
-                // Skipped for now — only content indentation is checked
+                let is_end = trimmed.ends_with(">") || trimmed.ends_with("/>") || trimmed == ">" || trimmed == "/";
                 if is_end {
                     in_multiline_tag = false;
                     multiline_tag_ignored = false;
