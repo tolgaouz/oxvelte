@@ -84,7 +84,10 @@ fn is_in_ssr_block(content: &str, pos: usize) -> bool {
                             && !cond_t.contains("=== undefined") && !cond_t.contains("== undefined")
                             && !cond_t.contains("=== null") && !cond_t.contains("== null"))
                             || cond_t == "browser" || cond_t == "BROWSER"
-                            || cond_t.ends_with(".BROWSER") || cond_t.ends_with(".browser");
+                            || cond_t.ends_with(".BROWSER") || cond_t.ends_with(".browser")
+                            // typeof window !== 'undefined' is a positive browser guard
+                            || (cond_t.contains("typeof") && cond_t.contains("!==") && cond_t.contains("undefined"))
+                            || (cond_t.contains("typeof") && cond_t.contains("!=") && cond_t.contains("undefined"));
                         if is_positive_browser {
                             let kw = before_if_block[..ps].trim_end();
                             if kw.ends_with("if") { return true; }
@@ -95,6 +98,64 @@ fn is_in_ssr_block(content: &str, pos: usize) -> bool {
         }
     }
 
+    false
+}
+
+/// Check if position is after a browser guard with early exit (continue/return/break).
+/// Pattern: `if (browser) { ...; continue; } <-- position is here (server context)`
+fn is_after_browser_guard_exit(content: &str, pos: usize) -> bool {
+    // Look backwards for a closing `}` that ends an if-block with a jump statement
+    let before = content[..pos].trim_end();
+    // Find the nearest `}` before this position at the same block level
+    let mut depth = 0i32;
+    for i in (0..before.len()).rev() {
+        match before.as_bytes()[i] {
+            b'}' if depth == 0 => {
+                // Found closing brace at same level — check if it's an if-browser block with jump
+                let block_before = &before[..=i];
+                // Find matching {
+                let mut d = 0i32;
+                let mut open = None;
+                for (j, b) in block_before.bytes().enumerate().rev() {
+                    match b {
+                        b'}' => d += 1,
+                        b'{' => { d -= 1; if d == 0 { open = Some(j); break; } }
+                        _ => {}
+                    }
+                }
+                if let Some(open_pos) = open {
+                    let block_content = &content[open_pos + 1..i];
+                    // Check if block has a jump statement (continue, return, break)
+                    let has_jump = block_content.contains("continue")
+                        || block_content.contains("return")
+                        || block_content.contains("break");
+                    if has_jump {
+                        // Check if preceded by if (browser/BROWSER/globalThis)
+                        let before_open = content[..open_pos].trim_end();
+                        if before_open.ends_with(')') {
+                            if let Some(paren_start) = before_open.rfind('(') {
+                                let cond = &before_open[paren_start + 1..before_open.len() - 1];
+                                let is_browser = cond.trim() == "browser" || cond.trim() == "BROWSER"
+                                    || cond.trim().contains("browser") || cond.trim().contains("BROWSER")
+                                    || cond.trim().starts_with("globalThis.");
+                                let is_negated = cond.trim().starts_with('!');
+                                let kw = before_open[..paren_start].trim_end();
+                                if kw.ends_with("if") {
+                                    // Positive browser guard with jump = code after is server
+                                    if is_browser && !is_negated { return true; }
+                                    // Negative browser guard with jump = code after is browser (OK)
+                                }
+                            }
+                        }
+                    }
+                }
+                return false; // only check the nearest block
+            }
+            b'}' => depth += 1,
+            b'{' => depth -= 1,
+            _ => {}
+        }
+    }
     false
 }
 
@@ -130,11 +191,9 @@ impl Rule for NoTopLevelBrowserGlobals {
                 let depth: i32 = content[..byte_offset].bytes()
                     .fold(0i32, |acc, b| match b { b'{' => acc + 1, b'}' => acc - 1, _ => acc });
                 if depth > 0 {
-                    // Check if we're inside a server-side block where browser globals are invalid:
-                    // - if (import.meta.env.SSR) { ... }
-                    // - else { ... } after if (globalThis.X) { ... }
-                    let in_server_block = is_in_ssr_block(content, byte_offset);
-                    if !in_server_block { continue; }
+                    let in_ssr = is_in_ssr_block(content, byte_offset);
+                    let after_exit = is_after_browser_guard_exit(content, byte_offset);
+                    if !in_ssr && !after_exit { continue; }
                 }
 
                 // Skip if directly preceded by typeof
