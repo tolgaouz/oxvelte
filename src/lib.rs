@@ -9347,7 +9347,7 @@ mod linter_fixture_tests {
     #[test] fn linter_html_quotes_valid() { run_linter_valid("html-quotes"); }
     #[test] fn linter_html_closing_bracket_spacing_valid() { run_linter_valid("html-closing-bracket-spacing"); }
     // sort-attributes: needs config for ignore/order options
-    // #[test] fn linter_sort_attributes_valid() { run_linter_valid("sort-attributes"); }
+    #[test] fn linter_sort_attributes_valid() { run_linter_valid("sort-attributes"); }
     #[test] fn linter_indent_valid() { run_linter_valid("indent"); }
     // indent: 36/37 invalid pass (style-directive01 needs column-based attr indent)
     // #[test] fn linter_indent_invalid() { run_linter_invalid("indent"); }
