@@ -82,6 +82,26 @@ impl Rule for RequireStoreReactiveAccess {
 
         if store_vars.is_empty() { return; }
 
+        // Check script for raw store references in template literal interpolations
+        let tag_text = &ctx.source[script.span.start as usize..script.span.end as usize];
+        let content_offset = tag_text.find('>').map(|p| script.span.start as usize + p + 1)
+            .unwrap_or(script.span.start as usize);
+        for var in &store_vars {
+            // Look for ${store} in template literals (not ${$store})
+            let raw_interpolation = format!("${{{}}}", var);
+            let reactive_interpolation = format!("${{${}}}", var);
+            for (pos, _) in content.match_indices(&raw_interpolation) {
+                if content[pos..].starts_with(&reactive_interpolation) { continue; }
+                // Check preceding char is not $
+                if pos > 0 && content.as_bytes()[pos - 1] == b'$' { continue; }
+                let src_pos = content_offset + pos;
+                ctx.diagnostic(
+                    "Use the $ prefix or the get function to access reactive values instead of accessing the raw store.",
+                    oxc::span::Span::new(src_pos as u32, (src_pos + raw_interpolation.len()) as u32),
+                );
+            }
+        }
+
         // Check template for raw store references (without $ prefix or get())
         let store_vars_clone = store_vars.clone();
         walk_template_nodes(&ctx.ast.html, &mut |node| {
