@@ -1011,6 +1011,197 @@ mod tests {
         assert!(bg.is_empty(), "Should NOT flag location inside guarded blocks, got: {:?}", bg.iter().map(|d| &d.message).collect::<Vec<_>>());
     }
 
+    #[test]
+    fn test_parse_real_world_accordion_svelte5() {
+        let s = "<script>\n\tlet { items } = $props();\n\tlet openIndex = $state(-1);\n\tconst toggle = (i) => openIndex = openIndex === i ? -1 : i;\n</script>\n{#each items as item, i}\n\t<button onclick={() => toggle(i)} aria-expanded={openIndex === i}>\n\t\t{item.title}\n\t</button>\n\t{#if openIndex === i}\n\t\t<div transition:slide>{@html item.content}</div>\n\t{/if}\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_in_in_transition() {
+        let s = "<div in:fly={{y: -200, duration: 300, delay: index * 50}}>animated</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_browser_global_setTimeout_top() {
+        let s = "<script>\n\tsetTimeout(() => {}, 1000);\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-top-level-browser-globals"),
+            "Should flag setTimeout at top level");
+    }
+
+    #[test]
+    fn test_linter_browser_global_setTimeout_in_fn_ok() {
+        let s = "<script>\n\tfunction init() {\n\t\tsetTimeout(() => {}, 1000);\n\t}\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-top-level-browser-globals"),
+            "Should NOT flag setTimeout inside function");
+    }
+
+    #[test]
+    fn test_parse_template_with_math() {
+        let s = "<p>{Math.round(value * 100) / 100}</p>\n<p>{Math.max(0, Math.min(100, percentage))}%</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_dynamic_class_with_map() {
+        let s = "<div class={['base', active && 'active', size === 'lg' && 'large'].filter(Boolean).join(' ')}>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_spring_tweened() {
+        let s = "<script>\n\timport { spring, tweened } from 'svelte/motion';\n\tconst coords = spring({ x: 50, y: 50 });\n\tconst progress = tweened(0, { duration: 400 });\n</script>\n<svg on:mousemove={(e) => coords.set({ x: e.clientX, y: e.clientY })}>\n\t<circle cx={$coords.x} cy={$coords.y} r=\"10\" />\n</svg>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_grid_complex() {
+        let s = "<style>\n\t.layout {\n\t\tdisplay: grid;\n\t\tgrid-template-columns: 250px 1fr;\n\t\tgrid-template-rows: 60px 1fr 40px;\n\t\tgrid-template-areas:\n\t\t\t'header header'\n\t\t\t'sidebar main'\n\t\t\t'footer footer';\n\t\tmin-height: 100vh;\n\t}\n\t.header { grid-area: header; }\n\t.sidebar { grid-area: sidebar; }\n\t.main { grid-area: main; }\n\t.footer { grid-area: footer; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_with_promise_map() {
+        let s = "{#each urls.map(u => fetch(u).then(r => r.json())) as promise}\n\t{#await promise}\n\t\t<p>...</p>\n\t{:then data}\n\t\t<p>{data.title}</p>\n\t{/await}\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_two_way_bind_svelte5() {
+        let s = "<script>\n\tlet { value = $bindable(0) } = $props();\n</script>\n<input type=\"number\" bind:value />\n<p>{value}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_immutable_reactive_export_fn() {
+        let s = "<script>\n\texport function helper(x) { return x * 2; }\n\tconst CONST = 42;\n\t$: result = helper(CONST);\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-immutable-reactive-statements"),
+            "Should flag reactive stmt with immutable function + const");
+    }
+
+    // --- to 1150 ---
+
+    #[test]
+    fn test_parse_real_world_api_client() {
+        let s = "<script lang=\"ts\">\n\ttype ApiResponse<T> = { data: T; error: string | null };\n\tlet loading = $state(false);\n\tlet result = $state<ApiResponse<unknown> | null>(null);\n\tconst fetchData = async (endpoint: string) => {\n\t\tloading = true;\n\t\ttry {\n\t\t\tconst res = await fetch(endpoint);\n\t\t\tresult = { data: await res.json(), error: null };\n\t\t} catch (e) {\n\t\t\tresult = { data: null, error: String(e) };\n\t\t} finally {\n\t\t\tloading = false;\n\t\t}\n\t};\n</script>\n\n{#if loading}\n\t<div class=\"loading\">Loading...</div>\n{:else if result?.error}\n\t<div class=\"error\">{result.error}</div>\n{:else if result?.data}\n\t<pre>{JSON.stringify(result.data, null, 2)}</pre>\n{:else}\n\t<button onclick={() => fetchData('/api/data')}>Fetch</button>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_file_upload() {
+        let s = "<script>\n\tlet files = $state([]);\n\tlet uploading = $state(false);\n\tlet progress = $state(0);\n\tconst handleDrop = (e) => {\n\t\te.preventDefault();\n\t\tfiles = [...files, ...Array.from(e.dataTransfer.files)];\n\t};\n</script>\n\n<div\n\tclass=\"dropzone\"\n\tclass:active={files.length > 0}\n\ton:dragover|preventDefault\n\ton:drop={handleDrop}\n\trole=\"region\"\n\taria-label=\"File upload\"\n>\n\t{#if files.length === 0}\n\t\t<p>Drop files here</p>\n\t{:else}\n\t\t<ul>\n\t\t\t{#each files as file (file.name)}\n\t\t\t\t<li>{file.name} ({(file.size / 1024).toFixed(1)} KB)</li>\n\t\t\t{/each}\n\t\t</ul>\n\t{/if}\n\t{#if uploading}\n\t\t<progress value={progress} max=\"100\">{progress}%</progress>\n\t{/if}\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_tooltip() {
+        let s = "<script>\n\tlet { text, position = 'top' } = $props();\n\tlet visible = $state(false);\n\tlet x = $state(0);\n\tlet y = $state(0);\n</script>\n\n<div\n\ton:mouseenter={(e) => { visible = true; x = e.clientX; y = e.clientY; }}\n\ton:mouseleave={() => visible = false}\n>\n\t<slot />\n</div>\n{#if visible}\n\t<div class=\"tooltip {position}\" style:left=\"{x}px\" style:top=\"{y}px\" transition:fade={{duration: 150}}>\n\t\t{text}\n\t</div>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_modern_features() {
+        let s = "<style>\n\t.container {\n\t\tcontainer-type: inline-size;\n\t}\n\t@container (min-width: 500px) {\n\t\t.item { display: grid; }\n\t}\n\t.text {\n\t\ttext-wrap: balance;\n\t\toverflow-wrap: anywhere;\n\t}\n\t.stack {\n\t\tdisplay: flex;\n\t\tgap: max(1rem, 2vw);\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_combined_svelte5_issues() {
+        let s = "<script>\n\t$inspect(val);\n</script>\n{@html content}\n{@debug x}\n<button>no type</button>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let rules: Vec<_> = diags.iter().map(|d| d.rule_name.clone()).collect();
+        let has = |name: &str| rules.iter().any(|r| &**r == name);
+        assert!(has("svelte/no-at-html-tags"));
+        assert!(has("svelte/no-at-debug-tags"));
+        assert!(has("svelte/no-inspect"));
+        assert!(has("svelte/button-has-type"));
+    }
+
+    #[test]
+    fn test_parse_component_context_api() {
+        let s = "<script>\n\timport { setContext, getContext } from 'svelte';\n\tsetContext('theme', {\n\t\tprimary: '#007bff',\n\t\tsecondary: '#6c757d',\n\t\tgetPrimary() { return this.primary; }\n\t});\n</script>\n<slot />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_attachments() {
+        let s = "<div {@attach tooltip('Hello')}>Hover me</div>";
+        let r = parser::parse(s);
+        let _ = r.ast.html.nodes.len();
+    }
+
+    #[test]
+    fn test_linter_each_without_key_count() {
+        let s = "{#each a as x}<p/>{/each}\n{#each b as y}<p/>{/each}\n{#each c as z (z.id)}<p/>{/each}\n{#each d as w}<p/>{/each}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let key_count = diags.iter().filter(|d| d.rule_name == "svelte/require-each-key").count();
+        assert_eq!(key_count, 3, "Should flag 3 each blocks without key");
+    }
+
+    #[test]
+    fn test_parse_mixed_mustache_types() {
+        let s = "<div>\n\t{text}\n\t{@html rawHtml}\n\t{@debug val}\n\t{@const doubled = val * 2}\n\t{@render snippet()}\n\t{doubled}\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_class_directive_shorthand_chain() {
+        let s = "<div class:a class:b class:c class:d class:e={expr}>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_object_shorthand() {
+        let s = "<Component data={{ name, age, email }} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte_head_complex() {
+        let s = "<svelte:head>\n\t<title>{pageTitle} | {siteName}</title>\n\t<meta name=\"description\" content={description} />\n\t<meta property=\"og:title\" content={pageTitle} />\n\t<meta property=\"og:description\" content={description} />\n\t<meta property=\"og:image\" content={`${baseUrl}/og/${slug}.png`} />\n\t<link rel=\"canonical\" href={`${baseUrl}/${slug}`} />\n\t<link rel=\"alternate\" hreflang=\"en\" href={`${baseUrl}/en/${slug}`} />\n\t{@html structuredData}\n</svelte:head>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_with_all_pseudo() {
+        let s = "<style>\n\ta:link { color: blue; }\n\ta:visited { color: purple; }\n\ta:hover { color: red; }\n\ta:active { color: orange; }\n\ta:focus { outline: 2px solid; }\n\ta:focus-visible { outline: 3px solid blue; }\n\ta:focus-within { background: lightyellow; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_virtualized_list() {
+        let s = "<script>\n\tlet { items, itemHeight = 40, containerHeight = 400 } = $props();\n\tlet scrollTop = $state(0);\n\tlet startIndex = $derived(Math.floor(scrollTop / itemHeight));\n\tlet visibleCount = $derived(Math.ceil(containerHeight / itemHeight) + 1);\n\tlet visibleItems = $derived(items.slice(startIndex, startIndex + visibleCount));\n\tlet totalHeight = $derived(items.length * itemHeight);\n\tlet offsetY = $derived(startIndex * itemHeight);\n</script>\n\n<div class=\"viewport\" style:height=\"{containerHeight}px\" on:scroll={(e) => scrollTop = e.target.scrollTop}>\n\t<div style:height=\"{totalHeight}px\">\n\t\t<div style:transform=\"translateY({offsetY}px)\">\n\t\t\t{#each visibleItems as item, i (startIndex + i)}\n\t\t\t\t<div class=\"item\" style:height=\"{itemHeight}px\">{item.label}</div>\n\t\t\t{/each}\n\t\t</div>\n\t</div>\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- pushing to 1150 ---
 
     #[test]
