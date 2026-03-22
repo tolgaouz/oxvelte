@@ -100,6 +100,10 @@ impl Rule for RequireStoreReactiveAccess {
             }
         }
 
+        // Script-level store access requires AST analysis to distinguish
+        // value access (store++) from object reference (store.subscribe).
+        // Only template + interpolation checking is reliable with text heuristics.
+
         // Check template for raw store references (without $ prefix or get())
         let store_vars_clone = store_vars.clone();
         walk_template_nodes(&ctx.ast.html, &mut |node| {
