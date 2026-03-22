@@ -1011,6 +1011,178 @@ mod tests {
         assert!(bg.is_empty(), "Should NOT flag location inside guarded blocks, got: {:?}", bg.iter().map(|d| &d.message).collect::<Vec<_>>());
     }
 
+    #[test]
+    fn test_parse_svelte5_derived_chain() {
+        let s = "<script>\n\tlet count = $state(0);\n\tlet d1 = $derived(count * 2);\n\tlet d2 = $derived(d1 + 1);\n\tlet d3 = $derived(d2 > 10);\n</script>\n<p>{d3 ? 'big' : 'small'}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_forwarding_all() {
+        let s = "<script>\n\tlet props = $props();\n</script>\n<Inner {...props} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte_head_script_style() {
+        let s = "<svelte:head>\n\t<link rel=\"preload\" href=\"/font.woff2\" as=\"font\" type=\"font/woff2\" crossorigin />\n\t<meta name=\"robots\" content=\"noindex\" />\n</svelte:head>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_debug_multiple_vars() {
+        let s = "{@debug a, b, c}";
+        let r = parser::parse(s);
+        let diags = Linter::recommended().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-at-debug-tags"));
+    }
+
+    // --- towards 1100 ---
+
+    #[test]
+    fn test_parse_svelte5_each_snippet_render() {
+        let s = "{#snippet row(item, i)}\n\t<tr class:even={i % 2 === 0}>\n\t\t<td>{item.id}</td>\n\t\t<td>{item.name}</td>\n\t</tr>\n{/snippet}\n\n<table>\n\t{#each data as item, i (item.id)}\n\t\t{@render row(item, i)}\n\t{/each}\n</table>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_with_snippet_children() {
+        let s = "<Modal open={showModal}>\n\t{#snippet header()}\n\t\t<h2>Confirm Action</h2>\n\t{/snippet}\n\t<p>Are you sure you want to proceed?</p>\n\t{#snippet actions()}\n\t\t<button onclick={() => showModal = false}>Cancel</button>\n\t\t<button onclick={confirm}>Confirm</button>\n\t{/snippet}\n</Modal>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_fine_grained() {
+        let s = "<script>\n\tlet { a, b, c } = $props();\n\tlet sum = $derived(a + b + c);\n\tlet product = $derived(a * b * c);\n\tlet avg = $derived(sum / 3);\n</script>\n<p>Sum: {sum}</p>\n<p>Product: {product}</p>\n<p>Average: {avg}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_scroll_snap() {
+        let s = "<style>\n\t.container {\n\t\tscroll-snap-type: x mandatory;\n\t\toverflow-x: scroll;\n\t}\n\t.item {\n\t\tscroll-snap-align: center;\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_aspect_ratio() {
+        let s = "<style>\n\t.video {\n\t\taspect-ratio: 16 / 9;\n\t\twidth: 100%;\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_goto_external_ok() {
+        let s = "<script>\n\timport { goto } from '$app/navigation';\n\tgoto('https://example.com');\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-goto-without-base"),
+            "Should NOT flag goto with absolute URL");
+    }
+
+    #[test]
+    fn test_linter_no_reactive_fn_regular_ok() {
+        let s = "<script>\n\tfunction helper() { return 42; }\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-reactive-functions"),
+            "Should NOT flag regular function");
+    }
+
+    #[test]
+    fn test_parse_key_with_ternary() {
+        let s = "{#key active ? 'active' : 'inactive'}\n\t<Panel {active} />\n{/key}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_await_with_destructure() {
+        let s = "{#await loadData()}\n\t<Spinner />\n{:then { items, total }}\n\t<p>{total} items:</p>\n\t{#each items as item}<p>{item}</p>{/each}\n{/await}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_spread_call() {
+        let s = "<Component {...getProps(id)} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_multiline_if_condition() {
+        let s = "{#if\n\tcondition1 &&\n\tcondition2 &&\n\t(condition3 || condition4)\n}\n\t<p>All conditions met</p>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_writable_derived_detect() {
+        let s = "<script>\n\tlet { x } = $props();\n\tlet y = $state(x);\n\t$effect(() => { y = x * 2; });\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/prefer-writable-derived"),
+            "Should flag $state + $effect pattern");
+    }
+
+    #[test]
+    fn test_parse_style_all_block() {
+        let s = "<style>\n\t* { box-sizing: border-box; margin: 0; padding: 0; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_html_with_svelte_blocks() {
+        let s = "<main>\n\t{#if user}\n\t\t<h1>Welcome, {user.name}!</h1>\n\t\t{#each user.posts as post (post.id)}\n\t\t\t{#await loadPost(post.id)}\n\t\t\t\t<p>Loading post...</p>\n\t\t\t{:then content}\n\t\t\t\t<article>{content}</article>\n\t\t\t{/await}\n\t\t{/each}\n\t{:else}\n\t\t<p>Please log in.</p>\n\t{/if}\n</main>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_props_rename() {
+        let s = "<script>\n\tlet { class: className = '' } = $props();\n</script>\n<div class={className}>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_shorthand_attr_href() {
+        let s = "<a href={href}>link</a>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/shorthand-attribute"),
+            "Should flag non-shorthand href");
+    }
+
+    #[test]
+    fn test_parse_component_with_class_prop() {
+        let s = "<script>\n\tlet { class: className = '', ...rest } = $props();\n</script>\n<div class=\"base {className}\" {...rest}>\n\t<slot />\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_with_spread_rest() {
+        let s = "{#each items as { id, ...rest } (id)}\n\t<Component {id} {...rest} />\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_event_handler_with_type() {
+        let s = "<button on:click={(e: MouseEvent) => { console.log(e.clientX); }}>click</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- beyond 1000 ---
 
     #[test]
