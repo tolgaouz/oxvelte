@@ -44,6 +44,14 @@ enum Command {
     },
     /// List all available lint rules.
     Rules,
+    /// Convert an ESLint svelte config to oxvelte.config.json.
+    ConvertConfig {
+        /// Path to ESLint config file (.eslintrc.json, eslint.config.json, etc.)
+        file: PathBuf,
+        /// Write output to oxvelte.config.json instead of stdout.
+        #[arg(long, short)]
+        write: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -53,6 +61,7 @@ fn main() -> ExitCode {
         Command::Parse { file, pretty, format } => cmd_parse(&file, pretty, &format),
         Command::Check { paths } => cmd_lint(&paths, false, false),
         Command::Rules => cmd_rules(),
+        Command::ConvertConfig { file, write } => cmd_convert_config(&file, write),
     }
 }
 
@@ -141,6 +150,95 @@ fn cmd_rules() -> ExitCode {
     }
     println!("\n{} rules total ({} recommended)", rules.len(), recommended.len());
     ExitCode::SUCCESS
+}
+
+fn cmd_convert_config(file: &PathBuf, write: bool) -> ExitCode {
+    let content = match std::fs::read_to_string(file) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error reading {}: {}", file.display(), e);
+            return ExitCode::from(1);
+        }
+    };
+
+    // Try to extract JSON from JS/MJS config files (common flat config pattern)
+    let json_str = if file.extension().is_some_and(|e| e == "mjs" || e == "js" || e == "cjs") {
+        eprintln!("Note: JS config files are partially supported. Only inline JSON objects with svelte rules will be extracted.");
+        eprintln!("For best results, export your ESLint config as JSON first:");
+        eprintln!("  npx eslint --print-config yourfile.svelte > eslint-resolved.json");
+        eprintln!("  oxvelte convert-config eslint-resolved.json");
+        // Try to extract rules from JS — look for "svelte/" patterns
+        extract_rules_from_js(&content)
+    } else {
+        content.clone()
+    };
+
+    let config = match oxvelte::config::OxvelteConfig::from_eslint(&json_str) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Error parsing config: {}", e);
+            return ExitCode::from(1);
+        }
+    };
+
+    if config.rules.is_empty() {
+        eprintln!("No svelte/* rules found in the config.");
+        return ExitCode::from(1);
+    }
+
+    let output = config.to_json();
+
+    if write {
+        match std::fs::write("oxvelte.config.json", &output) {
+            Ok(_) => {
+                eprintln!("Wrote oxvelte.config.json ({} rules)", config.rules.len());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("Error writing oxvelte.config.json: {}", e);
+                ExitCode::from(1)
+            }
+        }
+    } else {
+        println!("{}", output);
+        ExitCode::SUCCESS
+    }
+}
+
+/// Best-effort extraction of svelte rules from a JS config file.
+fn extract_rules_from_js(content: &str) -> String {
+    let mut rules = serde_json::Map::new();
+    // Find patterns like "svelte/rule-name": "error" or 'svelte/rule-name': ['error', {...}]
+    for line in content.lines() {
+        let trimmed = line.trim().trim_end_matches(',');
+        // Match: "svelte/rule-name": value  or  'svelte/rule-name': value
+        for quote in &["\"", "'"] {
+            let prefix = format!("{}svelte/", quote);
+            if let Some(start) = trimmed.find(&prefix) {
+                let after = &trimmed[start + 1..]; // skip opening quote
+                if let Some(end) = after.find(*quote) {
+                    let rule_name = &after[..end];
+                    // Find the value after :
+                    let rest = &after[end + 1..].trim_start();
+                    if let Some(rest) = rest.strip_prefix(':') {
+                        let val = rest.trim().trim_end_matches(',');
+                        // Try to parse as JSON
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(val) {
+                            rules.insert(format!("svelte/{}", rule_name.strip_prefix("svelte/").unwrap_or(rule_name)), v);
+                        } else {
+                            // Try with quotes normalized
+                            let normalized = val.replace('\'', "\"");
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&normalized) {
+                                rules.insert(format!("svelte/{}", rule_name.strip_prefix("svelte/").unwrap_or(rule_name)), v);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let obj = serde_json::json!({ "rules": rules });
+    serde_json::to_string(&obj).unwrap_or_default()
 }
 
 fn offset_to_line_col(source: &str, offset: usize) -> (usize, usize) {

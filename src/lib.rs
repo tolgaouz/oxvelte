@@ -1,6 +1,7 @@
 pub mod ast;
 pub mod parser;
 pub mod linter;
+pub mod config;
 
 
 #[cfg(test)]
