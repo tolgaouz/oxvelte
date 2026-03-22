@@ -1011,6 +1011,108 @@ mod tests {
         assert!(bg.is_empty(), "Should NOT flag location inside guarded blocks, got: {:?}", bg.iter().map(|d| &d.message).collect::<Vec<_>>());
     }
 
+    // --- pushing 950 ---
+
+    #[test]
+    fn test_parse_multiple_const_tags() {
+        let s = "{#each items as item}\n\t{@const name = item.name.toUpperCase()}\n\t{@const price = item.price * 1.2}\n\t{@const total = price * item.qty}\n\t<p>{name}: {total}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_string_with_html_entities() {
+        let s = "<p>Price: &dollar;{price} &mdash; {discount}% off</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_nested_ternary_expression() {
+        let s = "<p>{a ? b ? 'deep-true' : 'mid-false' : c ? 'alt-true' : 'alt-false'}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_with_template_literal() {
+        let s = "<p>{`Item ${index + 1} of ${total}: ${items[index]?.name ?? 'unknown'}`}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_complex_event_handler() {
+        let s = "<button on:click|preventDefault|stopPropagation={(e) => {\n\tconst target = e.currentTarget;\n\tconst data = new FormData(target.form);\n\tsubmit(Object.fromEntries(data));\n}}>Submit</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_style_multiple_at_rules() {
+        let s = "<style>\n\t@media (prefers-color-scheme: dark) {\n\t\t.theme { background: #222; color: #eee; }\n\t}\n\t@media (prefers-reduced-motion: reduce) {\n\t\t* { animation: none !important; transition: none !important; }\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_with_restprops_and_events() {
+        let s = "<button {...$$restProps} on:click on:keydown class=\"btn {variant}\">\n\t<slot />\n</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_complex_destructured_props() {
+        let s = "<script lang=\"ts\">\n\tlet {\n\t\tname,\n\t\tage = 0,\n\t\titems = [],\n\t\tonchange,\n\t\tclass: className = '',\n\t\t...rest\n\t}: {\n\t\tname: string;\n\t\tage?: number;\n\t\titems?: string[];\n\t\tonchange?: () => void;\n\t\tclass?: string;\n\t\t[key: string]: unknown;\n\t} = $props();\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_with_async_item() {
+        let s = "{#each promises as promise}\n\t{#await promise}\n\t\t<p>Loading...</p>\n\t{:then value}\n\t\t<p>{value}</p>\n\t{:catch}\n\t\t<p>Error</p>\n\t{/await}\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_dynamic_import_in_script() {
+        let s = "<script>\n\tlet Component;\n\tconst load = async () => {\n\t\tconst mod = await import('./Heavy.svelte');\n\t\tComponent = mod.default;\n\t};\n</script>\n{#if Component}\n\t<svelte:component this={Component} />\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_dupe_else_if_nested() {
+        let s = "{#if a}\n\tp1\n{:else if b}\n\tp2\n{:else if a}\n\tp3\n{/if}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-dupe-else-if-blocks"),
+            "Should flag duplicate else-if condition 'a'");
+    }
+
+    #[test]
+    fn test_parse_special_element_mixed() {
+        let s = "<svelte:head>\n\t<title>{title}</title>\n</svelte:head>\n<svelte:window on:resize={handleResize} />\n<svelte:body on:click={handleClick} />\n<main>\n\t<slot />\n</main>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_scope_with_global() {
+        let s = "<style>\n\t.local { color: red; }\n\t:global(.external) { color: blue; }\n\t.local :global(.mixed) { display: flex; }\n\t:global(body.dark) .local { background: #333; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_reactive_store_derived_chain() {
+        let s = "<script>\n\timport { writable, derived } from 'svelte/store';\n\tconst base = writable(0);\n\tconst doubled = derived(base, $b => $b * 2);\n\tconst quadrupled = derived(doubled, $d => $d * 2);\n\tconst formatted = derived(quadrupled, $q => `Value: ${$q}`);\n</script>\n<p>{$formatted}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- towards 950 ---
 
     #[test]
