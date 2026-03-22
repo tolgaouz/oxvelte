@@ -1,10 +1,8 @@
 //! `svelte/no-unused-props` — disallow unused component props.
 //! ⭐ Recommended
-//!
-//! This rule requires semantic analysis to track prop declarations and their usage
-//! across template and script blocks. Currently a placeholder.
 
 use crate::linter::{LintContext, Rule};
+use std::collections::HashSet;
 
 pub struct NoUnusedProps;
 
@@ -17,10 +15,385 @@ impl Rule for NoUnusedProps {
         true
     }
 
-    fn run<'a>(&self, _ctx: &mut LintContext<'a>) {
-        // TODO: Requires semantic analysis to:
-        // 1. Collect all `export let` / `$props()` declarations
-        // 2. Track usage in both script and template
-        // 3. Report props that are declared but never referenced
+    fn run<'a>(&self, ctx: &mut LintContext<'a>) {
+        let script = match &ctx.ast.instance { Some(s) => s, None => return };
+        if script.lang.as_deref() != Some("ts") { return; }
+        let content = &script.content;
+        let base = script.span.start as usize;
+        let source = ctx.source;
+        let tag_text = &source[base..script.span.end as usize];
+        let content_offset = tag_text.find('>').map(|p| base + p + 1).unwrap_or(base);
+
+        // Find $props() call
+        let props_call = match content.find("$props()") {
+            Some(pos) => pos,
+            None => return,
+        };
+
+        // Extract destructured property names
+        let before_props = &content[..props_call];
+        let destructured = extract_destructured_props(before_props);
+        let has_rest = before_props.contains("...");
+
+        // Check if using destructuring (let { ... }: Type = $props())
+        // vs plain assignment (let props: Type = $props())
+        let decl_start = before_props.rfind("let ").or_else(|| before_props.rfind("const ")).unwrap_or(0);
+        let decl = &before_props[decl_start..];
+        // Find the first non-whitespace after let/const
+        let after_kw = decl.find('{');
+        let uses_destructuring = after_kw.is_some() && {
+            // Make sure { comes before : (destructuring, not type annotation)
+            let brace_pos = after_kw.unwrap();
+            let colon_pos = decl.find(':').unwrap_or(decl.len());
+            brace_pos < colon_pos
+        };
+        if has_rest { return; }
+
+        // For non-destructured patterns (const props = $props()), track props.X accesses
+        if !uses_destructuring {
+            let type_name = extract_type_name(before_props);
+            let all_props = if let Some(ref tn) = &type_name {
+                extract_type_properties(content, tn)
+            } else { Vec::new() };
+            if all_props.is_empty() { return; }
+
+            // Find the variable name: const VARNAME: Type = $props()
+            let var_name = {
+                let decl = &before_props[decl_start..];
+                let after_kw = if decl.starts_with("let ") { &decl[4..] }
+                    else if decl.starts_with("const ") { &decl[6..] }
+                    else { return };
+                let end = after_kw.find(|c: char| c == ':' || c == '=' || c == ' ').unwrap_or(after_kw.len());
+                after_kw[..end].trim()
+            };
+            if var_name.is_empty() { return; }
+
+            // Check which props.X are accessed in script + template
+            let full_source = ctx.source;
+            // If props is spread (...props), all are used
+            if full_source.contains(&format!("...{}", var_name)) || full_source.contains(&format!("{{...{}}}", var_name)) {
+                return;
+            }
+            for (prop_name, prop_offset) in &all_props {
+                let dot_access = format!("{}.{}", var_name, prop_name);
+                let bracket_access = format!("{}['{}']", var_name, prop_name);
+                let bracket_access2 = format!("{}[\"{}\"]", var_name, prop_name);
+                if full_source.contains(&dot_access)
+                    || full_source.contains(&bracket_access)
+                    || full_source.contains(&bracket_access2) { continue; }
+                let src_pos = content_offset + prop_offset;
+                ctx.diagnostic(
+                    format!("'{}' is an unused Props property.", prop_name),
+                    oxc::span::Span::new(src_pos as u32, (src_pos + prop_name.len()) as u32),
+                );
+            }
+            return;
+        }
+
+        // Extract type name from `: TypeName = $props()`
+        let type_name = extract_type_name(before_props);
+
+        // Get all type properties
+        let all_props = if let Some(ref tn) = type_name {
+            extract_type_properties(content, tn)
+        } else {
+            extract_inline_type_properties(before_props)
+        };
+
+        if all_props.is_empty() { return; }
+
+        // Config: ignorePropertyPatterns, checkImportedTypes, ignoreTypePatterns
+        let ignore_patterns = extract_ignore_patterns(&ctx.config.options);
+        let ignore_type_patterns = extract_ignore_type_patterns(&ctx.config.options);
+        let check_imported = ctx.config.options.as_ref()
+            .and_then(|o| o.as_array())
+            .and_then(|a| a.first())
+            .and_then(|o| o.get("checkImportedTypes"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        // Skip imported types unless checkImportedTypes is true
+        if !check_imported {
+            if let Some(ref tn) = type_name {
+                // Check if the type ITSELF is imported (not just extends an imported type)
+                let is_directly_imported = content.contains(&format!("import {{ {}", tn))
+                    || content.contains(&format!("import type {{ {}", tn))
+                    || content.contains(&format!("import {{{}", tn));
+                // But NOT if the type is defined locally (interface/type declaration exists)
+                let is_locally_defined = content.contains(&format!("interface {}", tn))
+                    || content.contains(&format!("type {} =", tn));
+                if is_directly_imported && !is_locally_defined {
+                    return;
+                }
+            }
+        }
+
+        // Flag unused props
+        // Check for unused index signatures
+        let has_index_sig = if let Some(ref tn) = type_name {
+            let patterns = [format!("interface {} ", tn), format!("type {} ", tn)];
+            patterns.iter().any(|p| {
+                if let Some(start) = content.find(p.as_str()) {
+                    if let Some(brace) = content[start..].find('{') {
+                        let block = &content[start + brace..];
+                        block.contains("[key:")
+                    } else { false }
+                } else { false }
+            })
+        } else { false };
+
+        if has_index_sig && !has_rest {
+            let decl_line_start = content[..props_call].rfind('\n').map(|p| p + 1).unwrap_or(0);
+            let src_pos = content_offset + decl_line_start;
+            ctx.diagnostic(
+                "Index signature is unused. Consider using rest operator (...) to capture remaining properties.",
+                oxc::span::Span::new(src_pos as u32, (src_pos + 10) as u32),
+            );
+        }
+
+        for (prop_name, prop_offset) in &all_props {
+            if destructured.contains(prop_name.as_str()) { continue; }
+
+            // Check ignore patterns
+            if ignore_patterns.iter().any(|p| matches_pattern(prop_name, p)) { continue; }
+
+            // Check type patterns (for the type itself, not the prop)
+            if let Some(ref tn) = type_name {
+                if ignore_type_patterns.iter().any(|p| matches_pattern(tn, p)) { continue; }
+            }
+
+            let src_pos = content_offset + prop_offset;
+            ctx.diagnostic(
+                format!("'{}' is an unused Props property.", prop_name),
+                oxc::span::Span::new(src_pos as u32, (src_pos + prop_name.len()) as u32),
+            );
+        }
+    }
+}
+
+fn extract_destructured_props(before_props: &str) -> HashSet<String> {
+    let mut props = HashSet::new();
+    // Find the DESTRUCTURING { } — it follows `let` or `const`, not the type annotation
+    let decl_start = before_props.rfind("let ").or_else(|| before_props.rfind("const ")).unwrap_or(0);
+    let after_decl = &before_props[decl_start..];
+    let open = match after_decl.find('{') { Some(p) => decl_start + p, None => return props };
+    // Find matching } at depth 0
+    let mut depth = 0;
+    let mut close = None;
+    for (i, b) in before_props[open..].bytes().enumerate() {
+        match b {
+            b'{' => depth += 1,
+            b'}' => { depth -= 1; if depth == 0 { close = Some(open + i); break; } }
+            _ => {}
+        }
+    }
+    if let Some(close) = close {
+        if open < close {
+            let inner = &before_props[open+1..close];
+            // Split on commas at depth 0 (skip commas inside nested {})
+            let parts = split_at_depth0(inner, ',');
+            for part in &parts {
+                let part = part.trim();
+                if part.starts_with("...") { continue; }
+                // Find : or = at depth 0
+                let mut name_end = part.len();
+                let mut d = 0i32;
+                for (i, c) in part.char_indices() {
+                    match c {
+                        '{' | '(' | '[' | '<' => d += 1,
+                        '}' | ')' | ']' | '>' => d -= 1,
+                        ':' | '=' if d == 0 => { name_end = i; break; }
+                        _ => {}
+                    }
+                }
+                let name = part[..name_end].trim().trim_matches('\'').trim_matches('"');
+                if !name.is_empty() {
+                    props.insert(name.to_string());
+                }
+            }
+        }
+    }
+    props
+}
+
+fn split_at_depth0(s: &str, sep: char) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0;
+    for (i, c) in s.char_indices() {
+        match c {
+            '{' | '(' | '[' | '<' => depth += 1,
+            '}' | ')' | ']' | '>' => depth -= 1,
+            c if c == sep && depth == 0 => {
+                parts.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&s[start..]);
+    parts
+}
+
+fn extract_type_name(before_props: &str) -> Option<String> {
+    let before_eq = before_props.trim_end().strip_suffix('=')?.trim_end();
+    // Find the last : that's not inside { }
+    let mut depth = 0i32;
+    let mut last_colon = None;
+    for (i, c) in before_eq.char_indices() {
+        match c {
+            '{' | '(' | '<' => depth += 1,
+            '}' | ')' | '>' => depth -= 1,
+            ':' if depth == 0 => last_colon = Some(i),
+            _ => {}
+        }
+    }
+    let colon_pos = last_colon?;
+    let after_colon = before_eq[colon_pos+1..].trim();
+    if after_colon.starts_with('{') { return None; }
+    let name = after_colon.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '$').next()?;
+    if name.is_empty() { return None; }
+    Some(name.to_string())
+}
+
+fn extract_type_properties(content: &str, type_name: &str) -> Vec<(String, usize)> {
+    let mut props = Vec::new();
+    let patterns = [
+        format!("interface {} ", type_name),
+        format!("interface {} {{", type_name),
+        format!("type {} =", type_name),
+        format!("type {} =", type_name),
+    ];
+    let type_start = patterns.iter()
+        .filter_map(|p| content.find(p.as_str()))
+        .min();
+
+    if let Some(start) = type_start {
+        if let Some(brace_start) = content[start..].find('{') {
+            extract_props_from_block(content, start + brace_start, &mut props);
+        }
+    }
+    props
+}
+
+fn extract_inline_type_properties(before_props: &str) -> Vec<(String, usize)> {
+    let mut props = Vec::new();
+    let before_eq = match before_props.trim_end().strip_suffix('=') {
+        Some(s) => s.trim_end(),
+        None => return props,
+    };
+    // Find the type block `: { ... }`
+    if let Some(close) = before_eq.rfind('}') {
+        let mut depth = 0;
+        let mut open = None;
+        for i in (0..=close).rev() {
+            match before_eq.as_bytes()[i] {
+                b'}' => depth += 1,
+                b'{' => {
+                    depth -= 1;
+                    if depth == 0 { open = Some(i); break; }
+                }
+                _ => {}
+            }
+        }
+        if let Some(brace_pos) = open {
+            extract_props_from_block(before_eq, brace_pos, &mut props);
+        }
+    }
+    props
+}
+
+fn extract_props_from_block(content: &str, brace_start: usize, props: &mut Vec<(String, usize)>) {
+    let after = &content[brace_start + 1..];
+    let mut depth = 1;
+    let mut end = after.len();
+    for (i, b) in after.bytes().enumerate() {
+        match b {
+            b'{' => depth += 1,
+            b'}' => { depth -= 1; if depth == 0 { end = i; break; } }
+            _ => {}
+        }
+    }
+    let block = &after[..end];
+
+    // Only extract TOP-LEVEL properties (not nested)
+    let mut depth = 0i32;
+    let mut line_start = 0;
+    for (i, b) in block.bytes().enumerate() {
+        match b {
+            b'{' | b'(' | b'<' => depth += 1,
+            b'}' | b')' | b'>' => depth -= 1,
+            b';' | b'\n' if depth == 0 => {
+                let segment = &block[line_start..i];
+                let trimmed = segment.trim();
+                line_start = i + 1;
+                if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with("/*") { continue; }
+                if trimmed.starts_with('[') { continue; }
+
+                let name = if trimmed.starts_with('\'') || trimmed.starts_with('"') {
+                    let q = trimmed.as_bytes()[0] as char;
+                    trimmed[1..].find(q).map(|end| &trimmed[1..end+1])
+                } else {
+                    let end = trimmed.find(|c: char| c == ':' || c == '?' || c == '(' || c == '<')
+                        .unwrap_or(trimmed.len());
+                    Some(trimmed[..end].trim())
+                };
+                if let Some(name) = name {
+                    let name = name.trim();
+                    if name.is_empty() || name.starts_with("//") { continue; }
+                    let offset = content[brace_start..].find(trimmed)
+                        .map(|p| brace_start + p)
+                        .unwrap_or(0);
+                    props.push((name.to_string(), offset));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn extract_ignore_patterns(options: &Option<serde_json::Value>) -> Vec<String> {
+    options.as_ref()
+        .and_then(|o| o.as_array())
+        .and_then(|a| a.first())
+        .and_then(|o| o.get("ignorePropertyPatterns"))
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default()
+}
+
+fn extract_ignore_type_patterns(options: &Option<serde_json::Value>) -> Vec<String> {
+    options.as_ref()
+        .and_then(|o| o.as_array())
+        .and_then(|a| a.first())
+        .and_then(|o| o.get("ignoreTypePatterns"))
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default()
+}
+
+fn matches_pattern(name: &str, pattern: &str) -> bool {
+    if pattern.starts_with('/') {
+        let inner = pattern.trim_start_matches('/');
+        let inner = inner.rsplit_once('/').map(|(p, _)| p).unwrap_or(inner);
+        if inner.starts_with('^') {
+            let after_caret = &inner[1..];
+            // Character class: /^[#$@_~]/
+            if after_caret.starts_with('[') {
+                if let Some(close) = after_caret.find(']') {
+                    let chars = &after_caret[1..close];
+                    return name.starts_with(|c: char| chars.contains(c));
+                }
+            }
+            // Alternation: /^(_|baz)/
+            if after_caret.starts_with('(') {
+                let alts = after_caret.trim_start_matches('(').trim_end_matches(')');
+                return alts.split('|').any(|alt| name.starts_with(alt));
+            }
+            return name.starts_with(after_caret);
+        }
+        name.contains(inner)
+    } else {
+        name == pattern
     }
 }
