@@ -136,9 +136,17 @@ impl Rule for NoNavigationWithoutResolve {
         if ignore_links { return; }
 
         // Template <a href> checking: trace variable values to check if safe
+        // Only check when the file uses SvelteKit ($app/* imports indicate SvelteKit)
         let imports = if let Some(script) = &ctx.ast.instance {
             parse_imports(&script.content)
         } else { Vec::new() };
+
+        // Only check <a href> if the file looks like a SvelteKit component.
+        // Skip if there are non-$app imports but no $app imports (clearly not SvelteKit).
+        // Still check if there are no imports at all (could be a simple SvelteKit page).
+        let has_any_imports = !imports.is_empty();
+        let has_sveltekit_imports = imports.iter().any(|(_, _, module)| module.starts_with("$app/"));
+        if has_any_imports && !has_sveltekit_imports { return; }
 
         let has_resolve = imports.iter().any(|(_, imported, module)| {
             (imported == "resolveRoute" || imported == "*") && module == "$app/paths"
