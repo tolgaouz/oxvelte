@@ -1011,6 +1011,148 @@ mod tests {
         assert!(bg.is_empty(), "Should NOT flag location inside guarded blocks, got: {:?}", bg.iter().map(|d| &d.message).collect::<Vec<_>>());
     }
 
+    // --- towards 1100 batch ---
+
+    #[test]
+    fn test_parse_conditional_snippet_in_component() {
+        let s = "<Wrapper>\n\t{#if showHeader}\n\t\t{#snippet header()}<h1>Title</h1>{/snippet}\n\t{/if}\n\t<p>Body</p>\n</Wrapper>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_class_with_private() {
+        let s = "<script>\n\tclass Timer {\n\t\t#seconds = $state(0);\n\t\t#interval = null;\n\t\tstart() { this.#interval = setInterval(() => this.#seconds++, 1000); }\n\t\tstop() { clearInterval(this.#interval); }\n\t\tget time() { return this.#seconds; }\n\t}\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_await_promise_all() {
+        let s = "{#await Promise.all([fetchA(), fetchB(), fetchC()])}\n\t<p>Loading all...</p>\n{:then [a, b, c]}\n\t<p>{a} + {b} + {c}</p>\n{:catch errors}\n\t<p>Failed: {errors.map(e => e.message).join(', ')}</p>\n{/await}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_void_operator() {
+        let s = "<button on:click={() => void doSomething()}>click</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_element_with_aria() {
+        let s = "<div role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"title\">\n\t<h2 id=\"title\">Dialog</h2>\n\t<p>Content</p>\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_container_name() {
+        let s = "<style>\n\t.sidebar {\n\t\tcontainer-name: sidebar;\n\t\tcontainer-type: inline-size;\n\t}\n\t@container sidebar (min-width: 300px) {\n\t\t.widget { flex-direction: row; }\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_multiple_unused_classes() {
+        let s = "<div class=\"a b c d\">text</div>\n<style>\n\t.a { color: red; }\n\t.b { color: blue; }\n</style>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let unused: Vec<_> = diags.iter().filter(|d| d.rule_name == "svelte/no-unused-class-name").collect();
+        assert_eq!(unused.len(), 2, "Should flag 'c' and 'd', got: {:?}", unused.iter().map(|d| &d.message).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_parse_svelte5_state_frozen() {
+        let s = "<script>\n\tlet items = $state.frozen([1, 2, 3]);\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_with_else_key() {
+        let s = "{#each items as item (item.id)}\n\t<div>{item.name}</div>\n{:else}\n\t<p>No items found. <a href=\"/add\">Add one?</a></p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_with_event_modifiers_svelte5() {
+        let s = "<button\n\tonclick|once|capture={(e) => {\n\t\te.preventDefault();\n\t\thandle();\n\t}}\n>Click once</button>";
+        let r = parser::parse(s);
+        // onclick modifiers may not parse in Svelte 5 (on: only), but shouldn't panic
+        let _ = r.ast.html.nodes.len();
+    }
+
+    #[test]
+    fn test_parse_css_important_override() {
+        let s = "<style>\n\t.forced {\n\t\tcolor: red !important;\n\t\tfont-weight: bold !important;\n\t\ttext-decoration: none !important;\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_reactive_literal_array() {
+        let s = "<script>\n\t$: items = [];\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-reactive-literals"),
+            "Should flag reactive array literal");
+    }
+
+    #[test]
+    fn test_parse_component_with_bind_this_and_props() {
+        let s = "<script>\n\tlet inputEl;\n</script>\n<TextInput bind:this={inputEl} value=\"hello\" placeholder=\"Type here\" />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_style_with_charset() {
+        let s = "<style>\n\t@charset \"UTF-8\";\n\tbody { font-family: system-ui; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_nav_base_mailto_ok() {
+        let s = "<a href=\"mailto:user@example.com\">Email us</a>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-navigation-without-base"),
+            "Should NOT flag mailto: links");
+    }
+
+    #[test]
+    fn test_parse_svelte5_runes_combined() {
+        let s = "<script lang=\"ts\">\n\tlet todos = $state<{text: string; done: boolean}[]>([]);\n\tlet remaining = $derived(todos.filter(t => !t.done).length);\n\tlet allDone = $derived(remaining === 0 && todos.length > 0);\n\t$effect(() => { document.title = `${remaining} remaining`; });\n\t$inspect(todos);\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_with_css_props() {
+        let s = "<Widget --color=\"blue\" --size=\"large\" --padding=\"1rem\">\n\t<p>Styled widget</p>\n</Widget>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_with_entries() {
+        let s = "{#each Object.entries(config) as [key, value]}\n\t<dt>{key}</dt>\n\t<dd>{JSON.stringify(value)}</dd>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_with_string_method() {
+        let s = "<p>{name.toUpperCase().slice(0, 3)}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     #[test]
     fn test_parse_svelte5_derived_chain() {
         let s = "<script>\n\tlet count = $state(0);\n\tlet d1 = $derived(count * 2);\n\tlet d2 = $derived(d1 + 1);\n\tlet d3 = $derived(d2 > 10);\n</script>\n<p>{d3 ? 'big' : 'small'}</p>";
