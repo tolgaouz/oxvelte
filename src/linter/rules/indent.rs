@@ -29,6 +29,7 @@ impl Rule for Indent {
         let mut in_multiline_tag = false;
         let mut multiline_tag_depth = 0i32;
         let mut multiline_tag_ignored = false;
+        let mut multiline_tag_column = 0usize; // column of the opening <
 
         for &line in &lines {
             let line_start = offset;
@@ -65,7 +66,8 @@ impl Rule for Indent {
                 continue;
             }
 
-            // Multiline tag: skip attribute lines
+            // Multiline tag: attribute lines are not checked (they use column-relative
+            // indentation which requires tracking the opening tag's column position)
             if in_multiline_tag {
                 let is_end = trimmed.ends_with(">") || trimmed.ends_with("/>") || trimmed == ">" || trimmed == "/";
                 if is_end {
@@ -87,6 +89,7 @@ impl Rule for Indent {
                 if trimmed.starts_with('<') && !trimmed.starts_with("</") && !trimmed.starts_with("<!--") && !trimmed.contains('>') {
                     in_multiline_tag = true;
                     multiline_tag_depth = depth;
+                    multiline_tag_column = leading_spaces(line);
                     multiline_tag_ignored = true;
                 } else {
                     depth += opens - closes;
@@ -103,6 +106,7 @@ impl Rule for Indent {
                 if !trimmed.contains('>') {
                     in_multiline_tag = true;
                     multiline_tag_depth = depth;
+                    multiline_tag_column = leading_spaces(line);
                     multiline_tag_ignored = false;
                     continue;
                 }
