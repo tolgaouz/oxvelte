@@ -1011,6 +1011,82 @@ mod tests {
         assert!(bg.is_empty(), "Should NOT flag location inside guarded blocks, got: {:?}", bg.iter().map(|d| &d.message).collect::<Vec<_>>());
     }
 
+    // --- towards 1200 ---
+
+    #[test]
+    fn test_parse_real_world_color_picker() {
+        let s = "<script>\n\tlet hue = $state(0);\n\tlet saturation = $state(100);\n\tlet lightness = $state(50);\n\tlet color = $derived(`hsl(${hue}, ${saturation}%, ${lightness}%)`);\n\tlet hex = $derived(hslToHex(hue, saturation, lightness));\n</script>\n\n<div class=\"picker\">\n\t<label>Hue: {hue}°\n\t\t<input type=\"range\" bind:value={hue} min=\"0\" max=\"360\" />\n\t</label>\n\t<label>Saturation: {saturation}%\n\t\t<input type=\"range\" bind:value={saturation} min=\"0\" max=\"100\" />\n\t</label>\n\t<label>Lightness: {lightness}%\n\t\t<input type=\"range\" bind:value={lightness} min=\"0\" max=\"100\" />\n\t</label>\n\t<div class=\"preview\" style:background-color={color}>\n\t\t<code>{hex}</code>\n\t</div>\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_tree_view() {
+        let s = "<script>\n\texport let nodes;\n\texport let depth = 0;\n</script>\n<ul style:padding-left=\"{depth * 16}px\">\n\t{#each nodes as node (node.id)}\n\t\t<li>\n\t\t\t<span>{node.name}</span>\n\t\t\t{#if node.children?.length}\n\t\t\t\t<svelte:self nodes={node.children} depth={depth + 1} />\n\t\t\t{/if}\n\t\t</li>\n\t{/each}\n</ul>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_stepper() {
+        let s = "<script>\n\tlet { steps, current = 0, oncomplete } = $props();\n\tlet progress = $derived(((current + 1) / steps.length) * 100);\n\tconst next = () => {\n\t\tif (current < steps.length - 1) current++;\n\t\telse oncomplete?.();\n\t};\n\tconst prev = () => { if (current > 0) current--; };\n</script>\n\n<div class=\"stepper\">\n\t<progress value={progress} max=\"100\">{progress}%</progress>\n\t{#each steps as step, i}\n\t\t<div class:active={i === current} class:done={i < current}>{step.title}</div>\n\t{/each}\n\t<div class=\"content\">\n\t\t{@render steps[current].content?.()}\n\t</div>\n\t<div class=\"buttons\">\n\t\t<button onclick={prev} disabled={current === 0}>Back</button>\n\t\t<button onclick={next}>{current === steps.length - 1 ? 'Finish' : 'Next'}</button>\n\t</div>\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_reactive_reassign_bind_template() {
+        let s = "<script>\n\tlet v = 0;\n\t$: computed = v * 2;\n</script>\n<input bind:value={computed} />";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-reactive-reassign"),
+            "Should flag bind:value on reactive var");
+    }
+
+    #[test]
+    fn test_parse_css_keyframes_complex() {
+        let s = "<style>\n\t@keyframes bounce {\n\t\t0%, 100% { transform: translateY(0); }\n\t\t25% { transform: translateY(-20px); }\n\t\t50% { transform: translateY(-10px); }\n\t\t75% { transform: translateY(-15px); }\n\t}\n\t.bouncing { animation: bounce 0.6s ease-in-out; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_flattened_events() {
+        let s = "<button onclick={handle} onmouseenter={enter} onmouseleave={leave} onfocus={focus} onblur={blur}>interactive</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_with_map_filter_sort() {
+        let s = "{#each items\n\t.filter(i => i.active)\n\t.sort((a, b) => b.priority - a.priority)\n\t.map(i => ({...i, label: i.name.toUpperCase()}))\n\tas item (item.id)}\n\t<div>{item.label} (priority: {item.priority})</div>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte_boundary_full() {
+        let s = "<svelte:boundary onerror={(error, reset) => logError(error)}>\n\t<Risky />\n\t{#snippet failed(error, reset)}\n\t\t<div class=\"error-boundary\">\n\t\t\t<h2>Something went wrong</h2>\n\t\t\t<pre>{error.message}</pre>\n\t\t\t<button onclick={reset}>Try again</button>\n\t\t</div>\n\t{/snippet}\n</svelte:boundary>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_immutable_reactive_store_ok() {
+        let s = "<script>\n\timport { count } from './stores';\n\t$: doubled = $count * 2;\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/no-immutable-reactive-statements"),
+            "Should NOT flag reactive stmt with $store");
+    }
+
+    #[test]
+    fn test_parse_component_slots_svelte5() {
+        let s = "<Tabs>\n\t{#snippet tab(t)}\n\t\t<button class:active={t.active}>{t.label}</button>\n\t{/snippet}\n\t{#snippet panel(p)}\n\t\t<div>{@render p.content()}</div>\n\t{/snippet}\n</Tabs>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     #[test]
     fn test_parse_real_world_accordion_svelte5() {
         let s = "<script>\n\tlet { items } = $props();\n\tlet openIndex = $state(-1);\n\tconst toggle = (i) => openIndex = openIndex === i ? -1 : i;\n</script>\n{#each items as item, i}\n\t<button onclick={() => toggle(i)} aria-expanded={openIndex === i}>\n\t\t{item.title}\n\t</button>\n\t{#if openIndex === i}\n\t\t<div transition:slide>{@html item.content}</div>\n\t{/if}\n{/each}";
