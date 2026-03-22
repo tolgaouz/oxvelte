@@ -194,11 +194,15 @@ impl Rule for RequireStoreReactiveAccess {
                         let is_spread = pos >= 3 && &content[pos-3..pos] == "...";
                         if !is_spread { continue; }
                     }
+                    // Skip matches inside string literals (preceded by quote)
+                    if p == b'\'' || p == b'"' { continue; }
                 }
                 let after = pos + var.len();
                 if after < content.len() {
                     let a = content.as_bytes()[after];
                     if a.is_ascii_alphanumeric() || a == b'_' { continue; }
+                    // Skip matches inside string literals (followed by quote)
+                    if a == b'\'' || a == b'"' { continue; }
                 }
                 // Skip if preceded by $ (reactive access)
                 if pos > 0 && content.as_bytes()[pos - 1] == b'$' { continue; }
@@ -220,6 +224,15 @@ impl Rule for RequireStoreReactiveAccess {
 
                 // Property access: store.subscribe(), store.set() → always skip
                 if after_text.starts_with('.') || after_text.starts_with("?.") { continue; }
+
+                // Object property key: { store: value } → skip (not a store access)
+                if after_text.starts_with(':') && !after_text.starts_with("::") {
+                    // Verify it's an object key by checking if before ends with { or ,
+                    let before_check = before.trim_end();
+                    if before_check.ends_with('{') || before_check.ends_with(',') || before_check.ends_with('\n') {
+                        continue;
+                    }
+                }
 
                 // Plain assignment target: store = expr → skip (reassigning the store variable)
                 if after_text.starts_with('=') && !after_text.starts_with("==") {
@@ -429,7 +442,32 @@ impl Rule for RequireStoreReactiveAccess {
                         if let Attribute::Spread { span } = attr {
                             let region = &ctx.source[span.start as usize..span.end as usize];
                             for var in &store_vars_clone {
-                                if region.contains(var.as_str()) && !region.contains(&format!("${}", var)) {
+                                // Use word-boundary check instead of simple contains
+                                let has_raw_ref = {
+                                    let var_str = var.as_str();
+                                    let mut found = false;
+                                    for (pos, _) in region.match_indices(var_str) {
+                                        // Check word boundaries
+                                        let before_ok = pos == 0 || {
+                                            let p = region.as_bytes()[pos - 1];
+                                            !p.is_ascii_alphanumeric() && p != b'_' && p != b'$'
+                                        };
+                                        let after_ok = pos + var_str.len() >= region.len() || {
+                                            let a = region.as_bytes()[pos + var_str.len()];
+                                            !a.is_ascii_alphanumeric() && a != b'_'
+                                        };
+                                        if before_ok && after_ok {
+                                            // Check it's not preceded by $
+                                            let has_dollar = pos > 0 && region.as_bytes()[pos - 1] == b'$';
+                                            if !has_dollar {
+                                                found = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    found
+                                };
+                                if has_raw_ref && !region.contains(&format!("${}", var)) {
                                     ctx.diagnostic(
                                         "Use the $ prefix or the get function to access reactive values instead of accessing the raw store.",
                                         *span,
