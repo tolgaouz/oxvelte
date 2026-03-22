@@ -1011,6 +1011,82 @@ mod tests {
         assert!(bg.is_empty(), "Should NOT flag location inside guarded blocks, got: {:?}", bg.iter().map(|d| &d.message).collect::<Vec<_>>());
     }
 
+    // --- require-store-reactive-access tests ---
+
+    #[test]
+    fn test_store_reactive_access_raw() {
+        let s = "<script>\n\timport { writable } from 'svelte/store';\n\tconst count = writable(0);\n</script>\n<p>{count}</p>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/require-store-reactive-access"),
+            "Should flag raw store access in template");
+    }
+
+    #[test]
+    fn test_store_reactive_access_dollar_ok() {
+        let s = "<script>\n\timport { writable } from 'svelte/store';\n\tconst count = writable(0);\n</script>\n<p>{$count}</p>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/require-store-reactive-access"),
+            "Should NOT flag $store access");
+    }
+
+    #[test]
+    fn test_store_reactive_access_get_ok() {
+        let s = "<script>\n\timport { writable, get } from 'svelte/store';\n\tconst count = writable(0);\n</script>\n<p>{get(count)}</p>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/require-store-reactive-access"),
+            "Should NOT flag get(store) access");
+    }
+
+    #[test]
+    fn test_store_reactive_access_non_store_ok() {
+        let s = "<script>\n\tconst count = 42;\n</script>\n<p>{count}</p>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/require-store-reactive-access"),
+            "Should NOT flag non-store variable");
+    }
+
+    // --- more comprehensive tests ---
+
+    #[test]
+    fn test_inner_decl_while_loop() {
+        let s = "<script>\n\twhile (true) {\n\t\tfunction inner() {}\n\t}\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-inner-declarations"),
+            "Should flag function inside while");
+    }
+
+    #[test]
+    fn test_inner_decl_for_loop() {
+        let s = "<script>\n\tfor (let i = 0; i < 10; i++) {\n\t\tfunction inner() {}\n\t}\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-inner-declarations"),
+            "Should flag function inside for");
+    }
+
+    #[test]
+    fn test_reactive_reassign_array_push() {
+        let s = "<script>\n\tlet v = 0;\n\t$: arr = [v];\n\tfunction click() { arr.push(1); }\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-reactive-reassign"),
+            "Should flag .push() on reactive array");
+    }
+
+    #[test]
+    fn test_writable_derived_not_on_regular_effect() {
+        let s = "<script>\n\tlet count = $state(0);\n\t$effect(() => { console.log(count); });\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(!diags.iter().any(|d| d.rule_name == "svelte/prefer-writable-derived"),
+            "Should NOT flag $effect without state reassignment");
+    }
+
     #[test]
     fn test_parse_nbsp_entity() {
         let s = "<p>Hello&nbsp;World</p>";
