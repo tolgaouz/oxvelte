@@ -1011,6 +1011,114 @@ mod tests {
         assert!(bg.is_empty(), "Should NOT flag location inside guarded blocks, got: {:?}", bg.iter().map(|d| &d.message).collect::<Vec<_>>());
     }
 
+    // --- pushing to 1150 ---
+
+    #[test]
+    fn test_parse_real_world_chat() {
+        let s = "<script>\n\tlet messages = $state([]);\n\tlet input = $state('');\n\tlet chatEl;\n\tconst send = () => {\n\t\tif (!input.trim()) return;\n\t\tmessages.push({ text: input, time: Date.now(), me: true });\n\t\tinput = '';\n\t};\n\t$effect(() => {\n\t\tif (chatEl) chatEl.scrollTop = chatEl.scrollHeight;\n\t});\n</script>\n\n<div class=\"chat\" bind:this={chatEl}>\n\t{#each messages as msg (msg.time)}\n\t\t<div class:me={msg.me}>\n\t\t\t<p>{msg.text}</p>\n\t\t\t<time>{new Date(msg.time).toLocaleTimeString()}</time>\n\t\t</div>\n\t{/each}\n</div>\n<form onsubmit={(e) => { e.preventDefault(); send(); }}>\n\t<input bind:value={input} placeholder=\"Type a message...\" />\n\t<button type=\"submit\">Send</button>\n</form>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_settings() {
+        let s = "<script lang=\"ts\">\n\tlet theme = $state<'light' | 'dark' | 'auto'>('auto');\n\tlet fontSize = $state(16);\n\tlet notifications = $state(true);\n\tlet language = $state('en');\n\tconst reset = () => { theme = 'auto'; fontSize = 16; notifications = true; language = 'en'; };\n</script>\n\n<h2>Settings</h2>\n<form>\n\t<fieldset>\n\t\t<legend>Appearance</legend>\n\t\t<label>Theme\n\t\t\t<select bind:value={theme}>\n\t\t\t\t<option value=\"light\">Light</option>\n\t\t\t\t<option value=\"dark\">Dark</option>\n\t\t\t\t<option value=\"auto\">Auto</option>\n\t\t\t</select>\n\t\t</label>\n\t\t<label>Font Size: {fontSize}px\n\t\t\t<input type=\"range\" bind:value={fontSize} min=\"12\" max=\"24\" />\n\t\t</label>\n\t</fieldset>\n\t<fieldset>\n\t\t<legend>Preferences</legend>\n\t\t<label><input type=\"checkbox\" bind:checked={notifications} /> Notifications</label>\n\t\t<label>Language\n\t\t\t<select bind:value={language}>\n\t\t\t\t<option value=\"en\">English</option>\n\t\t\t\t<option value=\"es\">Spanish</option>\n\t\t\t</select>\n\t\t</label>\n\t</fieldset>\n\t<button type=\"button\" onclick={reset}>Reset</button>\n</form>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_kanban() {
+        let s = "<script>\n\tlet columns = $state([\n\t\t{ name: 'Todo', items: ['Task 1', 'Task 2'] },\n\t\t{ name: 'In Progress', items: ['Task 3'] },\n\t\t{ name: 'Done', items: ['Task 4'] },\n\t]);\n</script>\n\n<div class=\"kanban\">\n\t{#each columns as column, ci}\n\t\t<div class=\"column\">\n\t\t\t<h3>{column.name} ({column.items.length})</h3>\n\t\t\t{#each column.items as item, ii}\n\t\t\t\t<div class=\"card\" draggable=\"true\">{item}</div>\n\t\t\t{/each}\n\t\t</div>\n\t{/each}\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_at_html_count() {
+        let s = "<div>\n\t{@html a}\n\t{@html b}\n\t{@html c}\n\t{@html d}\n\t{@html e}\n</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let count = diags.iter().filter(|d| d.rule_name == "svelte/no-at-html-tags").count();
+        assert_eq!(count, 5, "Should flag all 5 @html tags");
+    }
+
+    #[test]
+    fn test_linter_button_type_in_form() {
+        let s = "<form>\n\t<button>Default (submit)</button>\n\t<button type=\"button\">Button</button>\n\t<button type=\"submit\">Submit</button>\n\t<button type=\"reset\">Reset</button>\n</form>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let btn: Vec<_> = diags.iter().filter(|d| d.rule_name == "svelte/button-has-type").collect();
+        assert_eq!(btn.len(), 1, "Should flag only the button without type");
+    }
+
+    #[test]
+    fn test_parse_css_all_in_one() {
+        let s = "<style>\n\t:root { --gap: 1rem; --radius: 4px; }\n\t* { margin: 0; box-sizing: border-box; }\n\tbody { font: 16px/1.5 system-ui; }\n\t.container { max-width: 1200px; margin: 0 auto; padding: var(--gap); }\n\t.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: var(--gap); }\n\t.card { border-radius: var(--radius); box-shadow: 0 1px 3px rgba(0,0,0,.12); }\n\t.card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,.15); }\n\th1, h2, h3 { line-height: 1.2; }\n\ta { color: var(--primary, blue); text-decoration: none; }\n\ta:hover { text-decoration: underline; }\n\t@media (prefers-color-scheme: dark) { body { background: #111; color: #eee; } }\n\t@media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_effect_types() {
+        let s = "<script>\n\tlet count = $state(0);\n\t$effect(() => { console.log('effect', count); });\n\t$effect.pre(() => { console.log('pre-effect', count); });\n\t$effect.root(() => {\n\t\t$effect(() => { console.log('root child effect'); });\n\t});\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_with_complex_destructure() {
+        let s = "{#each data as { user: { name, address: { city, country } }, score, tags: [first, ...rest] } (name)}\n\t<p>{name} from {city}, {country}: {score} ({first}, +{rest.length})</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_spaces_equal_signs_multiple() {
+        let s = "<div class = \"a\" id = \"b\" style = \"color: red\">text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let spaces: Vec<_> = diags.iter().filter(|d| d.rule_name == "svelte/no-spaces-around-equal-signs-in-attribute").collect();
+        assert_eq!(spaces.len(), 3, "Should flag all 3 spaced =");
+    }
+
+    #[test]
+    fn test_parse_svelte5_snippet_render_callback() {
+        let s = "{#snippet list(items, render)}\n\t<ul>\n\t\t{#each items as item (item)}\n\t\t\t<li>{@render render(item)}</li>\n\t\t{/each}\n\t</ul>\n{/snippet}\n\n{@render list(fruits, (f) => f.name)}\n{@render list(veggies, (v) => `${v.emoji} ${v.name}`)}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_infinite_scroll() {
+        let s = "<script>\n\tlet items = $state([]);\n\tlet page = $state(1);\n\tlet loading = $state(false);\n\tlet hasMore = $state(true);\n\tlet sentinel;\n\tconst loadMore = async () => {\n\t\tif (loading || !hasMore) return;\n\t\tloading = true;\n\t\tconst res = await fetch(`/api/items?page=${page}`);\n\t\tconst data = await res.json();\n\t\titems = [...items, ...data.items];\n\t\thasMore = data.hasMore;\n\t\tpage++;\n\t\tloading = false;\n\t};\n</script>\n\n{#each items as item (item.id)}\n\t<div class=\"item\">{item.title}</div>\n{/each}\n{#if loading}\n\t<div class=\"spinner\">Loading...</div>\n{/if}\n<div bind:this={sentinel} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_store_reactive_access_member() {
+        let s = "<script>\n\timport { writable } from 'svelte/store';\n\tconst user = writable({ name: 'Alice' });\n</script>\n<p>{user.name}</p>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/require-store-reactive-access"),
+            "Should flag raw store member access");
+    }
+
+    #[test]
+    fn test_parse_each_with_spread_and_key() {
+        let s = "{#each items as { id, ...data } (id)}\n\t<Card {id} {...data} />\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_untrack() {
+        let s = "<script>\n\timport { untrack } from 'svelte';\n\tlet count = $state(0);\n\tlet prev = $state(0);\n\t$effect(() => {\n\t\tprev = untrack(() => count);\n\t\tconsole.log('changed from', prev, 'to', count);\n\t});\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- linter rule exhaustive tests ---
 
     #[test]
