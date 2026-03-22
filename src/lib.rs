@@ -1011,6 +1011,149 @@ mod tests {
         assert!(bg.is_empty(), "Should NOT flag location inside guarded blocks, got: {:?}", bg.iter().map(|d| &d.message).collect::<Vec<_>>());
     }
 
+    // --- push to 1350 ---
+
+    #[test]
+    fn test_parse_real_world_color_contrast() {
+        let s = "<script>\n\tlet { fg = '#000', bg = '#fff' } = $props();\n\tlet ratio = $derived.by(() => {\n\t\tconst l1 = relativeLuminance(fg);\n\t\tconst l2 = relativeLuminance(bg);\n\t\treturn (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);\n\t});\n\tlet passes = $derived(ratio >= 4.5 ? 'AA' : ratio >= 3 ? 'AA Large' : 'Fail');\n</script>\n<div style:color={fg} style:background={bg}>\n\t<p>Contrast: {ratio.toFixed(2)}:1 ({passes})</p>\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_scroll_to_top() {
+        let s = "<script>\n\tlet visible = $state(false);\n\t$effect(() => {\n\t\tconst handler = () => visible = window.scrollY > 300;\n\t\twindow.addEventListener('scroll', handler, { passive: true });\n\t\treturn () => window.removeEventListener('scroll', handler);\n\t});\n</script>\n{#if visible}\n\t<button class=\"scroll-top\" onclick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} transition:fade>\n\t\t↑ Top\n\t</button>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_real_world_skeleton_card() {
+        let s = "<script>\n\tlet { loading = true } = $props();\n</script>\n{#if loading}\n\t<div class=\"card skeleton\">\n\t\t<div class=\"image\" />\n\t\t<div class=\"line w-80\" />\n\t\t<div class=\"line w-60\" />\n\t\t<div class=\"line w-40\" />\n\t</div>\n{:else}\n\t<div class=\"card\">\n\t\t<slot />\n\t</div>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_form_state() {
+        let s = "<script lang=\"ts\">\n\tlet form = $state({\n\t\tfields: { name: '', email: '' },\n\t\terrors: {} as Record<string, string>,\n\t\tsubmitting: false,\n\t\tsubmitted: false\n\t});\n\tconst validate = () => {\n\t\tform.errors = {};\n\t\tif (!form.fields.name) form.errors.name = 'Required';\n\t\tif (!form.fields.email.includes('@')) form.errors.email = 'Invalid';\n\t\treturn Object.keys(form.errors).length === 0;\n\t};\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_transitions_all() {
+        let s = "<style>\n\t.fade { transition: opacity 0.3s ease; }\n\t.slide { transition: transform 0.3s, opacity 0.3s; }\n\t.grow { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }\n\t.hover { transition-property: color, background-color; transition-duration: 0.15s; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_indent_else_block() {
+        let s = "{#if x}\ntext\n{:else}\nother\n{/if}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let indent: Vec<_> = diags.iter().filter(|d| d.rule_name == "svelte/indent").collect();
+        assert!(indent.len() >= 2, "Should flag unindented if/else content");
+    }
+
+    #[test]
+    fn test_parse_real_world_media_query_component() {
+        let s = "<script>\n\tlet matches = $state(false);\n\tlet { query = '(min-width: 768px)' } = $props();\n\t$effect(() => {\n\t\tconst mql = window.matchMedia(query);\n\t\tmatches = mql.matches;\n\t\tconst handler = (e) => matches = e.matches;\n\t\tmql.addEventListener('change', handler);\n\t\treturn () => mql.removeEventListener('change', handler);\n\t});\n</script>\n{#if matches}\n\t<slot name=\"desktop\" />\n{:else}\n\t<slot name=\"mobile\" />\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_with_iife() {
+        let s = "<p>{(() => { const x = compute(); return x > 0 ? '+' : '-'; })()}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_state_raw() {
+        let s = "<script>\n\tlet raw = $state.raw({ count: 0, items: [] });\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_no_unnecessary_state_wrap_media_query() {
+        let s = "<script>\n\timport { MediaQuery } from 'svelte/reactivity';\n\tconst mq = $state(new MediaQuery('(min-width: 768px)'));\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/no-unnecessary-state-wrap"),
+            "Should flag $state(new MediaQuery(...))");
+    }
+
+    #[test]
+    fn test_parse_real_world_teleport() {
+        let s = "<script>\n\timport { onMount } from 'svelte';\n\tlet { target = 'body', children } = $props();\n\tlet container;\n\tonMount(() => {\n\t\tconst el = document.querySelector(target);\n\t\tif (el && container) el.appendChild(container);\n\t\treturn () => container?.remove();\n\t});\n</script>\n<div bind:this={container} style=\"display: contents\">\n\t{@render children()}\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_gap_modern() {
+        let s = "<style>\n\t.stack { display: flex; flex-direction: column; gap: clamp(0.5rem, 2vw, 2rem); }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_with_dynamic_snippet() {
+        let s = "{#snippet item(data)}\n\t<div>{data.name}</div>\n{/snippet}\n\n{#snippet detail(data)}\n\t<div>{data.name}: {data.description}</div>\n{/snippet}\n\n{#each items as i (i.id)}\n\t{@render (expanded ? detail : item)(i)}\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_store_reactive_spread_raw() {
+        let s = "<script>\n\timport { writable } from 'svelte/store';\n\tconst data = writable({});\n</script>\n<div {...data}>text</div>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/require-store-reactive-access"),
+            "Should flag raw store spread");
+    }
+
+    #[test]
+    fn test_parse_real_world_clipboard_with_feedback() {
+        let s = "<script>\n\tlet { text } = $props();\n\tlet status = $state('idle');\n\tconst copy = async () => {\n\t\ttry {\n\t\t\tawait navigator.clipboard.writeText(text);\n\t\t\tstatus = 'success';\n\t\t} catch {\n\t\t\tstatus = 'error';\n\t\t}\n\t\tsetTimeout(() => status = 'idle', 2000);\n\t};\n</script>\n<button onclick={copy} class=\"copy-btn\" class:success={status === 'success'} class:error={status === 'error'}>\n\t{status === 'success' ? '✓' : status === 'error' ? '✗' : '📋'}\n</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_with_set() {
+        let s = "{#each [...new Set(items)] as unique (unique)}\n\t<p>{unique}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_effect_untrack() {
+        let s = "<script>\n\timport { untrack } from 'svelte';\n\tlet a = $state(0);\n\tlet b = $state(0);\n\t$effect(() => {\n\t\t// Only react to 'a' changes\n\t\tconsole.log(a, untrack(() => b));\n\t});\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_prefer_writable_derived_effect_pre() {
+        let s = "<script>\n\tlet { x } = $props();\n\tlet y = $state(x);\n\t$effect.pre(() => { y = x; });\n</script>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/prefer-writable-derived"),
+            "Should flag $state + $effect.pre pattern");
+    }
+
+    #[test]
+    fn test_parse_real_world_focus_trap() {
+        let s = "<script>\n\tfunction focusTrap(node) {\n\t\tconst focusable = node.querySelectorAll('button, input, a, [tabindex]');\n\t\tconst first = focusable[0];\n\t\tconst last = focusable[focusable.length - 1];\n\t\tconst handler = (e) => {\n\t\t\tif (e.key !== 'Tab') return;\n\t\t\tif (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }\n\t\t\telse if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }\n\t\t};\n\t\tnode.addEventListener('keydown', handler);\n\t\tfirst?.focus();\n\t\treturn { destroy: () => node.removeEventListener('keydown', handler) };\n\t}\n</script>\n<div use:focusTrap>\n\t<slot />\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     #[test]
     fn test_parse_real_world_avatar() {
         let s = "<script>\n\tlet { src, alt, size = 'md', fallback } = $props();\n\tlet error = $state(false);\n\tlet initials = $derived(fallback ?? alt?.split(' ').map(w => w[0]).join('') ?? '?');\n</script>\n{#if src && !error}\n\t<img {src} {alt} class=\"avatar {size}\" onerror={() => error = true} />\n{:else}\n\t<div class=\"avatar {size} fallback\">{initials}</div>\n{/if}";
