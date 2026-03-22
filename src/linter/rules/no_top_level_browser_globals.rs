@@ -47,7 +47,7 @@ impl Rule for NoTopLevelBrowserGlobals {
                     .fold(0i32, |acc, b| match b { b'{' => acc + 1, b'}' => acc - 1, _ => acc });
                 if depth > 0 { continue; }
 
-                // Skip typeof guard
+                // Skip if directly preceded by typeof
                 let before = content[..byte_offset].trim_end();
                 if before.ends_with("typeof") { continue; }
 
@@ -56,11 +56,37 @@ impl Rule for NoTopLevelBrowserGlobals {
                 let line_end = content[byte_offset..].find('\n').map(|p| byte_offset + p).unwrap_or(content.len());
                 let line = &content[line_start..line_end];
 
-                // Skip guard patterns
-                if line.contains("typeof") { continue; }
-                if line.contains("globalThis.") { continue; }
-                if line.contains("import.meta") { continue; }
+                // Skip import declarations and comments
                 if line.trim_start().starts_with("import ") { continue; }
+                if line.trim_start().starts_with("//") { continue; }
+                // Skip import.meta guards
+                if line.contains("import.meta") { continue; }
+
+                // Check for VALID typeof guard: typeof X !== 'undefined' && X.prop
+                // (but NOT: typeof X === 'undefined' && X.prop — wrong direction)
+                if line.contains("typeof") {
+                    let has_valid_typeof = line.contains(&format!("typeof {} !== ", global))
+                        || line.contains(&format!("typeof {} != ", global));
+                    if has_valid_typeof { continue; }
+                    // If typeof check is wrong direction (=== undefined), DON'T skip
+                }
+
+                // Check for VALID globalThis guard: globalThis.X && X.prop
+                // (but NOT: globalThis.X || X.prop — wrong direction)
+                if line.contains(&format!("globalThis.{}", global)) {
+                    // Optional chaining is always safe
+                    if line.contains(&format!("globalThis.{}?.", global)) { continue; }
+                    // globalThis.X && ... is a valid guard
+                    let gt_pattern = format!("globalThis.{}", global);
+                    if let Some(gt_pos) = line.find(&gt_pattern) {
+                        let after_gt = &line[gt_pos + gt_pattern.len()..].trim_start();
+                        if after_gt.starts_with("&&") { continue; }
+                        if after_gt.starts_with("!==") || after_gt.starts_with("!=") { continue; }
+                        // globalThis.X.prop (direct access) or || — DON'T skip
+                    }
+                }
+
+                // Browser/BROWSER guard with && or ternary
                 let has_browser = line.contains("browser") || line.contains("BROWSER");
                 if has_browser && (line.contains('?') || line.contains("&&")) { continue; }
 
