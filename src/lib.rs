@@ -1011,6 +1011,83 @@ mod tests {
         assert!(bg.is_empty(), "Should NOT flag location inside guarded blocks, got: {:?}", bg.iter().map(|d| &d.message).collect::<Vec<_>>());
     }
 
+    // --- towards 950 ---
+
+    #[test]
+    fn test_parse_css_min_max() {
+        let s = "<style>\n\t.box { width: min(100%, 800px); height: max(50vh, 300px); font-size: clamp(1rem, 2vw, 2rem); }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_color_functions() {
+        let s = "<style>\n\t.c { color: hsl(200, 50%, 50%); background: rgb(255, 128, 0); border-color: oklch(70% 0.15 200); }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_inline_conditional() {
+        let s = "{#if true}<span>inline</span>{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_adjacent_mustaches() {
+        let s = "<p>{first}{middle}{last}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_empty_element() {
+        let s = "<div></div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        if let ast::TemplateNode::Element(el) = &r.ast.html.nodes[0] {
+            assert!(el.children.is_empty() || el.children.iter().all(|c| matches!(c, ast::TemplateNode::Text(t) if t.data.trim().is_empty())));
+        }
+    }
+
+    #[test]
+    fn test_linter_store_reactive_derived() {
+        let s = "<script>\n\timport { writable, derived } from 'svelte/store';\n\tconst count = writable(0);\n\tconst doubled = derived(count, ($c) => $c * 2);\n</script>\n<p>{doubled}</p>";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        assert!(diags.iter().any(|d| d.rule_name == "svelte/require-store-reactive-access"),
+            "Should flag raw derived store in template");
+    }
+
+    #[test]
+    fn test_parse_script_with_class() {
+        let s = "<script>\n\tclass MyClass {\n\t\tconstructor(value) { this.value = value; }\n\t\tgetValue() { return this.value; }\n\t}\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_with_rest() {
+        let s = "{#each items as [head, ...tail]}\n\t<p>Head: {head}, Rest: {tail.length}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_complex_binding() {
+        let s = "<input type=\"range\" min=\"0\" max=\"100\" step=\"5\" bind:value={volume} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_boundary_failed() {
+        let s = "<svelte:boundary onerror={(e, retry) => { log(e); retry(); }}>\n\t<Risky />\n</svelte:boundary>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- hitting 900 ---
 
     #[test]
