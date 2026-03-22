@@ -1011,6 +1011,63 @@ mod tests {
         assert!(bg.is_empty(), "Should NOT flag location inside guarded blocks, got: {:?}", bg.iter().map(|d| &d.message).collect::<Vec<_>>());
     }
 
+    // --- CLI and integration tests ---
+
+    #[test]
+    fn test_linter_all_rule_names_unique() {
+        let linter = Linter::all();
+        let names: Vec<&str> = linter.rules().iter().map(|r| r.name()).collect();
+        let mut seen = std::collections::HashSet::new();
+        for name in &names {
+            assert!(seen.insert(name), "Duplicate rule name: {}", name);
+        }
+    }
+
+    #[test]
+    fn test_linter_fixable_rules_exist() {
+        let linter = Linter::all();
+        let fixable_count = linter.rules().iter().filter(|r| r.is_fixable()).count();
+        assert!(fixable_count >= 10, "Should have at least 10 fixable rules, got {}", fixable_count);
+    }
+
+    #[test]
+    fn test_linter_recommended_rules_are_recommended() {
+        let rec = Linter::recommended();
+        for rule in rec.rules() {
+            assert!(rule.is_recommended(), "Rule {} in recommended linter should be recommended", rule.name());
+        }
+    }
+
+    #[test]
+    fn test_parse_complex_svelte5_with_all_features() {
+        let s = "<script lang=\"ts\" generics=\"T extends { id: string }\">\n\timport { onMount } from 'svelte';\n\timport { fade } from 'svelte/transition';\n\n\tinterface $$Events { select: CustomEvent<T> }\n\n\tlet { items = [], selected = $bindable<T | null>(null) }: {\n\t\titems?: T[];\n\t\tselected?: T | null;\n\t} = $props();\n\n\tlet count = $derived(items.length);\n\tlet filtered = $derived.by(() => items.filter(Boolean));\n\n\t$effect(() => { console.log('items changed', count); });\n\t$effect.pre(() => { /* pre-effect */ });\n\n\tonMount(() => { console.log('mounted'); });\n\n\tlet el: HTMLDivElement;\n\tconst host = $host();\n</script>\n\n<svelte:head>\n\t<title>Items ({count})</title>\n</svelte:head>\n\n<svelte:window on:keydown={(e) => { if (e.key === 'Escape') selected = null; }} />\n\n<div bind:this={el} class=\"container\">\n\t{#if count > 0}\n\t\t<ul>\n\t\t\t{#each filtered as item (item.id)}\n\t\t\t\t<li\n\t\t\t\t\tclass:selected={item === selected}\n\t\t\t\t\ttransition:fade={{duration: 200}}\n\t\t\t\t\tonclick={() => selected = item}\n\t\t\t\t\trole=\"button\"\n\t\t\t\t\ttabindex=\"0\"\n\t\t\t\t>\n\t\t\t\t\t{#snippet itemContent()}\n\t\t\t\t\t\t<span>{item.id}</span>\n\t\t\t\t\t{/snippet}\n\t\t\t\t\t{@render itemContent()}\n\t\t\t\t</li>\n\t\t\t{/each}\n\t\t</ul>\n\t{:else}\n\t\t<p>No items</p>\n\t{/if}\n</div>\n\n<style lang=\"scss\">\n\t.container { padding: 1rem; }\n\t.selected { background: var(--highlight, #eef); font-weight: bold; }\n\tul { list-style: none; padding: 0; }\n\tli { cursor: pointer; padding: 0.5rem; border-bottom: 1px solid #eee; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty(), "Complex Svelte 5 component should parse without errors");
+        assert!(r.ast.instance.is_some());
+        assert!(r.ast.css.is_some());
+    }
+
+    #[test]
+    fn test_parse_real_world_data_table() {
+        let s = "<script lang=\"ts\">\n\ttype Column<T> = { key: keyof T; label: string; sortable?: boolean };\n\tlet { data, columns, sortBy = null, sortDir = 'asc' }: {\n\t\tdata: Record<string, unknown>[];\n\t\tcolumns: Column<Record<string, unknown>>[];\n\t\tsortBy?: string | null;\n\t\tsortDir?: 'asc' | 'desc';\n\t} = $props();\n\n\tlet sorted = $derived.by(() => {\n\t\tif (!sortBy) return data;\n\t\treturn [...data].sort((a, b) => {\n\t\t\tconst va = String(a[sortBy!]);\n\t\t\tconst vb = String(b[sortBy!]);\n\t\t\treturn sortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);\n\t\t});\n\t});\n</script>\n\n<table>\n\t<thead>\n\t\t<tr>\n\t\t\t{#each columns as col}\n\t\t\t\t<th onclick={() => { sortBy = String(col.key); sortDir = sortDir === 'asc' ? 'desc' : 'asc'; }}>\n\t\t\t\t\t{col.label}\n\t\t\t\t\t{#if sortBy === col.key}{sortDir === 'asc' ? '▲' : '▼'}{/if}\n\t\t\t\t</th>\n\t\t\t{/each}\n\t\t</tr>\n\t</thead>\n\t<tbody>\n\t\t{#each sorted as row}\n\t\t\t<tr>\n\t\t\t\t{#each columns as col}\n\t\t\t\t\t<td>{row[String(col.key)]}</td>\n\t\t\t\t{/each}\n\t\t\t</tr>\n\t\t{/each}\n\t</tbody>\n</table>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_breadcrumb_nav() {
+        let s = "<script>\n\tlet { items = [] } = $props();\n</script>\n\n<nav aria-label=\"Breadcrumb\">\n\t<ol>\n\t\t{#each items as item, i}\n\t\t\t<li aria-current={i === items.length - 1 ? 'page' : undefined}>\n\t\t\t\t{#if i < items.length - 1}\n\t\t\t\t\t<a href={item.href}>{item.label}</a>\n\t\t\t\t\t<span aria-hidden=\"true\">/</span>\n\t\t\t\t{:else}\n\t\t\t\t\t{item.label}\n\t\t\t\t{/if}\n\t\t\t</li>\n\t\t{/each}\n\t</ol>\n</nav>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_notification_toast() {
+        let s = "<script>\n\tlet { message, type = 'info', duration = 3000, ondismiss } = $props();\n\tlet visible = $state(true);\n\t$effect(() => {\n\t\tconst timer = setTimeout(() => { visible = false; ondismiss?.(); }, duration);\n\t\treturn () => clearTimeout(timer);\n\t});\n</script>\n\n{#if visible}\n\t<div class=\"toast {type}\" role=\"alert\" transition:fade>\n\t\t<p>{message}</p>\n\t\t<button onclick={() => { visible = false; ondismiss?.(); }} aria-label=\"Dismiss\">&times;</button>\n\t</div>\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- require-store-reactive-access tests ---
 
     #[test]
