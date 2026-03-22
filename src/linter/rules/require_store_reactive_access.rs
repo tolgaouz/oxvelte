@@ -175,9 +175,13 @@ impl Rule for RequireStoreReactiveAccess {
                 // Object value: { x: store } → skip (passing store object)
                 // But NOT [store] computed key — that accesses the value
                 if before.ends_with(':') && !after_text.starts_with(']') { continue; }
-                // Skip: store followed by ) ] , ; → fn argument, array element, statement end
-                if after_text.starts_with(')') || after_text.starts_with(']')
-                    || after_text.starts_with(',') || after_text.starts_with(';') {
+                // Skip: store followed by ) , ; → fn argument, statement end
+                // But NOT store] when preceded by [ (computed property key)
+                let in_computed_key = before.ends_with('[');
+                if after_text.starts_with(')') || after_text.starts_with(',') || after_text.starts_with(';') {
+                    continue;
+                }
+                if after_text.starts_with(']') && !in_computed_key {
                     continue;
                 }
 
@@ -196,6 +200,12 @@ impl Rule for RequireStoreReactiveAccess {
             match node {
                 TemplateNode::MustacheTag(tag) => {
                     check_expr_for_raw_store(&tag.expression, tag.span, &store_vars_clone, ctx);
+                }
+                TemplateNode::IfBlock(block) => {
+                    check_expr_for_raw_store(&block.test, block.span, &store_vars_clone, ctx);
+                }
+                TemplateNode::EachBlock(block) => {
+                    check_expr_for_raw_store(&block.expression, block.span, &store_vars_clone, ctx);
                 }
                 TemplateNode::Element(el) => {
                     // Skip components — passing stores as props is valid
