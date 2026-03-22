@@ -16,6 +16,7 @@ fn check_expr_for_raw_store(
         if expr == var
             || expr.starts_with(&format!("{}.", var))
             || expr.starts_with(&format!("{}[", var))
+            || expr.starts_with(&format!("{}(", var))
         {
             if !expr.contains(&format!("${}", var))
                 && !expr.contains(&format!("get({})", var))
@@ -56,11 +57,11 @@ impl Rule for RequireStoreReactiveAccess {
                 factory_names.insert(local.clone());
             }
         }
-        if factory_names.is_empty() { return; }
 
-        // Find variables assigned from store factories: const x = writable(...)
-        // Track whether each store is declared with const (is_const=true) or let (is_const=false)
+        // Track store variables: name → is_const
         let mut store_vars_map: HashMap<String, bool> = HashMap::new();
+
+        // 1. Variables assigned from store factories: const x = writable(...)
         for line in content.lines() {
             let trimmed = line.trim();
             for (prefix, is_const) in &[("const ", true), ("let ", false)] {
@@ -75,6 +76,74 @@ impl Rule for RequireStoreReactiveAccess {
                         let is_store = factory_names.iter().any(|f| init.starts_with(&format!("{}(", f)));
                         if is_store {
                             store_vars_map.insert(name.to_string(), *is_const);
+                        }
+                    }
+                    // Check if type annotation contains Writable/Readable/Derived
+                    if let Some(colon) = rest[name_end..].find(':') {
+                        let type_start = name_end + colon + 1;
+                        let type_end = rest[type_start..].find('=').map(|p| type_start + p).unwrap_or(rest.len());
+                        let type_text = rest[type_start..type_end].trim();
+                        if is_store_type(type_text) {
+                            store_vars_map.insert(name.to_string(), *is_const);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Named imports from known store packages (svelte-i18n, etc.)
+        const KNOWN_STORE_PACKAGES: &[&str] = &["svelte-i18n"];
+        for (local, _imported, module) in &imports {
+            if KNOWN_STORE_PACKAGES.iter().any(|pkg| module == *pkg) {
+                // All exports from known store packages are stores
+                if local != "*" {
+                    store_vars_map.insert(local.clone(), true);
+                }
+            }
+        }
+
+        // 3. Named/namespace imports from store-exporting modules (cross-file resolution)
+        if let Some(file_path) = &ctx.file_path {
+            for (local, imported, module) in &imports {
+                if module.starts_with('.') && module != "svelte/store" {
+                    // Resolve the module file
+                    let dir = std::path::Path::new(file_path.as_str()).parent()
+                        .unwrap_or(std::path::Path::new("."));
+                    let resolved = resolve_module_file(dir, module);
+                    if let Some(module_content) = resolved {
+                        if imported == "*" {
+                            // Namespace import: import * as stores from './store'
+                            // Detect which exports are stores
+                            let store_exports = detect_store_exports(&module_content);
+                            // Store namespace name for member access checks later
+                            for export_name in &store_exports {
+                                let qualified = format!("{}.{}", local, export_name);
+                                store_vars_map.insert(qualified, true);
+                            }
+                            // Also check nested: stores.stores.w
+                            for line in module_content.lines() {
+                                let trimmed = line.trim();
+                                if trimmed.starts_with("export const ") || trimmed.starts_with("export let ") {
+                                    let is_const = trimmed.starts_with("export const ");
+                                    let after = if is_const { &trimmed[14..] } else { &trimmed[11..] };
+                                    let name_end = after.find(|c: char| !c.is_alphanumeric() && c != '_')
+                                        .unwrap_or(after.len());
+                                    let name = &after[..name_end];
+                                    if store_exports.contains(&name.to_string()) {
+                                        let qualified = format!("{}.{}", local, name);
+                                        store_vars_map.insert(qualified, is_const);
+                                    }
+                                }
+                            }
+                        } else {
+                            // Named import: import { wStore } from './store'
+                            let store_exports = detect_store_exports(&module_content);
+                            if store_exports.contains(imported) {
+                                // Determine const/let from module
+                                let is_const = module_content.contains(&format!("export const {}", imported))
+                                    || module_content.contains(&format!("const {} =", imported));
+                                store_vars_map.insert(local.clone(), is_const);
+                            }
                         }
                     }
                 }
@@ -374,4 +443,131 @@ impl Rule for RequireStoreReactiveAccess {
             }
         });
     }
+}
+
+/// Check if a TypeScript type annotation text indicates a store type.
+fn is_store_type(type_text: &str) -> bool {
+    const STORE_TYPES: &[&str] = &["Writable", "Readable", "Derived"];
+    let text = type_text.trim();
+    for st in STORE_TYPES {
+        if text.starts_with(st) || text.contains(&format!("| {}", st)) || text.contains(&format!("{} |", st))
+            || text.contains(&format!("| {}<", st)) || text.starts_with(&format!("{}<", st)) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Resolve a relative module path to a file, trying .ts and .js extensions.
+fn resolve_module_file(dir: &std::path::Path, module: &str) -> Option<String> {
+    for ext in &["", ".ts", ".js", ".d.ts"] {
+        let path = dir.join(format!("{}{}", module, ext));
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            return Some(content);
+        }
+    }
+    None
+}
+
+/// Detect which exports from a module file are stores.
+/// Returns a set of export names that are stores.
+fn detect_store_exports(content: &str) -> HashSet<String> {
+    let mut stores = HashSet::new();
+    let imports = crate::linter::parse_imports(content);
+
+    // Find factory function names from svelte/store
+    let mut factory_names: HashSet<String> = HashSet::new();
+    for (local, imported, module) in &imports {
+        if module == "svelte/store" && STORE_FACTORIES.contains(&imported.as_str()) {
+            factory_names.insert(local.clone());
+        }
+    }
+
+    // Find store type names
+    let mut store_type_names: HashSet<String> = HashSet::new();
+    for (local, imported, module) in &imports {
+        if module == "svelte/store" {
+            match imported.as_str() {
+                "Writable" | "Readable" | "Derived" => { store_type_names.insert(local.clone()); }
+                _ => {}
+            }
+        }
+    }
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        // export const/let NAME = factory(...)
+        for prefix in &["export const ", "export let "] {
+            if let Some(rest) = trimmed.strip_prefix(prefix) {
+                let name_end = rest.find(|c: char| !c.is_alphanumeric() && c != '_')
+                    .unwrap_or(rest.len());
+                let name = &rest[..name_end];
+                if name.is_empty() { continue; }
+
+                // Check factory call
+                if let Some(eq) = rest.find('=') {
+                    let init = rest[eq + 1..].trim();
+                    if factory_names.iter().any(|f| init.starts_with(&format!("{}(", f))) {
+                        stores.insert(name.to_string());
+                        continue;
+                    }
+                    // Check derived() call
+                    if init.starts_with("derived(") {
+                        stores.insert(name.to_string());
+                        continue;
+                    }
+                }
+
+                // Check type annotation for store types
+                if let Some(colon) = rest[name_end..].find(':') {
+                    let type_start = name_end + colon + 1;
+                    let type_end = rest[type_start..].find('=').map(|p| type_start + p).unwrap_or(rest.len());
+                    let type_text = rest[type_start..type_end].trim();
+                    if is_store_type(type_text) || store_type_names.iter().any(|t| type_text.contains(t)) {
+                        stores.insert(name.to_string());
+                        continue;
+                    }
+                }
+
+                // Check if interface extends a store type
+                // export let storeLike: StoreLike (need to check if StoreLike extends Writable)
+                if let Some(colon) = rest[name_end..].find(':') {
+                    let type_start = name_end + colon + 1;
+                    let type_text = rest[type_start..].trim().trim_end_matches(';');
+                    // Check if this type is defined as extending a store type
+                    let extends_store = content.contains(&format!("interface {} extends", type_text))
+                        && (content.contains(&format!("{} extends Writable", type_text))
+                            || content.contains(&format!("{} extends Readable", type_text))
+                            || content.contains(&format!("{} extends Derived", type_text)));
+                    if extends_store {
+                        stores.insert(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // Check for object exports that contain store values: export const obj = { w: wStore }
+    // Only add if the object references already-detected store variables
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if (trimmed.starts_with("export const ") || trimmed.starts_with("export let "))
+            && trimmed.contains('{')
+        {
+            let is_const = trimmed.starts_with("export const ");
+            let prefix_len = if is_const { 14 } else { 11 };
+            let rest = &trimmed[prefix_len..];
+            let name_end = rest.find(|c: char| !c.is_alphanumeric() && c != '_')
+                .unwrap_or(rest.len());
+            let name = &rest[..name_end];
+            if name.is_empty() || stores.contains(name) { continue; }
+            // Only mark as store-object if the object values reference known stores
+            let has_store_ref = stores.iter().any(|s| trimmed.contains(s.as_str()));
+            if has_store_ref {
+                stores.insert(name.to_string());
+            }
+        }
+    }
+
+    stores
 }
