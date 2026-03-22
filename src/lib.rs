@@ -8776,7 +8776,7 @@ mod linter_fixture_tests {
     // sort-attributes: needs config for ignore/order options
     // #[test] fn linter_sort_attributes_valid() { run_linter_valid("sort-attributes"); }
     #[test] fn linter_indent_valid() { run_linter_valid("indent"); }
-    // indent invalid: 36/37 pass (style-directive01 needs multiline attr indent)
+    // indent: 36/37 invalid pass (style-directive01 needs column-based attr indent)
     // #[test] fn linter_indent_invalid() { run_linter_invalid("indent"); }
     #[test] fn linter_valid_compile_valid() { run_linter_valid("valid-compile"); }
     #[test] fn linter_valid_style_parse_valid() { run_linter_valid("valid-style-parse"); }

@@ -27,6 +27,8 @@ impl Rule for Indent {
         let mut skip_next_line = false; // prettier-ignore: skip just the next non-empty line
         let mut depth = 0i32;
         let mut in_multiline_tag = false;
+        let mut multiline_tag_depth = 0i32;
+        let mut multiline_tag_ignored = false;
 
         for &line in &lines {
             let line_start = offset;
@@ -63,10 +65,14 @@ impl Rule for Indent {
                 continue;
             }
 
-            // Multiline tag: skip attribute lines (not checked)
+            // Multiline tag: check attribute indentation
             if in_multiline_tag {
-                if trimmed.ends_with(">") || trimmed.ends_with("/>") || trimmed == ">" || trimmed == "/>" {
+                let is_end = trimmed.ends_with(">") || trimmed.ends_with("/>") || trimmed == ">" || trimmed == "/>";
+                // Attribute indentation is complex (uses column-based positioning)
+                // Skipped for now — only content indentation is checked
+                if is_end {
                     in_multiline_tag = false;
+                    multiline_tag_ignored = false;
                     if !trimmed.ends_with("/>") && trimmed != "/>" {
                         depth += 1;
                     }
@@ -80,9 +86,10 @@ impl Rule for Indent {
             // Skip check for this line (prettier-ignore)
             if skip_next_line {
                 skip_next_line = false;
-                // Still track depth for multiline tags
                 if trimmed.starts_with('<') && !trimmed.starts_with("</") && !trimmed.starts_with("<!--") && !trimmed.contains('>') {
                     in_multiline_tag = true;
+                    multiline_tag_depth = depth;
+                    multiline_tag_ignored = true;
                 } else {
                     depth += opens - closes;
                     if depth < 0 { depth = 0; }
@@ -96,9 +103,9 @@ impl Rule for Indent {
             // Check for multiline opening tag
             if trimmed.starts_with('<') && !trimmed.starts_with("</") && !trimmed.starts_with("<!--") {
                 if !trimmed.contains('>') {
-                    // Multiline tag — skip attribute lines
                     in_multiline_tag = true;
-                    // Don't count as open yet (will count when > is found)
+                    multiline_tag_depth = depth;
+                    multiline_tag_ignored = false;
                     continue;
                 }
             }
