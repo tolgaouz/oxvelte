@@ -1002,6 +1002,117 @@ mod tests {
             "Should NOT flag window inside if block");
     }
 
+    // --- SvelteKit integration tests ---
+
+    #[test]
+    fn test_sveltekit_page_component() {
+        let s = "<script>\n\texport let data;\n\t$: ({ posts, user } = data);\n</script>\n\n<h1>Welcome, {user.name}</h1>\n{#each posts as post (post.id)}\n\t<article>\n\t\t<h2><a href=\"/posts/{post.slug}\">{post.title}</a></h2>\n\t\t<p>{post.excerpt}</p>\n\t</article>\n{/each}\n\n<style>\n\tarticle { border-bottom: 1px solid #eee; padding: 1rem 0; }\n\th2 a { text-decoration: none; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_sveltekit_error_page() {
+        let s = "<script>\n\timport { page } from '$app/stores';\n</script>\n\n<h1>{$page.status}</h1>\n<p>{$page.error?.message ?? 'Unknown error'}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_sveltekit_form_action() {
+        let s = "<script>\n\texport let form;\n</script>\n\n<form method=\"POST\" action=\"?/create\">\n\t<input name=\"title\" value={form?.title ?? ''} />\n\t{#if form?.error}\n\t\t<p class=\"error\">{form.error}</p>\n\t{/if}\n\t<button type=\"submit\">Create</button>\n</form>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_sveltekit_layout() {
+        let s = "<script>\n\timport { page } from '$app/stores';\n\timport Nav from './Nav.svelte';\n</script>\n\n<Nav currentPath={$page.url.pathname} />\n<main>\n\t<slot />\n</main>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    // --- accessibility pattern tests ---
+
+    #[test]
+    fn test_img_with_alt() {
+        let s = "<img src=\"photo.jpg\" alt=\"A nice photo\" />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_form_with_labels() {
+        let s = "<form>\n\t<label for=\"email\">Email</label>\n\t<input id=\"email\" type=\"email\" name=\"email\" required />\n\t<label for=\"pass\">Password</label>\n\t<input id=\"pass\" type=\"password\" name=\"password\" required />\n\t<button type=\"submit\">Login</button>\n</form>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_aria_attributes() {
+        let s = "<button aria-label=\"Close\" aria-pressed={pressed} role=\"switch\">\n\t<span aria-hidden=\"true\">×</span>\n</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    // --- TypeScript-specific tests ---
+
+    #[test]
+    fn test_ts_interface_props() {
+        let s = "<script lang=\"ts\">\n\tinterface Props {\n\t\tname: string;\n\t\tage?: number;\n\t\tonclick?: (e: MouseEvent) => void;\n\t}\n\tlet { name, age = 0, onclick }: Props = $props();\n</script>\n<p>{name} ({age})</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_ts_type_annotations() {
+        let s = "<script lang=\"ts\">\n\tlet items: string[] = $state([]);\n\tlet map: Map<string, number> = $state(new Map());\n\tconst add = (item: string): void => { items.push(item); };\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_ts_generic_component() {
+        let s = "<script lang=\"ts\" generics=\"T, U extends Record<string, T>\">\n\tlet { data, transform }: { data: U; transform: (v: T) => string } = $props();\n</script>\n{#each Object.entries(data) as [key, val]}\n\t<p>{key}: {transform(val)}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    // --- performance-safe tests ---
+
+    #[test]
+    fn test_large_template() {
+        let mut s = String::from("<div>");
+        for i in 0..100 {
+            s.push_str(&format!("<p class=\"item-{}\">Item {}</p>", i, i));
+        }
+        s.push_str("</div>");
+        let r = parser::parse(&s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_large_style() {
+        let mut s = String::from("<style>");
+        for i in 0..50 {
+            s.push_str(&format!(".class-{} {{ color: rgb({}, {}, {}); }}\n", i, i*5, i*3, i*7));
+        }
+        s.push_str("</style>");
+        let r = parser::parse(&s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_large_script() {
+        let mut s = String::from("<script>\n");
+        for i in 0..50 {
+            s.push_str(&format!("\tlet var_{} = {};\n", i, i));
+        }
+        s.push_str("</script>");
+        let r = parser::parse(&s);
+        assert!(r.errors.is_empty());
+    }
+
     // --- beyond 800 ---
 
     #[test]
