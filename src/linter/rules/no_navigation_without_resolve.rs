@@ -113,5 +113,6 @@ impl Rule for NoNavigationWithoutResolve {
                 }
             }
         }
+
     }
 }
