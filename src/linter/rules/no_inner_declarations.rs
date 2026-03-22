@@ -27,6 +27,62 @@ impl Rule for NoInnerDeclarations {
     }
 }
 
+/// Skip over a template literal body (after the opening backtick).
+/// Handles nested template literals inside `${...}` expressions.
+fn skip_template_literal(bytes: &[u8], i: &mut usize) {
+    while *i < bytes.len() {
+        if bytes[*i] == b'\\' {
+            *i += 2;
+            continue;
+        }
+        if bytes[*i] == b'`' {
+            *i += 1; // consume closing backtick
+            return;
+        }
+        if bytes[*i] == b'$' && *i + 1 < bytes.len() && bytes[*i + 1] == b'{' {
+            *i += 2; // skip ${
+            // Scan the expression inside ${...}, handling nested braces and template literals
+            let mut depth = 1i32;
+            while *i < bytes.len() && depth > 0 {
+                if bytes[*i] == b'\\' {
+                    *i += 1;
+                } else if bytes[*i] == b'{' {
+                    depth += 1;
+                } else if bytes[*i] == b'}' {
+                    depth -= 1;
+                    if depth == 0 {
+                        *i += 1; // consume closing }
+                        break;
+                    }
+                } else if bytes[*i] == b'`' {
+                    *i += 1; // skip opening backtick
+                    skip_template_literal(bytes, i); // recurse for nested template
+                    continue;
+                } else if bytes[*i] == b'\'' || bytes[*i] == b'"' {
+                    let q = bytes[*i];
+                    *i += 1;
+                    while *i < bytes.len() {
+                        if bytes[*i] == b'\\' { *i += 1; }
+                        else if bytes[*i] == q { break; }
+                        *i += 1;
+                    }
+                } else if *i + 1 < bytes.len() && bytes[*i] == b'/' && bytes[*i + 1] == b'/' {
+                    while *i < bytes.len() && bytes[*i] != b'\n' { *i += 1; }
+                    continue;
+                } else if *i + 1 < bytes.len() && bytes[*i] == b'/' && bytes[*i + 1] == b'*' {
+                    *i += 2;
+                    while *i + 1 < bytes.len() && !(bytes[*i] == b'*' && bytes[*i + 1] == b'/') { *i += 1; }
+                    if *i + 1 < bytes.len() { *i += 2; }
+                    continue;
+                }
+                *i += 1;
+            }
+            continue;
+        }
+        *i += 1;
+    }
+}
+
 fn check_inner_declarations(content: &str, content_offset: usize, ctx: &mut LintContext<'_>) {
     let bytes = content.as_bytes();
     let mut i = 0;
@@ -39,20 +95,22 @@ fn check_inner_declarations(content: &str, content_offset: usize, ctx: &mut Lint
     let mut scope_stack: Vec<(i32, bool)> = Vec::new(); // (depth, is_function_body)
 
     while i < bytes.len() {
-        // Skip strings
-        if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
+        // Skip single/double-quoted strings
+        if bytes[i] == b'\'' || bytes[i] == b'"' {
             let q = bytes[i];
             i += 1;
             while i < bytes.len() {
                 if bytes[i] == b'\\' { i += 1; }
                 else if bytes[i] == q { break; }
-                else if q == b'`' && bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-                    brace_depth += 1;
-                    i += 1;
-                }
                 i += 1;
             }
             if i < bytes.len() { i += 1; }
+            continue;
+        }
+        // Skip template literals (with proper nesting support)
+        if bytes[i] == b'`' {
+            i += 1;
+            skip_template_literal(bytes, &mut i);
             continue;
         }
         // Skip line comments
@@ -90,11 +148,15 @@ fn check_inner_declarations(content: &str, content_offset: usize, ctx: &mut Lint
         let rest = &content[i..];
 
         // Detect control flow keywords that create blocks
-        let is_control = rest.starts_with("if ") || rest.starts_with("if(")
+        let kw_word_start = i == 0 || {
+            let prev = bytes[i - 1];
+            !prev.is_ascii_alphanumeric() && prev != b'_' && prev != b'$' && prev != b'.'
+        };
+        let is_control = kw_word_start && (rest.starts_with("if ") || rest.starts_with("if(")
             || rest.starts_with("else ") || rest.starts_with("else{")
             || rest.starts_with("for ") || rest.starts_with("for(")
             || rest.starts_with("while ") || rest.starts_with("while(")
-            || rest.starts_with("switch ") || rest.starts_with("switch(");
+            || rest.starts_with("switch ") || rest.starts_with("switch("));
 
         if is_control {
             scope_stack.push((brace_depth, false));
@@ -104,24 +166,30 @@ fn check_inner_declarations(content: &str, content_offset: usize, ctx: &mut Lint
         if rest.starts_with("function ") || rest.starts_with("function(") {
             let is_word_start = i == 0 || {
                 let prev = bytes[i - 1];
-                !prev.is_ascii_alphanumeric() && prev != b'_' && prev != b'$'
+                !prev.is_ascii_alphanumeric() && prev != b'_' && prev != b'$' && prev != b'.'
             };
 
             if is_word_start {
                 // Check if this is a function DECLARATION (not expression)
                 // A function expression is preceded by =, (, ,, !, ||, &&, ?, :, return, etc.
                 let before = content[..i].trim_end();
-                let is_expression = before.ends_with('=')
-                    || before.ends_with('(')
-                    || before.ends_with(',')
-                    || before.ends_with('!')
-                    || before.ends_with("||")
-                    || before.ends_with("&&")
-                    || before.ends_with('?')
-                    || before.ends_with(':')
-                    || before.ends_with("return")
-                    || before.ends_with("=>")
-                    || before.is_empty();
+                // If preceded by `async`, look further back
+                let effective_before = if before.ends_with("async") {
+                    before[..before.len()-5].trim_end()
+                } else {
+                    before
+                };
+                let is_expression = effective_before.ends_with('=')
+                    || effective_before.ends_with('(')
+                    || effective_before.ends_with(',')
+                    || effective_before.ends_with('!')
+                    || effective_before.ends_with("||")
+                    || effective_before.ends_with("&&")
+                    || effective_before.ends_with('?')
+                    || effective_before.ends_with(':')
+                    || effective_before.ends_with("return")
+                    || effective_before.ends_with("=>")
+                    || effective_before.is_empty();
 
                 if !is_expression {
                     // This is a function declaration

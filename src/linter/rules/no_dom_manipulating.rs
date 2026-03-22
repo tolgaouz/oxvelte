@@ -85,8 +85,11 @@ impl Rule for NoDomManipulating {
                         let abs = search_from + pos;
                         let after = &content[abs + prefix.len()..];
 
-                        // Check if it's a DOM method call
-                        let is_method = DOM_METHODS.iter().any(|m| after.starts_with(m));
+                        // Check if it's a DOM method call (exact match followed by `(`)
+                        let is_method = DOM_METHODS.iter().any(|m| {
+                            after.starts_with(m)
+                                && after.as_bytes().get(m.len()) == Some(&b'(')
+                        });
                         // Check if it's a DOM property assignment
                         let is_prop_assign = DOM_PROPS.iter().any(|p| {
                             if !after.starts_with(p) { return false; }

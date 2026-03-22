@@ -469,6 +469,7 @@ fn extract_inline_type_properties(before_props: &str) -> Vec<(String, usize)> {
         None => return props,
     };
     // Find the type block `: { ... }`
+    // Must come AFTER a `:` (type annotation), not a destructuring `{ ... }`
     if let Some(close) = before_eq.rfind('}') {
         let mut depth = 0;
         let mut open = None;
@@ -483,7 +484,11 @@ fn extract_inline_type_properties(before_props: &str) -> Vec<(String, usize)> {
             }
         }
         if let Some(brace_pos) = open {
-            extract_props_from_block(before_eq, brace_pos, &mut props);
+            // Verify this is a type annotation block (preceded by `:`) not a destructuring block
+            let before_brace = before_eq[..brace_pos].trim_end();
+            if before_brace.ends_with(':') {
+                extract_props_from_block(before_eq, brace_pos, &mut props);
+            }
         }
     }
     props
