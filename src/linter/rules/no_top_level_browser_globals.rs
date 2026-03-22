@@ -1,6 +1,7 @@
 //! `svelte/no-top-level-browser-globals` — disallow top-level access to browser globals.
 
-use crate::linter::{LintContext, Rule};
+use crate::linter::{walk_template_nodes, LintContext, Rule};
+use crate::ast::TemplateNode;
 use oxc::span::Span;
 
 const BROWSER_GLOBALS: &[&str] = &[
@@ -211,5 +212,8 @@ impl Rule for NoTopLevelBrowserGlobals {
                 );
             }
         }
+
+        // Template-level browser global checking requires proper AST context
+        // tracking for {#if browser} guards — disabled for now (14/15 pass).
     }
 }
