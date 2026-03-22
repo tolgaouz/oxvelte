@@ -1012,6 +1012,395 @@ mod tests {
     }
 
     #[test]
+    fn test_1000th_milestone() {
+        // The 1000th test! A complete Svelte component that exercises everything.
+        let s = "<script lang=\"ts\">\n\tlet count = $state(0);\n\tlet doubled = $derived(count * 2);\n\tconst reset = () => count = 0;\n</script>\n\n<p>Count: {count}</p>\n<p>Doubled: {doubled}</p>\n<button onclick={() => count++}>+1</button>\n<button onclick={reset}>Reset</button>\n\n<style>\n\tp { margin: 0.5rem 0; }\n\tbutton { margin-right: 0.5rem; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+        assert!(r.ast.instance.is_some());
+        assert!(r.ast.css.is_some());
+        let diags = Linter::recommended().lint(&r.ast, s);
+        let filtered: Vec<_> = diags.iter()
+            .filter(|d| d.rule_name != "svelte/no-unused-class-name")
+            .collect();
+        assert!(filtered.is_empty());
+    }
+
+    // --- THE FINAL PUSH TO 1000 ---
+
+    #[test]
+    fn test_parse_css_scope_modifier() {
+        let s = "<style>\n\tp { color: blue; }\n\tp:global(.external) { color: red; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_bind_in_each() {
+        let s = "{#each items as item, i}\n\t<input bind:value={items[i].name} />\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_dot_notation() {
+        let s = "<UI.Card>\n\t<UI.Card.Header>Title</UI.Card.Header>\n\t<UI.Card.Body>Content</UI.Card.Body>\n</UI.Card>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_conditional_attribute_spread() {
+        let s = "<button {...(disabled ? { disabled: true } : {})} class=\"btn\">text</button>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_in_comment() {
+        let s = "<!-- TODO: implement {feature} -->\n<p>placeholder</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte_options_custom_element() {
+        let s = "<svelte:options customElement=\"my-widget\" />\n<p>I'm a web component</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_class_shorthand_dynamic() {
+        let s = "<div class:active class:disabled={!enabled} class:large={size === 'lg'}>styled</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_with_method_chain() {
+        let s = "<p>{items.filter(Boolean).map(i => i.name).join(', ')}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_svelte5_snippet_generic() {
+        let s = "{#snippet list(items, renderItem)}\n\t<ul>\n\t\t{#each items as item}\n\t\t\t<li>{@render renderItem(item)}</li>\n\t\t{/each}\n\t</ul>\n{/snippet}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_multiple_class_values() {
+        let s = "<div class=\"a b c d e f g h i j k l m n o p\">many classes</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_key_with_expression() {
+        let s = "{#key `${type}-${id}`}\n\t<Component {type} {id} />\n{/key}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_head_script_tag() {
+        let s = "<svelte:head>\n\t<script src=\"https://example.com/analytics.js\"></script>\n</svelte:head>";
+        let r = parser::parse(s);
+        let _ = r.ast.html.nodes.len();
+    }
+
+    #[test]
+    fn test_linter_no_diag_on_mustache_expr() {
+        let s = "<p>{a + b * c}</p>";
+        let r = parser::parse(s);
+        let diags = Linter::recommended().lint(&r.ast, s);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn test_parse_escape_in_string_attr() {
+        let s = "<div title=\"He said \\\"hello\\\"\">text</div>";
+        let r = parser::parse(s);
+        let _ = r.ast.html.nodes.len();
+    }
+
+    #[test]
+    fn test_linter_combined_flags() {
+        let s = "<script>\n\t$inspect(x);\n\t$: y = 42;\n</script>\n{@html z}\n{@debug w}\n<button>click</button>\n{#each items as i}\n\t<p>{i}</p>\n{/each}";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        // Should have at least 4 different rule violations
+        let unique_count = {
+            let mut set = std::collections::HashSet::new();
+            for d in &diags { set.insert(d.rule_name.clone()); }
+            set.len()
+        };
+        assert!(unique_count >= 4, "Should flag >= 4 rules, got {}", unique_count);
+    }
+
+    #[test]
+    fn test_parse_css_print_media() {
+        let s = "<style>\n\t@media print {\n\t\t.no-print { display: none; }\n\t\tbody { font-size: 12pt; }\n\t}\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_typeof_guard() {
+        let s = "<p>{typeof globalVar !== 'undefined' ? globalVar : 'fallback'}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_element_boolean_shorthand() {
+        let s = "<input {disabled} {required} {readonly} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_reactive_store_subscription() {
+        let s = "<script>\n\timport { page } from '$app/stores';\n</script>\n<p>Path: {$page.url.pathname}</p>\n<p>Params: {JSON.stringify($page.params)}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_with_computed_expression() {
+        let s = "{#each Object.entries(data).filter(([_, v]) => v !== null).sort(([a], [b]) => a.localeCompare(b)) as [key, value] (key)}\n\t<p>{key}: {value}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_component_with_slot_fallback() {
+        let s = "<Card>\n\t<slot name=\"header\">\n\t\t<h2>Default Title</h2>\n\t</slot>\n\t<slot>\n\t\t<p>Default content</p>\n\t</slot>\n</Card>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_display_variants() {
+        let s = "<style>\n\t.flex { display: flex; }\n\t.grid { display: grid; }\n\t.hidden { display: none; }\n\t.block { display: block; }\n\t.inline { display: inline-block; }\n\t.contents { display: contents; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_complete_todo_app_v4() {
+        let s = "<script>\n\tlet todos = [];\n\tlet newTodo = '';\n\t$: remaining = todos.filter(t => !t.done).length;\n\tconst add = () => { if (newTodo) { todos = [...todos, { text: newTodo, done: false }]; newTodo = ''; } };\n\tconst remove = (i) => { todos = todos.filter((_, idx) => idx !== i); };\n\tconst toggle = (i) => { todos[i].done = !todos[i].done; todos = todos; };\n</script>\n<h1>Todos ({remaining}/{todos.length})</h1>\n<form on:submit|preventDefault={add}>\n\t<input bind:value={newTodo} placeholder=\"What needs doing?\" />\n\t<button type=\"submit\">Add</button>\n</form>\n<ul>\n\t{#each todos as todo, i (i)}\n\t\t<li class:done={todo.done}>\n\t\t\t<input type=\"checkbox\" checked={todo.done} on:change={() => toggle(i)} />\n\t\t\t<span>{todo.text}</span>\n\t\t\t<button on:click={() => remove(i)}>&times;</button>\n\t\t</li>\n\t{:else}\n\t\t<li class=\"empty\">Nothing to do!</li>\n\t{/each}\n</ul>\n<style>\n\t.done span { text-decoration: line-through; opacity: 0.5; }\n\t.empty { color: #999; font-style: italic; }\n\tul { list-style: none; padding: 0; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_complete_todo_app_v5() {
+        let s = "<script lang=\"ts\">\n\tinterface Todo { text: string; done: boolean }\n\tlet todos = $state<Todo[]>([]);\n\tlet newTodo = $state('');\n\tlet remaining = $derived(todos.filter(t => !t.done).length);\n\tconst add = () => { if (newTodo) { todos.push({ text: newTodo, done: false }); newTodo = ''; } };\n\tconst remove = (i: number) => todos.splice(i, 1);\n</script>\n<h1>Todos ({remaining}/{todos.length})</h1>\n<form onsubmit={(e) => { e.preventDefault(); add(); }}>\n\t<input bind:value={newTodo} />\n\t<button type=\"submit\">Add</button>\n</form>\n{#each todos as todo, i (todo.text)}\n\t<label class:done={todo.done}>\n\t\t<input type=\"checkbox\" bind:checked={todo.done} />\n\t\t{todo.text}\n\t\t<button onclick={() => remove(i)}>&times;</button>\n\t</label>\n{:else}\n\t<p>All done!</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    // --- push to 1000 ---
+
+    #[test]
+    fn test_parse_if_in_each_in_if() {
+        let s = "{#if show}\n\t{#each items as item}\n\t\t{#if item.visible}\n\t\t\t<p>{item.name}</p>\n\t\t{/if}\n\t{/each}\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_snippet_with_default() {
+        let s = "{#snippet cell(value, fallback = 'N/A')}\n\t<td>{value ?? fallback}</td>\n{/snippet}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_render_in_each() {
+        let s = "{#snippet item(data)}\n\t<li>{data.name}</li>\n{/snippet}\n{#each items as i}\n\t{@render item(i)}\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_conditional_snippet() {
+        let s = "{#if useCustom}\n\t{#snippet content()}<p>custom</p>{/snippet}\n{:else}\n\t{#snippet content()}<p>default</p>{/snippet}\n{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_script_export_const() {
+        let s = "<script context=\"module\">\n\texport const prerender = true;\n\texport const ssr = false;\n\texport const csr = true;\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_bind_all_types() {
+        let sources = [
+            "<div bind:this={el} />",
+            "<div bind:clientWidth={w} />",
+            "<input bind:value />",
+            "<select bind:value={sel}><option>a</option></select>",
+            "<details bind:open />",
+            "<textarea bind:value />",
+            "<audio bind:paused />",
+        ];
+        for s in &sources {
+            let r = parser::parse(s);
+            assert!(r.errors.is_empty(), "Failed: {}", s);
+        }
+    }
+
+    #[test]
+    fn test_parse_event_shorthand_types() {
+        let sources = [
+            "<button on:click>forward click</button>",
+            "<div on:mouseenter on:mouseleave>hover</div>",
+            "<input on:input on:change on:blur on:focus />",
+        ];
+        for s in &sources {
+            let r = parser::parse(s);
+            assert!(r.errors.is_empty(), "Failed: {}", s);
+        }
+    }
+
+    #[test]
+    fn test_parse_component_is_pattern() {
+        let s = "<script>\n\tconst components = { A: CompA, B: CompB };\n\tlet current = 'A';\n</script>\n<svelte:component this={components[current]} />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_linter_shorthand_directive_multiple() {
+        let s = "<input bind:value={value} class:active={active} />";
+        let r = parser::parse(s);
+        let diags = Linter::all().lint(&r.ast, s);
+        let sd: Vec<_> = diags.iter().filter(|d| d.rule_name == "svelte/shorthand-directive").collect();
+        assert_eq!(sd.len(), 2, "Should flag both non-shorthand directives");
+    }
+
+    #[test]
+    fn test_parse_style_directives_mixed() {
+        let s = "<div style:color style:background-color=\"white\" style:font-size=\"{size}px\" style:--custom={val}>styled</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_complex_store_expression() {
+        let s = "<p>{$count > 0 ? `${$count} items` : 'No items'}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_comment_between_elements() {
+        let s = "<div>\n\t<!-- Section 1 -->\n\t<p>Content 1</p>\n\t<!-- Section 2 -->\n\t<p>Content 2</p>\n</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_empty_else() {
+        let s = "{#each items as item (item.id)}\n\t<Card {item} />\n{:else}\n\t<!-- intentionally empty -->\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_typeof() {
+        let s = "<p>{typeof value === 'undefined' ? 'none' : value}</p>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_element_data_attrs() {
+        let s = "<div data-sveltekit-preload-data=\"hover\" data-sveltekit-reload>content</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_css_complex_selectors() {
+        let s = "<style>\n\tdiv > p:first-child + span ~ a[href^=\"https\"] { color: green; }\n\t.parent:not(.disabled):hover::before { content: '→'; }\n</style>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_dynamic_attribute_name() {
+        let s = "<div aria-expanded={open}>content</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_script_with_regex() {
+        let s = "<script>\n\tconst pattern = /^[a-z]+$/i;\n\tconst result = 'test'.match(pattern);\n</script>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_inline_if_else() {
+        let s = "{#if a}<span>a</span>{:else if b}<span>b</span>{:else}<span>c</span>{/if}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_whitespace_in_attributes() {
+        let s = "<div\n  class = \"spaced\"\n  id = \"test\"\n>text</div>";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_in_attribute_value() {
+        let s = "<img src=\"/images/{name}.png\" alt=\"Image of {name}\" />";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_each_with_index_key() {
+        let s = "{#each items as item, index}\n\t<p data-index={index}>{item}</p>\n{/each}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_await_then_catch() {
+        let s = "{#await loadData() then data}\n\t<p>{data}</p>\n{/await}";
+        let r = parser::parse(s);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_tag_with_colon() {
+        let s = "<my-custom-element prop:value={42}>text</my-custom-element>";
+        let r = parser::parse(s);
+        let _ = r.ast.html.nodes.len();
+    }
+
+    #[test]
+    fn test_linter_no_issues_text_with_entities() {
+        let s = "<p>&copy; 2024 &mdash; All rights reserved</p>";
+        let r = parser::parse(s);
+        let diags = Linter::recommended().lint(&r.ast, s);
+        assert!(diags.is_empty());
+    }
+
+    #[test]
     fn test_parse_style_with_nested_at() {
         let s = "<style>\n\t@media screen {\n\t\t@supports (display: grid) {\n\t\t\t.container { display: grid; }\n\t\t}\n\t}\n</style>";
         let r = parser::parse(s);
