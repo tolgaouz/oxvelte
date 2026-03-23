@@ -1,5 +1,5 @@
 {
-  "name": "oxvelte",
+  "name": "@oxvelte/lint",
   "version": "0.1.0",
   "description": "A fast Svelte linter written in Rust — drop-in replacement for eslint-plugin-svelte",
   "license": "MIT",
