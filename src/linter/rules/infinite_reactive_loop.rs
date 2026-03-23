@@ -190,8 +190,8 @@ fn collect_assigns_after_await_with_positions(
                     format!("{} += await ", var),
                     format!("{} -= await ", var),
                 ];
-                if ops.iter().any(|pat| t.contains(pat.as_str())) && !result.contains(var) {
-                    result.push(var.clone());
+                if ops.iter().any(|pat| t.contains(pat.as_str())) {
+                    if !result.contains(var) { result.push(var.clone()); }
                     positions.push((var.clone(), body_content_offset + line_offset + indent));
                 }
             }
@@ -201,8 +201,8 @@ fn collect_assigns_after_await_with_positions(
         }
         if seen_await {
             for var in top_vars {
-                if has_assign(t, var) && !result.contains(var) {
-                    result.push(var.clone());
+                if has_assign(t, var) {
+                    if !result.contains(var) { result.push(var.clone()); }
                     positions.push((var.clone(), body_content_offset + line_offset + indent));
                 }
             }
@@ -734,31 +734,24 @@ fn analyze_block(
                     }
                 }
 
-                // Report call site AND assignment sites inside the function
-                let mut reported = false;
-                for av in &fi.assigns_after_await {
-                    if block_has_var_ref(block, av) {
-                        if !reported {
-                            let indent = line.len() - t.len();
-                            let call_col = t.find(&call_pat).unwrap_or(0);
-                            let abs = base + block_start + line_offsets[idx] + indent + call_col;
-                            ctx.diagnostic(
-                                format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", av),
-                                Span::new(abs as u32, abs as u32 + 1),
-                            );
-                            reported = true;
-                        }
-                        // Also report at the assignment site inside the function body
-                        for (pos_var, pos_offset) in &fi.assign_positions_after_await {
-                            if pos_var == av {
-                                let abs = base + pos_offset;
-                                ctx.diagnostic(
-                                    "Possibly it may occur an infinite reactive loop.",
-                                    Span::new(abs as u32, abs as u32 + 1),
-                                );
-                            }
-                        }
-                        break;
+                // Report at call site AND assignment sites inside the function.
+                // ESLint reports one call-site diagnostic per assignment location.
+                for (pos_var, pos_offset) in &fi.assign_positions_after_await {
+                    if block_has_var_ref(block, pos_var) {
+                        // Report at call site
+                        let indent = line.len() - t.len();
+                        let call_col = t.find(&call_pat).unwrap_or(0);
+                        let abs = base + block_start + line_offsets[idx] + indent + call_col;
+                        ctx.diagnostic(
+                            format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", pos_var),
+                            Span::new(abs as u32, abs as u32 + 1),
+                        );
+                        // Report at assignment site
+                        let abs = base + pos_offset;
+                        ctx.diagnostic(
+                            "Possibly it may occur an infinite reactive loop.",
+                            Span::new(abs as u32, abs as u32 + 1),
+                        );
                     }
                 }
             }
