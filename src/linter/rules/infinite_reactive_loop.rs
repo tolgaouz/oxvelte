@@ -254,14 +254,36 @@ fn has_assign(line: &str, var: &str) -> bool {
             if *op == " = " && pos + pat.len() < line.len() && line.as_bytes()[pos + pat.len()] == b'=' { continue; }
             return true;
         }
-        let prop_pat = format!("{}.", var);
-        for (pos, _) in line.match_indices(&prop_pat) {
-            if !is_word_start(line, pos) { continue; }
-            let rest = &line[pos + prop_pat.len()..];
-            for op2 in &ops {
-                if let Some(eq_pos) = rest.find(op2) {
-                    if *op2 == " = " && eq_pos + op2.len() < rest.len() && rest.as_bytes()[eq_pos + op2.len()] == b'=' { continue; }
-                    return true;
+        // Check property/index access: var.prop = , var[idx] = , var.prop[idx].etc =
+        for prefix in &[format!("{}.", var), format!("{}[", var)] {
+            for (pos, _) in line.match_indices(prefix.as_str()) {
+                if !is_word_start(line, pos) { continue; }
+                let rest = &line[pos + prefix.len()..];
+                // Skip initial property name (after .) or index expression (after [)
+                let mut r = if prefix.ends_with('.') {
+                    let end = rest.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(rest.len());
+                    &rest[end..]
+                } else {
+                    // After [, find matching ]
+                    rest.find(']').map(|p| &rest[p+1..]).unwrap_or("")
+                };
+                // Follow chained property/index access
+                loop {
+                    if r.starts_with('[') {
+                        if let Some(close) = r.find(']') { r = &r[close+1..]; } else { break; }
+                    } else if r.starts_with('.') {
+                        let end = r[1..].find(|c: char| !c.is_alphanumeric() && c != '_').map(|e| e+1).unwrap_or(r.len());
+                        r = &r[end..];
+                    } else {
+                        break;
+                    }
+                }
+                let r = r.trim_start();
+                for op2 in &ops {
+                    if r.starts_with(op2.trim()) {
+                        if *op2 == " = " && r.len() > 1 && r.as_bytes()[1] == b'=' { continue; }
+                        return true;
+                    }
                 }
             }
         }
