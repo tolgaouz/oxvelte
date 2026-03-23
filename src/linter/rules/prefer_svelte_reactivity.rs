@@ -75,6 +75,9 @@ impl Rule for PreferSvelteReactivity {
 
         let content = &script.content;
         let base = script.span.start as usize;
+        let source = ctx.source;
+        let tag_text = &source[base..script.span.end as usize];
+        let content_offset = tag_text.find('>').map(|p| base + p + 1).unwrap_or(base);
 
         // Collect imported/aliased names that shadow built-in classes
         let shadowed = collect_shadowed_classes(content);
@@ -113,55 +116,6 @@ impl Rule for PreferSvelteReactivity {
                 )
                 .collect();
             for offset in offsets {
-                // Skip if inside a function/callback body (brace depth > 0)
-                // Use a proper scanner that skips strings, template literals, and comments
-                let brace_depth = {
-                    let bytes = content[..offset].as_bytes();
-                    let mut d = 0i32;
-                    let mut j = 0;
-                    while j < bytes.len() {
-                        match bytes[j] {
-                            b'\'' | b'"' => {
-                                let q = bytes[j];
-                                j += 1;
-                                while j < bytes.len() {
-                                    if bytes[j] == b'\\' { j += 1; }
-                                    else if bytes[j] == q { break; }
-                                    j += 1;
-                                }
-                            }
-                            b'`' => {
-                                j += 1;
-                                let mut td = 0i32;
-                                while j < bytes.len() {
-                                    if bytes[j] == b'\\' { j += 1; }
-                                    else if bytes[j] == b'`' && td == 0 { break; }
-                                    else if bytes[j] == b'$' && j + 1 < bytes.len() && bytes[j + 1] == b'{' { j += 1; td += 1; }
-                                    else if bytes[j] == b'{' { td += 1; }
-                                    else if bytes[j] == b'}' { td -= 1; }
-                                    j += 1;
-                                }
-                            }
-                            b'/' if j + 1 < bytes.len() && bytes[j + 1] == b'/' => {
-                                while j < bytes.len() && bytes[j] != b'\n' { j += 1; }
-                            }
-                            b'/' if j + 1 < bytes.len() && bytes[j + 1] == b'*' => {
-                                j += 2;
-                                while j + 1 < bytes.len() && !(bytes[j] == b'*' && bytes[j + 1] == b'/') { j += 1; }
-                                if j + 1 < bytes.len() { j += 1; }
-                            }
-                            b'{' => d += 1,
-                            b'}' => d -= 1,
-                            _ => {}
-                        }
-                        j += 1;
-                    }
-                    d
-                };
-                if brace_depth > 0 {
-                    continue;
-                }
-
                 // Get the variable name this is assigned to
                 let line_start = content[..offset].rfind('\n').map(|p| p + 1).unwrap_or(0);
                 let line = &content[line_start..content[offset..].find('\n').map(|p| offset + p).unwrap_or(content.len())];
@@ -169,9 +123,9 @@ impl Rule for PreferSvelteReactivity {
                 let var_name = extract_var_name(line, builtin.name);
 
                 if let Some(var_name) = var_name {
-                    // Check if the variable is mutated anywhere in the content
-                    if is_mutated(content, &var_name, builtin) {
-                        let new_keyword_pos = base + offset;
+                    // Check if the variable is mutated anywhere in script or template
+                    if is_mutated(content, &var_name, builtin) || is_mutated(ctx.source, &var_name, builtin) {
+                        let new_keyword_pos = content_offset + offset;
                         ctx.diagnostic(
                             format!(
                                 "Found a mutable instance of the built-in {} class. Use {} instead.",
