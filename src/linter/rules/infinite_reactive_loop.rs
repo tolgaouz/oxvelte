@@ -132,51 +132,85 @@ fn collect_func_info(content: &str, top_vars: &[String]) -> Vec<FuncInfo> {
     let mut results = Vec::new();
     let lines: Vec<&str> = content.lines().collect();
 
-    // Pre-compute brace depth at the start of each line (to filter out nested functions)
+    // Pre-compute line byte offsets and brace depths
+    let mut line_offsets = Vec::with_capacity(lines.len());
     let mut line_depths = Vec::with_capacity(lines.len());
     let mut depth = 0i32;
+    let mut offset = 0usize;
     for &line in &lines {
+        line_offsets.push(offset);
         line_depths.push(depth);
-        for ch in line.chars() {
-            match ch { '{' => depth += 1, '}' => depth -= 1, _ => {} }
+        for ch in line.bytes() {
+            match ch { b'{' => depth += 1, b'}' => depth -= 1, _ => {} }
         }
+        offset += line.len() + 1;
     }
 
     let mut i = 0;
     while i < lines.len() {
         let t = lines[i].trim();
-        // Only collect top-level functions (brace depth 0)
         if line_depths[i] > 0 { i += 1; continue; }
         if let Some(name) = extract_func_name(t) {
+            // Find function body range (line indices)
             let mut depth = 0i32;
-            let mut body = String::new();
             let mut started = false;
+            let mut end_line = i;
+            let mut has_await = false;
             for j in i..lines.len() {
-                for ch in lines[j].chars() {
-                    if ch == '{' { depth += 1; started = true; }
-                    if ch == '}' { depth -= 1; }
+                let line = lines[j];
+                if line.contains("await ") { has_await = true; }
+                for ch in line.bytes() {
+                    if ch == b'{' { depth += 1; started = true; }
+                    if ch == b'}' { depth -= 1; }
                 }
-                body.push_str(lines[j]);
-                body.push('\n');
+                end_line = j;
                 if started && depth <= 0 { break; }
             }
-            let assigns: Vec<String> = top_vars.iter()
-                .filter(|v| body.lines().any(|l| has_assign(l.trim(), v)))
-                .cloned().collect();
+            let func_start_offset = line_offsets[i];
 
-            // Calculate the content offset where this function body starts
-            let func_content_offset: usize = lines[..i].iter().map(|l| l.len() + 1).sum();
+            // Single pass: collect assigns and positions
+            let mut assigns = Vec::new();
+            let mut all_assign_positions = Vec::new();
+            let mut assigns_after_await = Vec::new();
+            let mut assign_positions_after_await = Vec::new();
+            let mut seen_await = false;
 
-            // Collect ALL assignment positions
-            let all_assign_positions = collect_all_assign_positions(&body, top_vars, func_content_offset);
+            for j in i..=end_line {
+                let line = lines[j];
+                let t = line.trim();
+                let indent = line.len() - t.len();
+                let line_pos = line_offsets[j];
 
-            // Check if function has await and which vars are assigned after it
-            let has_await = body.contains("await ");
-            let (assigns_after_await, assign_positions_after_await) = if has_await {
-                collect_assigns_after_await_with_positions(&body, top_vars, func_content_offset)
-            } else {
-                (Vec::new(), Vec::new())
-            };
+                if t.contains("await ") {
+                    // Check for `var = await expr` on this line
+                    if seen_await || j > i {
+                        for var in top_vars {
+                            let pat = format!("{} = await ", var);
+                            if t.contains(&pat) {
+                                if !assigns_after_await.contains(var) { assigns_after_await.push(var.clone()); }
+                                assign_positions_after_await.push((var.clone(), line_pos + indent));
+                                if !assigns.contains(var) { assigns.push(var.clone()); }
+                                all_assign_positions.push((var.clone(), line_pos + indent));
+                            }
+                        }
+                    }
+                    seen_await = true;
+                    continue;
+                }
+
+                // Check assignments on this line
+                for var in top_vars {
+                    if !t.contains(var.as_str()) { continue; }
+                    if has_assign(t, var) {
+                        if !assigns.contains(var) { assigns.push(var.clone()); }
+                        all_assign_positions.push((var.clone(), line_pos + indent));
+                        if seen_await {
+                            if !assigns_after_await.contains(var) { assigns_after_await.push(var.clone()); }
+                            assign_positions_after_await.push((var.clone(), line_pos + indent));
+                        }
+                    }
+                }
+            }
 
             results.push(FuncInfo { name, assigns, has_await, assigns_after_await, assign_positions_after_await, all_assign_positions });
         }
@@ -187,62 +221,6 @@ fn collect_func_info(content: &str, top_vars: &[String]) -> Vec<FuncInfo> {
 
 /// Collect variables assigned after an `await` in a function body.
 /// Also returns (var_name, content_offset) pairs for each assignment.
-fn collect_assigns_after_await_with_positions(
-    body: &str, top_vars: &[String], body_content_offset: usize,
-) -> (Vec<String>, Vec<(String, usize)>) {
-    let mut result = Vec::new();
-    let mut positions = Vec::new();
-    let mut seen_await = false;
-    let mut line_offset = 0usize;
-    for line in body.lines() {
-        let t = line.trim();
-        let indent = line.len() - t.len();
-        if t.contains("await ") {
-            for var in top_vars {
-                let ops = [
-                    format!("{} = await ", var),
-                    format!("{} += await ", var),
-                    format!("{} -= await ", var),
-                ];
-                if ops.iter().any(|pat| t.contains(pat.as_str())) {
-                    if !result.contains(var) { result.push(var.clone()); }
-                    positions.push((var.clone(), body_content_offset + line_offset + indent));
-                }
-            }
-            seen_await = true;
-            line_offset += line.len() + 1;
-            continue;
-        }
-        if seen_await {
-            for var in top_vars {
-                if has_assign(t, var) {
-                    if !result.contains(var) { result.push(var.clone()); }
-                    positions.push((var.clone(), body_content_offset + line_offset + indent));
-                }
-            }
-        }
-        line_offset += line.len() + 1;
-    }
-    (result, positions)
-}
-
-/// Collect all (var, position) pairs for assignments in a function body.
-fn collect_all_assign_positions(body: &str, top_vars: &[String], body_content_offset: usize) -> Vec<(String, usize)> {
-    let mut positions = Vec::new();
-    let mut line_offset = 0usize;
-    for line in body.lines() {
-        let t = line.trim();
-        let indent = line.len() - t.len();
-        for var in top_vars {
-            if has_assign(t, var) {
-                positions.push((var.clone(), body_content_offset + line_offset + indent));
-            }
-        }
-        line_offset += line.len() + 1;
-    }
-    positions
-}
-
 fn extract_func_name(line: &str) -> Option<String> {
     if let Some(rest) = line.strip_prefix("const ") {
         if let Some(eq) = rest.find(" = ") {
@@ -277,46 +255,77 @@ fn extract_func_name(line: &str) -> Option<String> {
 }
 
 fn has_assign(line: &str, var: &str) -> bool {
+    // Fast path: if the variable name doesn't appear at all, skip
+    if !line.contains(var) { return false; }
+    has_assign_with_patterns_inline(line, var)
+}
+
+fn has_assign_with_patterns_inline(line: &str, var: &str) -> bool {
     let ops = [" = ", " += ", " -= ", " *= ", " /= "];
     for op in &ops {
-        let pat = format!("{}{}", var, op);
-        if let Some(pos) = line.find(&pat) {
-            if !is_word_start(line, pos) { continue; }
-            if *op == " = " && pos + pat.len() < line.len() && line.as_bytes()[pos + pat.len()] == b'=' { continue; }
+        // Inline pattern check without format! allocation
+        if let Some(pos) = find_var_op(line, var, op) {
+            if *op == " = " && pos + var.len() + op.len() < line.len()
+                && line.as_bytes()[pos + var.len() + op.len()] == b'=' { continue; }
             return true;
         }
-        // Check property/index access: var.prop = , var[idx] = , var.prop[idx].etc =
-        for prefix in &[format!("{}.", var), format!("{}[", var)] {
-            for (pos, _) in line.match_indices(prefix.as_str()) {
-                if !is_word_start(line, pos) { continue; }
-                let rest = &line[pos + prefix.len()..];
-                // Skip initial property name (after .) or index expression (after [)
-                let mut r = if prefix.ends_with('.') {
-                    let end = rest.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(rest.len());
-                    &rest[end..]
-                } else {
-                    // After [, find matching ]
-                    rest.find(']').map(|p| &rest[p+1..]).unwrap_or("")
-                };
-                // Follow chained property/index access
-                loop {
-                    if r.starts_with('[') {
-                        if let Some(close) = r.find(']') { r = &r[close+1..]; } else { break; }
-                    } else if r.starts_with('.') {
-                        let end = r[1..].find(|c: char| !c.is_alphanumeric() && c != '_').map(|e| e+1).unwrap_or(r.len());
-                        r = &r[end..];
-                    } else {
-                        break;
-                    }
-                }
-                let r = r.trim_start();
-                for op2 in &ops {
-                    if r.starts_with(op2.trim()) {
-                        if *op2 == " = " && r.len() > 1 && r.as_bytes()[1] == b'=' { continue; }
-                        return true;
-                    }
+    }
+    // Check property/index access
+    has_member_assign(line, var, &ops)
+}
+
+/// Fast check for `var` + `op` at a word boundary, without allocation.
+fn find_var_op(line: &str, var: &str, op: &str) -> Option<usize> {
+    let mut start = 0;
+    while let Some(pos) = line[start..].find(var) {
+        let abs = start + pos;
+        if is_word_start(line, abs) {
+            let after = abs + var.len();
+            if line[after..].starts_with(op) {
+                return Some(abs);
+            }
+        }
+        start = abs + 1;
+    }
+    None
+}
+
+fn has_member_assign(line: &str, var: &str, ops: &[&str]) -> bool {
+    for &sep in &[".", "["] {
+        let mut start = 0;
+        let prefix_len = var.len() + sep.len();
+        while start + prefix_len <= line.len() {
+            let pos = match line[start..].find(var) {
+                Some(p) => start + p,
+                None => break,
+            };
+            if !is_word_start(line, pos) { start = pos + 1; continue; }
+            let after_var = pos + var.len();
+            if !line[after_var..].starts_with(sep) { start = pos + 1; continue; }
+
+            let rest = &line[after_var + sep.len()..];
+            let mut r = if sep == "." {
+                let end = rest.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(rest.len());
+                &rest[end..]
+            } else {
+                rest.find(']').map(|p| &rest[p+1..]).unwrap_or("")
+            };
+            loop {
+                if r.starts_with('[') {
+                    if let Some(close) = r.find(']') { r = &r[close+1..]; } else { break; }
+                } else if r.starts_with('.') {
+                    let end = r[1..].find(|c: char| !c.is_alphanumeric() && c != '_').map(|e| e+1).unwrap_or(r.len());
+                    r = &r[end..];
+                } else { break; }
+            }
+            let r = r.trim_start();
+            for op in ops {
+                if r.starts_with(op.trim()) {
+                    if *op == " = " && r.len() > 1 && r.as_bytes()[1] == b'=' { continue; }
+                    return true;
                 }
             }
+            start = pos + 1;
         }
     }
     false
