@@ -21,7 +21,7 @@ jobs:
             npm-pkg: cli-darwin-arm64
             bin: oxvelte
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-latest
             npm-pkg: cli-darwin-x64
             bin: oxvelte
           - target: x86_64-unknown-linux-gnu
