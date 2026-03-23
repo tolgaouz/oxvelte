@@ -39,6 +39,8 @@ This project follows the [autoresearch](https://github.com/karpathy/autoresearch
 
 The parity program ran until oxvelte matched eslint-plugin-svelte's output on all 4 repos. The performance program then optimized until p95 latency hit the targets. Every commit in `src/` was authored by the agent.
 
+The agent scaffolding (`program.md`, test fixtures, benchmark scripts) lives on the [`autoresearch`](../../tree/autoresearch) branch. If you want to point an LLM agent at this repo to improve it, check out that branch.
+
 ## Quick start
 
 ```bash
@@ -76,15 +78,13 @@ These rules add latency with zero incremental value — your build step already 
 ## Project structure
 
 ```
-program.md              human-written spec for the agent
-src/                    all Rust code (agent-written)
+src/                    all Rust code
   main.rs               CLI entry point
   parser/               Svelte template parser
   linter/rules/         lint rules (one file per rule)
   ast.rs                Svelte AST types
-fixtures/               test data from eslint-plugin-svelte
-vendor/                 reference repos (git-ignored)
-testbeds/               real-world repos for benchmarking (git-ignored)
+Cargo.toml              dependencies
+README.md               you are here
 ```
 
 ## License
