@@ -3,8 +3,11 @@ name = "oxvelte"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "A fast Svelte linter written in Rust, powered by oxc"
+description = "A fast Svelte linter written in Rust — drop-in replacement for eslint-plugin-svelte, 4-25x faster"
 repository = "https://github.com/user/oxvelte"
+homepage = "https://github.com/user/oxvelte"
+keywords = ["svelte", "linter", "lint", "eslint", "oxc"]
+categories = ["development-tools", "command-line-utilities"]
 
 [lib]
 name = "oxvelte"

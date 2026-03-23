@@ -41,20 +41,36 @@ The parity program ran until oxvelte matched eslint-plugin-svelte's output on al
 
 The agent scaffolding (`program.md`, test fixtures, benchmark scripts) lives on the [`autoresearch`](../../tree/autoresearch) branch. If you want to point an LLM agent at this repo to improve it, check out that branch.
 
-## Quick start
+## Install
 
 ```bash
-# Build
-cargo build --release
+npm install oxvelte --save-dev
+```
 
-# Lint a file
-./target/release/oxvelte lint path/to/Component.svelte
+Then add to your `package.json` scripts:
 
-# Lint a directory (parallel, recursive)
-./target/release/oxvelte lint src/
+```json
+{
+  "scripts": {
+    "lint:svelte": "oxvelte lint src/"
+  }
+}
+```
 
-# JSON output
-./target/release/oxvelte lint --json src/
+Or run directly:
+
+```bash
+npx oxvelte lint src/
+npx oxvelte lint --json src/
+npx oxvelte lint --fix src/
+```
+
+### From source
+
+```bash
+cargo install oxvelte
+# or
+cargo build --release && ./target/release/oxvelte lint src/
 ```
 
 ## What's implemented
