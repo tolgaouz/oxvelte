@@ -21,6 +21,14 @@ Tested against 4 real-world Svelte codebases (3,428 files total):
 
 **Zero false positives. Zero false negatives.** The only differences are `no-unused-svelte-ignore` (requires the Svelte compiler) and one ESLint false positive on `{'{{'}`.
 
+## Training curve
+
+<p align="center">
+  <img src="assets/loss-curve.svg" alt="Tests passing over 234 agent iterations" width="700">
+</p>
+
+234 autonomous iterations. 39 tests passing at the start, 1,401 at the end. Each commit was made by the agent after verifying tests pass and benchmarks improve.
+
 ## How it was built
 
 This project follows the [autoresearch](https://github.com/karpathy/autoresearch) pattern:
