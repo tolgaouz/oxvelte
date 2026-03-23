@@ -1,6 +1,6 @@
 [package]
 name = "oxvelte"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 description = "A fast Svelte linter written in Rust — drop-in replacement for eslint-plugin-svelte, 4-25x faster"
