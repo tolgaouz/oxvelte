@@ -64,6 +64,15 @@ cargo build --release
 - **eslint-disable** / **svelte-ignore** comment directives
 - **Auto-fix** support for fixable rules (`--fix`)
 
+### Intentionally excluded rules
+
+A few eslint-plugin-svelte rules are **not** implemented by design:
+
+- **`valid-compile`** — this rule *is* the Svelte compiler. Running it in a linter means invoking the full compiler on every file, which defeats the purpose of a fast native tool. Svelte already reports these errors at build time.
+- **`no-unused-svelte-ignore`** — requires the Svelte compiler to know which diagnostics were actually suppressed. Again, Svelte itself warns about this at build time.
+
+These rules add latency with zero incremental value — your build step already catches them.
+
 ## Project structure
 
 ```
