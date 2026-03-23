@@ -66,38 +66,40 @@ fn main() -> ExitCode {
 }
 
 fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool) -> ExitCode {
-    let lint = if all_rules { linter::Linter::all() } else { linter::Linter::recommended() };
-    let mut total_diags = 0u32;
-    let mut total_files = 0u32;
-    let mut json_results = Vec::new();
+    use rayon::prelude::*;
 
-    for path in collect_svelte_files(paths) {
-        let source = match std::fs::read_to_string(&path) {
-            Ok(s) => s,
-            Err(e) => { eprintln!("Error reading {}: {}", path.display(), e); continue; }
-        };
+    let lint = if all_rules { linter::Linter::all() } else { linter::Linter::recommended() };
+    let files = collect_svelte_files(paths);
+
+    // Process files in parallel: read → parse → lint → format diagnostics
+    let file_results: Vec<Vec<serde_json::Value>> = files.par_iter().filter_map(|path| {
+        let source = std::fs::read_to_string(path).ok()?;
         let result = parser::parse(&source);
         let diags = lint.lint(&result.ast, &source);
-        total_files += 1;
-        for d in &diags {
-            total_diags += 1;
+        if diags.is_empty() { return None; }
+        let path_str = path.display().to_string();
+        let entries: Vec<serde_json::Value> = diags.iter().map(|d| {
             let (line, col) = offset_to_line_col(&source, d.span.start as usize);
             let (end_line, end_col) = offset_to_line_col(&source, d.span.end as usize);
-            if json_output {
-                json_results.push(serde_json::json!({
-                    "file": path.display().to_string(),
-                    "rule": &d.rule_name,
-                    "message": &d.message,
-                    "line": line,
-                    "column": col,
-                    "endLine": end_line,
-                    "endColumn": end_col,
-                }));
-            } else {
-                eprintln!("{}:{}:{}: {} [{}]", path.display(), line, col, d.message, d.rule_name);
+            if !json_output {
+                eprintln!("{}:{}:{}: {} [{}]", path_str, line, col, d.message, d.rule_name);
             }
-        }
-    }
+            serde_json::json!({
+                "file": &path_str,
+                "rule": &d.rule_name,
+                "message": &d.message,
+                "line": line,
+                "column": col,
+                "endLine": end_line,
+                "endColumn": end_col,
+            })
+        }).collect();
+        Some(entries)
+    }).collect();
+
+    let json_results: Vec<serde_json::Value> = file_results.into_iter().flatten().collect();
+    let total_diags = json_results.len();
+    let total_files = files.len();
 
     if json_output {
         println!("{}", serde_json::to_string_pretty(&json_results).unwrap_or_default());
