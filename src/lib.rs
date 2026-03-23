@@ -85,7 +85,8 @@ mod linter_fixture_tests {
     fn run_linter_valid(rule_name: &str) {
         let valid_dir = format!("fixtures/linter/{}/valid", rule_name);
         let lint = Linter::all();
-        for path in collect_fixture_files(&valid_dir) {
+        let files = collect_fixture_files(&valid_dir);
+        for path in files {
             let fname = path.file_name().unwrap().to_string_lossy().to_string();
             let source = std::fs::read_to_string(&path).unwrap();
             let result = parser::parse(&source);
@@ -102,7 +103,8 @@ mod linter_fixture_tests {
     fn run_linter_invalid(rule_name: &str) {
         let invalid_dir = format!("fixtures/linter/{}/invalid", rule_name);
         let lint = Linter::all();
-        for path in collect_fixture_files(&invalid_dir) {
+        let files = collect_fixture_files(&invalid_dir);
+        for path in files {
             let fname = path.file_name().unwrap().to_string_lossy().to_string();
             let source = std::fs::read_to_string(&path).unwrap();
             let result = parser::parse(&source);
