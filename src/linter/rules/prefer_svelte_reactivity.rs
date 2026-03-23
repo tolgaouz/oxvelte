@@ -87,7 +87,81 @@ impl Rule for PreferSvelteReactivity {
             }
 
             let new_pat = format!("new {}(", builtin.name);
-            for (offset, _) in content.match_indices(&new_pat) {
+            let new_pat_generic = format!("new {}<", builtin.name);
+            // Collect all offsets where `new ClassName(` or `new ClassName<...>(` appears
+            let offsets: Vec<usize> = content.match_indices(&new_pat)
+                .map(|(off, _)| off)
+                .chain(
+                    content.match_indices(&new_pat_generic)
+                        .filter_map(|(off, _)| {
+                            // Find matching > then (
+                            let rest = &content[off + new_pat_generic.len()..];
+                            let mut depth = 1i32;
+                            for (i, ch) in rest.char_indices() {
+                                match ch {
+                                    '<' => depth += 1,
+                                    '>' => { depth -= 1; if depth == 0 {
+                                        let after = &rest[i+1..];
+                                        if after.starts_with('(') { return Some(off); }
+                                        return None;
+                                    }}
+                                    _ => {}
+                                }
+                            }
+                            None
+                        })
+                )
+                .collect();
+            for offset in offsets {
+                // Skip if inside a function/callback body (brace depth > 0)
+                // Use a proper scanner that skips strings, template literals, and comments
+                let brace_depth = {
+                    let bytes = content[..offset].as_bytes();
+                    let mut d = 0i32;
+                    let mut j = 0;
+                    while j < bytes.len() {
+                        match bytes[j] {
+                            b'\'' | b'"' => {
+                                let q = bytes[j];
+                                j += 1;
+                                while j < bytes.len() {
+                                    if bytes[j] == b'\\' { j += 1; }
+                                    else if bytes[j] == q { break; }
+                                    j += 1;
+                                }
+                            }
+                            b'`' => {
+                                j += 1;
+                                let mut td = 0i32;
+                                while j < bytes.len() {
+                                    if bytes[j] == b'\\' { j += 1; }
+                                    else if bytes[j] == b'`' && td == 0 { break; }
+                                    else if bytes[j] == b'$' && j + 1 < bytes.len() && bytes[j + 1] == b'{' { j += 1; td += 1; }
+                                    else if bytes[j] == b'{' { td += 1; }
+                                    else if bytes[j] == b'}' { td -= 1; }
+                                    j += 1;
+                                }
+                            }
+                            b'/' if j + 1 < bytes.len() && bytes[j + 1] == b'/' => {
+                                while j < bytes.len() && bytes[j] != b'\n' { j += 1; }
+                            }
+                            b'/' if j + 1 < bytes.len() && bytes[j + 1] == b'*' => {
+                                j += 2;
+                                while j + 1 < bytes.len() && !(bytes[j] == b'*' && bytes[j + 1] == b'/') { j += 1; }
+                                if j + 1 < bytes.len() { j += 1; }
+                            }
+                            b'{' => d += 1,
+                            b'}' => d -= 1,
+                            _ => {}
+                        }
+                        j += 1;
+                    }
+                    d
+                };
+                if brace_depth > 0 {
+                    continue;
+                }
+
                 // Get the variable name this is assigned to
                 let line_start = content[..offset].rfind('\n').map(|p| p + 1).unwrap_or(0);
                 let line = &content[line_start..content[offset..].find('\n').map(|p| offset + p).unwrap_or(content.len())];
@@ -143,16 +217,24 @@ fn collect_shadowed_classes(content: &str) -> Vec<String> {
 }
 
 /// Extract variable name from a line like `const variable = new ClassName(...)`.
+/// Handles TypeScript annotations like `let x: Set<number> = new Set()`.
 fn extract_var_name(line: &str, class_name: &str) -> Option<String> {
     let t = line.trim();
-    // Pattern: `const/let/var NAME = new ClassName(`
+    // Pattern: `const/let/var NAME[: Type] = new ClassName(` or `new ClassName<...>(`
     for kw in &["const ", "let ", "var "] {
         if let Some(rest) = t.strip_prefix(kw) {
             if let Some(eq_pos) = rest.find(" = ") {
-                let name = rest[..eq_pos].trim();
+                let name_part = rest[..eq_pos].trim();
+                // Strip TypeScript type annotation: `name: Type` -> `name`
+                let name = if let Some(colon_pos) = name_part.find(':') {
+                    name_part[..colon_pos].trim()
+                } else {
+                    name_part
+                };
                 let after_eq = rest[eq_pos + 3..].trim();
                 let new_pat = format!("new {}(", class_name);
-                if after_eq.starts_with(&new_pat) {
+                let new_pat_generic = format!("new {}<", class_name);
+                if after_eq.starts_with(&new_pat) || after_eq.starts_with(&new_pat_generic) {
                     return Some(name.to_string());
                 }
             }

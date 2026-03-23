@@ -38,10 +38,11 @@ impl Rule for NoReactiveReassign {
 
             for line in content.lines() {
                 let trimmed = line.trim();
-                // Collect let/var/const declarations
+                // Collect let/var/const declarations (including export let/var/const)
+                let decl_trimmed = trimmed.strip_prefix("export ").unwrap_or(trimmed);
                 for kw in &["let ", "var ", "const "] {
-                    if trimmed.starts_with(kw) {
-                        let rest = &trimmed[kw.len()..];
+                    if decl_trimmed.starts_with(kw) {
+                        let rest = &decl_trimmed[kw.len()..];
                         let name_end = rest.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
                             .unwrap_or(rest.len());
                         if name_end > 0 {

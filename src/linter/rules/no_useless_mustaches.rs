@@ -41,7 +41,11 @@ impl Rule for NoUselessMustaches {
             // Check attribute-level mustache expressions
             if let TemplateNode::Element(el) = node {
                 for attr in &el.attributes {
-                    if let Attribute::NormalAttribute { value, span, .. } = attr {
+                    if let Attribute::NormalAttribute { value, span, name, .. } = attr {
+                        // Skip `this` attribute on `svelte:element` — mustaches are required there
+                        if name == "this" && el.name.starts_with("svelte:") {
+                            continue;
+                        }
                         match value {
                             AttributeValue::Expression(expr) => {
                                 check_expression(expr, *span, ctx, ignore_includes_comment, ignore_string_escape);

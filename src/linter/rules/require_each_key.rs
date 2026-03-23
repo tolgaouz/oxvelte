@@ -19,14 +19,15 @@ impl Rule for RequireEachKey {
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::EachBlock(block) = node {
                 if block.key.is_none() {
-                    // Skip Svelte 5 object literal expressions like { length: N }
-                    // which represent fixed-length ranges and don't need keys.
-                    let expr = block.expression.trim();
-                    // Direct object literal: { length: 8 }
-                    if expr.starts_with('{') && expr.ends_with('}') {
+                    // Skip if no context variable (Svelte 5 comma syntax with only index)
+                    if block.context.trim().is_empty() {
                         return;
                     }
-                    // Svelte 5 comma syntax: { length: 8 }, rank — expression includes the context
+                    // Skip Svelte 5 object literal expressions like { length: N }
+                    // but only when there's no `as` context (Svelte 5 comma syntax).
+                    // When `as` is used (context is non-empty), object literals like
+                    // `{ length: 20 } as _` should still be flagged.
+                    let expr = block.expression.trim();
                     if expr.starts_with('{') {
                         // Find the matching closing brace
                         let mut depth = 0i32;
@@ -37,7 +38,6 @@ impl Rule for RequireEachKey {
                                 '}' => {
                                     depth -= 1;
                                     if depth == 0 {
-                                        // Check if rest is just ", identifier" (Svelte 5 context)
                                         let rest = expr[i+1..].trim();
                                         if rest.is_empty() || rest.starts_with(',') {
                                             is_obj = true;
