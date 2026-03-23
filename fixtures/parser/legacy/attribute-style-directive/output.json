@@ -1,0 +1,60 @@
+{
+	"html": {
+		"type": "Fragment",
+		"start": 0,
+		"end": 33,
+		"children": [
+			{
+				"type": "Element",
+				"start": 0,
+				"end": 33,
+				"name": "div",
+				"attributes": [
+					{
+						"start": 5,
+						"end": 26,
+						"type": "StyleDirective",
+						"name": "color",
+						"name_loc": {
+							"start": {
+								"line": 1,
+								"column": 5,
+								"character": 5
+							},
+							"end": {
+								"line": 1,
+								"column": 16,
+								"character": 16
+							}
+						},
+						"modifiers": [],
+						"value": [
+							{
+								"type": "MustacheTag",
+								"start": 17,
+								"end": 26,
+								"expression": {
+									"type": "Identifier",
+									"start": 18,
+									"end": 25,
+									"loc": {
+										"start": {
+											"line": 1,
+											"column": 18
+										},
+										"end": {
+											"line": 1,
+											"column": 25
+										}
+									},
+									"name": "myColor"
+								}
+							}
+						]
+					}
+				],
+				"children": []
+			}
+		]
+	}
+}

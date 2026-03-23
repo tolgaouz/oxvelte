@@ -14,11 +14,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Run tests (skip fixture tests if fixtures not present)
-        run: |
-          if [ -d "fixtures" ]; then
-            cargo test --lib
-          else
-            cargo test --lib -- --skip linter_fixture_tests --skip parser_fixture_tests
-          fi
+      - run: cargo test --lib
       - run: cargo build --release
