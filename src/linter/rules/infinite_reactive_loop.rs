@@ -41,6 +41,8 @@ fn collect_top_level_vars(content: &str) -> Vec<String> {
     let mut vars = Vec::new();
     for line in content.lines() {
         let t = line.trim();
+        // Handle `export let` and `export var` in addition to `let` and `var`
+        let t = t.strip_prefix("export ").unwrap_or(t);
         for kw in &["let ", "var "] {
             if let Some(rest) = t.strip_prefix(kw) {
                 let name: String = rest.chars()
@@ -107,14 +109,34 @@ fn collect_aliases(content: &str) -> Vec<(String, String)> {
     aliases
 }
 
-struct FuncInfo { name: String, assigns: Vec<String> }
+struct FuncInfo {
+    name: String,
+    assigns: Vec<String>,
+    has_await: bool,
+    assigns_after_await: Vec<String>,
+    /// Byte positions of assignment lines after await (relative to content start)
+    assign_positions_after_await: Vec<(String, usize)>, // (var_name, content_offset)
+}
 
 fn collect_func_info(content: &str, top_vars: &[String]) -> Vec<FuncInfo> {
     let mut results = Vec::new();
     let lines: Vec<&str> = content.lines().collect();
+
+    // Pre-compute brace depth at the start of each line (to filter out nested functions)
+    let mut line_depths = Vec::with_capacity(lines.len());
+    let mut depth = 0i32;
+    for &line in &lines {
+        line_depths.push(depth);
+        for ch in line.chars() {
+            match ch { '{' => depth += 1, '}' => depth -= 1, _ => {} }
+        }
+    }
+
     let mut i = 0;
     while i < lines.len() {
         let t = lines[i].trim();
+        // Only collect top-level functions (brace depth 0)
+        if line_depths[i] > 0 { i += 1; continue; }
         if let Some(name) = extract_func_name(t) {
             let mut depth = 0i32;
             let mut body = String::new();
@@ -131,11 +153,63 @@ fn collect_func_info(content: &str, top_vars: &[String]) -> Vec<FuncInfo> {
             let assigns: Vec<String> = top_vars.iter()
                 .filter(|v| body.lines().any(|l| has_assign(l.trim(), v)))
                 .cloned().collect();
-            results.push(FuncInfo { name, assigns });
+
+            // Check if function has await and which vars are assigned after it
+            let has_await = body.contains("await ");
+            let (assigns_after_await, assign_positions_after_await) = if has_await {
+                // Calculate the content offset where this function body starts
+                let func_content_offset: usize = lines[..i].iter().map(|l| l.len() + 1).sum();
+                collect_assigns_after_await_with_positions(&body, top_vars, func_content_offset)
+            } else {
+                (Vec::new(), Vec::new())
+            };
+
+            results.push(FuncInfo { name, assigns, has_await, assigns_after_await, assign_positions_after_await });
         }
         i += 1;
     }
     results
+}
+
+/// Collect variables assigned after an `await` in a function body.
+/// Also returns (var_name, content_offset) pairs for each assignment.
+fn collect_assigns_after_await_with_positions(
+    body: &str, top_vars: &[String], body_content_offset: usize,
+) -> (Vec<String>, Vec<(String, usize)>) {
+    let mut result = Vec::new();
+    let mut positions = Vec::new();
+    let mut seen_await = false;
+    let mut line_offset = 0usize;
+    for line in body.lines() {
+        let t = line.trim();
+        let indent = line.len() - t.len();
+        if t.contains("await ") {
+            for var in top_vars {
+                let ops = [
+                    format!("{} = await ", var),
+                    format!("{} += await ", var),
+                    format!("{} -= await ", var),
+                ];
+                if ops.iter().any(|pat| t.contains(pat.as_str())) && !result.contains(var) {
+                    result.push(var.clone());
+                    positions.push((var.clone(), body_content_offset + line_offset + indent));
+                }
+            }
+            seen_await = true;
+            line_offset += line.len() + 1;
+            continue;
+        }
+        if seen_await {
+            for var in top_vars {
+                if has_assign(t, var) && !result.contains(var) {
+                    result.push(var.clone());
+                    positions.push((var.clone(), body_content_offset + line_offset + indent));
+                }
+            }
+        }
+        line_offset += line.len() + 1;
+    }
+    (result, positions)
 }
 
 fn extract_func_name(line: &str) -> Option<String> {
@@ -152,6 +226,21 @@ fn extract_func_name(line: &str) -> Option<String> {
     if let Some(rest) = line.strip_prefix("function ") {
         let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
         if !name.is_empty() { return Some(name); }
+    }
+    if let Some(rest) = line.strip_prefix("async function ") {
+        let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+        if !name.is_empty() { return Some(name); }
+    }
+    // Also handle `let name = async ...` and `let name = (...) => { ... }`
+    if let Some(rest) = line.strip_prefix("let ") {
+        if let Some(eq) = rest.find(" = ") {
+            let name = &rest[..eq];
+            let after = rest[eq+3..].trim();
+            if after.contains("=>") || after.starts_with("function")
+                || after.starts_with("async") || after.starts_with("(") {
+                return Some(name.to_string());
+            }
+        }
     }
     None
 }
@@ -270,6 +359,7 @@ fn find_matching_brace(content: &str, start: usize) -> usize {
 
 fn find_stmt_end(content: &str, dollar: usize) -> usize {
     let mut pdepth = 0i32;
+    let mut bdepth = 0i32;
     let mut in_str = false;
     let mut sch = '"';
     let mut has_c = false;
@@ -281,10 +371,19 @@ fn find_stmt_end(content: &str, dollar: usize) -> usize {
         }
         match ch {
             '\'' | '"' | '`' => { in_str = true; sch = ch; has_c = true; }
+            '{' => { bdepth += 1; has_c = true; }
+            '}' => {
+                bdepth -= 1;
+                // If we close the outermost brace (for if/else/for/while blocks),
+                // the statement ends after the closing brace
+                if bdepth <= 0 && has_c {
+                    return abs + 1;
+                }
+            }
             '(' => { pdepth += 1; has_c = true; }
             ')' => {
                 pdepth -= 1;
-                if pdepth <= 0 && has_c {
+                if pdepth <= 0 && bdepth <= 0 && has_c {
                     let rest = &content[abs + 1..];
                     let nt = rest.trim_start_matches(|c: char| c == ' ' || c == '\t');
                     if nt.starts_with(';') || nt.starts_with('\n') || nt.is_empty() {
@@ -292,12 +391,28 @@ fn find_stmt_end(content: &str, dollar: usize) -> usize {
                     }
                 }
             }
-            ';' if pdepth <= 0 && has_c => return abs + 1,
+            ';' if pdepth <= 0 && bdepth <= 0 && has_c => return abs + 1,
             _ if !ch.is_whitespace() => has_c = true,
             _ => {}
         }
     }
     content.len()
+}
+
+/// Check if a variable name appears anywhere in the block (read or write) with word boundaries.
+fn block_has_var_ref(block: &str, var: &str) -> bool {
+    for (pos, _) in block.match_indices(var) {
+        if is_word_start(block, pos) {
+            let after = pos + var.len();
+            if after >= block.len() || {
+                let b = block.as_bytes()[after];
+                !b.is_ascii_alphanumeric() && b != b'_' && b != b'$'
+            } {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Check if a block reads a variable (not just assigns to it).
@@ -447,6 +562,63 @@ fn has_await_on_prev_line(block: &str, line_start_pos: usize) -> bool {
     found_await_at_depth
 }
 
+/// Find byte ranges of .then() and .catch() callback bodies in the block.
+/// Returns Vec<(body_start, body_end)> where body is the content of the callback.
+fn find_then_catch_regions(block: &str) -> Vec<(usize, usize)> {
+    let mut regions = Vec::new();
+    let bytes = block.as_bytes();
+
+    // Find all `.then(` and `.catch(` positions
+    for pattern in &[".then(", ".catch("] {
+        let mut search = 0;
+        while let Some(pos) = block[search..].find(pattern) {
+            let abs = search + pos;
+            let after = abs + pattern.len();
+
+            // Find the callback body: skip to the `{` of the arrow/function body
+            // Track parens to find the callback argument
+            let mut i = after;
+            let mut paren_depth = 1i32;
+            let mut body_start = None;
+            let mut body_end = None;
+
+            while i < bytes.len() && paren_depth > 0 {
+                match bytes[i] {
+                    b'\'' | b'"' | b'`' => {
+                        let q = bytes[i];
+                        i += 1;
+                        while i < bytes.len() {
+                            if bytes[i] == b'\\' { i += 1; }
+                            else if bytes[i] == q { break; }
+                            i += 1;
+                        }
+                    }
+                    b'(' => paren_depth += 1,
+                    b')' => {
+                        paren_depth -= 1;
+                        if paren_depth == 0 && body_start.is_some() && body_end.is_none() {
+                            body_end = Some(i);
+                        }
+                    }
+                    b'{' if body_start.is_none() && paren_depth >= 1 => {
+                        body_start = Some(i);
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+
+            if let (Some(bs), Some(be)) = (body_start, body_end) {
+                regions.push((bs, be));
+            }
+
+            search = abs + pattern.len();
+        }
+    }
+
+    regions
+}
+
 fn analyze_block(
     ctx: &mut LintContext,
     block: &str,
@@ -489,6 +661,9 @@ fn analyze_block(
         })
         .collect();
 
+    // Pre-compute .then()/.catch() callback regions in the block
+    let async_callback_regions = find_then_catch_regions(block);
+
     let lines: Vec<&str> = block.lines().collect();
     let mut line_offsets = Vec::new();
     let mut off = 0usize;
@@ -503,7 +678,9 @@ fn analyze_block(
         // Determine if this line is in an async context
         let in_callback = is_in_async_callback(block, line_byte_start, &all_triggers);
         let after_await = has_await_on_prev_line(block, line_byte_start);
-        let in_async_ctx = in_callback || after_await;
+        let in_then_catch = async_callback_regions.iter()
+            .any(|&(start, end)| line_byte_start >= start && line_byte_start < end);
+        let in_async_ctx = in_callback || after_await || in_then_catch;
 
         if in_async_ctx {
             // Report direct assignments to reactive vars
@@ -535,6 +712,52 @@ fn analyze_block(
                             format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", av),
                             Span::new(abs as u32, abs as u32 + 1),
                         );
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Check for calls to async functions that assign reactive vars after await
+        if !in_async_ctx {
+            for fi in func_info {
+                if !fi.has_await { continue; }
+                if fi.assigns_after_await.is_empty() { continue; }
+                if local_names.contains(&fi.name) { continue; }
+                let call_pat = format!("{}(", fi.name);
+                if !t.contains(&call_pat) { continue; }
+                // Word boundary check
+                if let Some(cp) = t.find(&call_pat) {
+                    if cp > 0 {
+                        let prev = t.as_bytes()[cp - 1];
+                        if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' { continue; }
+                    }
+                }
+
+                // Report call site AND assignment sites inside the function
+                let mut reported = false;
+                for av in &fi.assigns_after_await {
+                    if block_has_var_ref(block, av) {
+                        if !reported {
+                            let indent = line.len() - t.len();
+                            let call_col = t.find(&call_pat).unwrap_or(0);
+                            let abs = base + block_start + line_offsets[idx] + indent + call_col;
+                            ctx.diagnostic(
+                                format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", av),
+                                Span::new(abs as u32, abs as u32 + 1),
+                            );
+                            reported = true;
+                        }
+                        // Also report at the assignment site inside the function body
+                        for (pos_var, pos_offset) in &fi.assign_positions_after_await {
+                            if pos_var == av {
+                                let abs = base + pos_offset;
+                                ctx.diagnostic(
+                                    "Possibly it may occur an infinite reactive loop.",
+                                    Span::new(abs as u32, abs as u32 + 1),
+                                );
+                            }
+                        }
                         break;
                     }
                 }
