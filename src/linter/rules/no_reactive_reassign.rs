@@ -199,12 +199,26 @@ impl Rule for NoReactiveReassign {
                         if line.starts_with("$:") { continue; }
 
                         let after = &content[pos + pattern_base.len()..];
-                        let rest = if pattern_base.ends_with('[') {
+                        // Consume initial member access, then follow chained .prop and [idx]
+                        let mut rest = if pattern_base.ends_with('[') {
                             after.find(']').map(|p| &after[p+1..]).unwrap_or("")
                         } else {
                             let end = after.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(after.len());
                             &after[end..]
                         };
+                        // Follow chained property/index access: .prop, [idx], ?.prop
+                        loop {
+                            if rest.starts_with('.') || rest.starts_with("?.") {
+                                let skip = if rest.starts_with("?.") { 2 } else { 1 };
+                                let r = &rest[skip..];
+                                let end = r.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(r.len());
+                                rest = &r[end..];
+                            } else if rest.starts_with('[') {
+                                rest = rest[1..].find(']').map(|p| &rest[p+2..]).unwrap_or("");
+                            } else {
+                                break;
+                            }
+                        }
                         let rest = rest.trim_start();
                         if rest.starts_with('=') && !rest.starts_with("==") {
                             let source_pos = content_offset + pos;

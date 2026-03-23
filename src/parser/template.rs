@@ -367,12 +367,64 @@ impl<'a> TemplateParser<'a> {
                     depth -= 1;
                 }
                 b'\'' | b'"' | b'`' => { self.skip_string_literal(bytes[self.pos])?; continue; }
+                b'/' if self.pos + 1 < self.source.len() && self.is_comment_start(start) => {
+                    match bytes[self.pos + 1] {
+                        b'/' => {
+                            // Line comment: skip to end of line
+                            self.pos += 2;
+                            while self.pos < self.source.len() && bytes[self.pos] != b'\n' {
+                                self.pos += 1;
+                            }
+                            continue;
+                        }
+                        b'*' => {
+                            // Block comment: skip to */
+                            self.pos += 2;
+                            while self.pos + 1 < self.source.len() {
+                                if bytes[self.pos] == b'*' && bytes[self.pos + 1] == b'/' {
+                                    self.pos += 2;
+                                    break;
+                                }
+                                self.pos += 1;
+                            }
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
                 _ => {}
             }
             self.pos += 1;
         }
 
         Ok(self.source[start..self.pos].to_string())
+    }
+
+    /// Check whether `//` or `/*` at `self.pos` is a JS comment rather than
+    /// part of a regex or division.  Uses a simple heuristic: `//` is a comment
+    /// if everything from the start of the current line to `self.pos` is only
+    /// whitespace (i.e. the `//` is the first non-whitespace on this line), OR
+    /// if the preceding non-whitespace character on the same line is clearly an
+    /// operator/statement terminator (`;`, `{`, `}`).  For `/*`, the same
+    /// heuristic is used.
+    fn is_comment_start(&self, _expr_start: usize) -> bool {
+        let bytes = self.source.as_bytes();
+        let mut i = self.pos;
+        while i > 0 {
+            i -= 1;
+            let ch = bytes[i];
+            if ch == b'\n' {
+                // Reached start of line — everything before // was whitespace
+                return true;
+            }
+            if ch.is_ascii_whitespace() {
+                continue;
+            }
+            // Previous non-whitespace on this line
+            return matches!(ch, b';' | b'{' | b'}');
+        }
+        // At start of source
+        true
     }
 
     /// Skip a string literal (handles escaped quotes).
