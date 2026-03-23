@@ -15,7 +15,7 @@ Tested against 4 real-world Svelte codebases (3,428 files total):
 | Repo | Files | eslint-plugin-svelte | oxvelte | Speedup | Parity |
 |------|------:|---------------------:|--------:|--------:|--------|
 | [shadcn-svelte](https://github.com/huntabyte/shadcn-svelte) | 1,603 | 136ms | **34ms** | **4x** | 0/0 exact |
-| [open-webui](https://github.com/open-webui/open-webui) | 549 | 3,702ms | **267ms** | **14x** | 7/9 rules exact |
+| [open-webui](https://github.com/open-webui/open-webui) | 549 | 3,702ms | **267ms** | **14x** | 7/9 rules exact (compile related rules excluded) |
 | [immich](https://github.com/immich-app/immich) | 400 | 492ms | **20ms** | **25x** | 0/0 exact |
 | [sveltejs/kit](https://github.com/sveltejs/kit) | 876 | 45ms | **33ms** | **1.4x** | 3/3 rules exact |
 
@@ -71,6 +71,55 @@ npx oxvelte lint --fix src/
 cargo install oxvelte
 # or
 cargo build --release && ./target/release/oxvelte lint src/
+```
+
+## Configuration
+
+### Migrating from ESLint
+
+If you have an existing eslint-plugin-svelte config, oxvelte can convert it automatically:
+
+```bash
+# Print the converted config to stdout
+npx oxvelte migrate .eslintrc.json
+
+# Or write directly to oxvelte.config.json
+npx oxvelte migrate eslint.config.js --write
+```
+
+This reads your ESLint config, extracts all `svelte/*` rule settings, and outputs the equivalent `oxvelte.config.json`.
+
+### Config file
+
+Create `oxvelte.config.json` in your project root:
+
+```json
+{
+  "rules": {
+    "svelte/no-at-html-tags": "error",
+    "svelte/button-has-type": ["warn", { "button": false }],
+    "svelte/indent": "off"
+  },
+  "settings": {
+    "svelte": {
+      "kit": {
+        "files": { "routes": "src/routes" }
+      }
+    }
+  }
+}
+```
+
+**Rules** use the same names and options as eslint-plugin-svelte. Severity can be `"off"`, `"warn"`, or `"error"` (or `0`, `1`, `2`). Options are passed as the second element of a tuple: `["error", { ...options }]`.
+
+**Settings** configure framework-specific behavior. The `svelte.kit.files.routes` setting tells SvelteKit-aware rules where your route files live.
+
+Without a config file, oxvelte runs the **recommended** ruleset (same as eslint-plugin-svelte's `flat/recommended`).
+
+### List available rules
+
+```bash
+npx oxvelte rules
 ```
 
 ## What's implemented
