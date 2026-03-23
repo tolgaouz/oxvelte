@@ -1,199 +1,195 @@
-# Oxvelte — Parity Program
+# Oxvelte — Performance Program
 
-> Eliminate every discrepancy between oxvelte and eslint-plugin-svelte on real-world
-> Svelte codebases. The agent iterates until both linters produce identical diagnostics.
+> Minimize p95 lint time on real-world Svelte codebases. The agent profiles,
+> optimizes, and iterates until oxvelte is as fast as possible without
+> sacrificing correctness.
 
 ---
 
 ## Goal
 
-**Zero false positives, zero false negatives** when comparing oxvelte's recommended
-rules against eslint-plugin-svelte's `flat/recommended` config on real-world repos.
+**Minimize wall-clock time** for `oxvelte lint` on four real-world repos.
+The primary metric is **p95 latency** (95th-percentile of 20 runs).
 
-### Primary Benchmark: Real-World Comparison
+### Baseline (2026-03-22)
 
-Four public repos serve as the ground truth:
+| Repo | Files | p95 (ms) | ms/file |
+|------|-------|----------|---------|
+| shadcn-svelte | 1603 | ~147 | 0.09 |
+| open-webui | 549 | ~3689 | 6.72 |
+| immich/web | 400 | ~510 | 1.28 |
+| sveltejs/kit | 876 | ~71 | 0.08 |
 
-| Repo | Files | Baseline ESLint | Baseline Oxvelte | Gap |
-|------|-------|-----------------|------------------|-----|
-| shadcn-svelte (1603 files) | 0 diags | 0 diags | ✓ match |
-| open-webui (549 files) | 94 diags | 0 diags | 94 FN |
-| immich/web (400 files) | 0 diags | 109 diags | 109 FP |
-| sveltejs/kit (876 files) | 17 diags | 345 diags | 328 FP, 1 match |
+open-webui is the bottleneck — 50x slower per-file than kit. Focus there first.
 
-**Total gap: 531 diagnostics** (203 false negatives + 328 false positives).
-Target: 0.
+### Correctness Constraint
 
-### Secondary Benchmark: Fixture Tests
+All optimizations must preserve correctness:
 
-All vendor fixture tests from eslint-plugin-svelte must continue passing:
-
-- **280 test functions** covering 1156 fixture files
-- **106 parser fixture tests** (83 legacy + 23 modern)
-- No regressions allowed
+- `cargo test --lib` must pass 281/281
+- `bash verify_fixtures.sh --verify` must pass
+- `python3 testbeds/compare.py` must show no regressions vs current parity
 
 ---
 
-## Testbed Setup
+## Testbed
 
 Repos are cloned in `testbeds/`:
 
 ```
 testbeds/
-  shadcn-svelte/          ← git clone --depth 1 https://github.com/huntabyte/shadcn-svelte
-  open-webui/             ← git clone --depth 1 https://github.com/open-webui/open-webui
-  immich/                 ← git clone --depth 1 --sparse (web/) https://github.com/immich-app/immich
-  kit/                    ← git clone --depth 1 https://github.com/sveltejs/kit
-  _eslint-runner/         ← standalone eslint + eslint-plugin-svelte (flat/recommended)
-  compare.py              ← comparison script
-  comparison-results.txt  ← latest results
+  shadcn-svelte/   ← 1603 .svelte files
+  open-webui/      ← 549 .svelte files
+  immich/          ← 400 .svelte files
+  kit/             ← 876 .svelte files
+  results.tsv      ← timing results (append-only log)
 ```
-
-The `_eslint-runner/` directory has a standalone ESLint installation with
-`eslint-plugin-svelte`'s `flat/recommended` config. It lints files by copying
-them to a temp dir, running `npx eslint --format json`, and extracting
-`svelte/*` diagnostics.
 
 ---
 
-## Current Discrepancies (Baseline)
+## Benchmarking
 
-### False Positives (oxvelte fires, ESLint doesn't) — 437 total
+### How to measure
 
-| Rule | Count | Repos | Root Cause |
-|------|-------|-------|------------|
-| `no-navigation-without-resolve` | 309 | kit(298), immich(11) | Flags `<a href>` in non-SvelteKit route files; too aggressive on test fixtures |
-| `no-unused-props` | 64 | immich(64) | Likely false-flags Svelte 5 `$props()` patterns or imported types |
-| `valid-each-key` | 17 | immich(17) | Flags valid each blocks incorrectly |
-| `valid-prop-names-in-kit-pages` | 9 | kit(9) | Flags non-page files as SvelteKit pages |
-| `no-dom-manipulating` | 5 | immich(5) | Flags legitimate DOM access patterns |
-| `no-inner-declarations` | 4 | immich(4) | Flags declarations that are actually valid |
-| `no-unknown-style-directive-property` | 4 | immich(4) | Flags valid CSS properties |
-| `no-useless-mustaches` | 4 | kit(4) | Flags mustaches that aren't actually useless |
-| `require-store-reactive-access` | 4 | immich(4) | Flags non-store imports as stores |
-| `require-event-dispatcher-types` | 4 | kit(4) | Flags components that don't use dispatchers |
-| `require-each-key` | 7 | kit(7) | Flags each blocks that have keys or don't need them |
-| `no-immutable-reactive-statements` | 3 | kit(3) | False flags on mutable reactive statements |
-| `system` | 3 | kit(3) | System rule shouldn't produce diagnostics |
+```bash
+# Single run with timing (ms):
+python3 -c "
+import subprocess, time
+repos = [
+    ('shadcn-svelte', 'testbeds/shadcn-svelte'),
+    ('open-webui', 'testbeds/open-webui'),
+    ('immich', 'testbeds/immich'),
+    ('kit', 'testbeds/kit'),
+]
+for name, path in repos:
+    times = []
+    for _ in range(20):
+        start = time.time()
+        subprocess.run(['./target/release/oxvelte', 'lint', '--json', path],
+                       capture_output=True)
+        times.append(int((time.time() - start) * 1000))
+    times.sort()
+    p50 = times[9]
+    p95 = times[18]
+    print(f'{name}: p50={p50}ms p95={p95}ms min={times[0]}ms max={times[-1]}ms')
+"
+```
 
-### False Negatives (ESLint fires, oxvelte misses) — 94 total
+### results.tsv format
 
-| Rule | Count | Repos | Root Cause |
-|------|-------|-------|------------|
-| `require-each-key` | 56 | open-webui(56) | Missing `{#each}` patterns (possibly inside control flow) |
-| `no-useless-mustaches` | 23 | open-webui(23) | Missing expression patterns |
-| `infinite-reactive-loop` | 8 | open-webui(8) | Missing async/reactive patterns |
-| `no-at-html-tags` | 4 | open-webui(4) | Missing `{@html}` in certain template contexts |
-| `no-unused-svelte-ignore` | 2 | open-webui(2) | Rule not implemented (needs Svelte compiler) — skip |
+Append a row after every successful optimization:
+
+```
+timestamp	commit	shadcn_p95	openwebui_p95	immich_p95	kit_p95	notes
+```
+
+Create the file with headers if it doesn't exist, then append data rows.
+
+---
+
+## Profiling Techniques
+
+### CPU profiling (samply / cargo-flamegraph)
+
+```bash
+# Generate flamegraph
+cargo flamegraph --release -- lint testbeds/open-webui/ --json > /dev/null
+
+# Or use samply
+samply record ./target/release/oxvelte lint testbeds/open-webui/ --json > /dev/null
+```
+
+### Quick hotspot identification
+
+```bash
+# Time individual phases by adding --timing flag (if available)
+# Or instrument with std::time::Instant in code
+
+# Check which files are slow
+for f in testbeds/open-webui/src/lib/components/**/*.svelte; do
+    t=$(python3 -c "import subprocess,time; s=time.time(); subprocess.run(['./target/release/oxvelte','lint','--json','$f'],capture_output=True); print(int((time.time()-s)*1000))")
+    [ "$t" -gt 50 ] && echo "${t}ms $f"
+done
+```
+
+### Memory profiling
+
+```bash
+# Check peak RSS
+/usr/bin/time -l ./target/release/oxvelte lint testbeds/open-webui/ --json > /dev/null
+```
+
+---
+
+## Optimization Strategies (ordered by likely impact)
+
+### 1. Parallelism
+- **Multi-threaded file processing**: Use rayon to parse + lint files in parallel.
+  Currently all files are processed sequentially.
+- Thread-pool with work-stealing for uneven file sizes.
+
+### 2. Parser hot paths
+- Profile the parser to find slow regex/string operations.
+- Avoid unnecessary string allocations (use `&str` slices instead of `String`).
+- Pre-compile patterns used in hot loops.
+
+### 3. Rule-level optimization
+- Rules that scan the full file text multiple times → merge into single pass.
+- `infinite-reactive-loop` does many nested loops with string searches → optimize.
+- `no-reactive-reassign` has O(vars × content) pattern matching → batch.
+- Pre-compute shared data (e.g., variable declarations) once, share across rules.
+
+### 4. I/O
+- Batch file reads with memory-mapped I/O or read-ahead.
+- Avoid redundant file system operations.
+
+### 5. Allocations
+- Reduce `String` allocations in hot paths (use `Cow<str>` or arena allocation).
+- Profile with `dhat` or `heaptrack` to find allocation hotspots.
+- Reuse buffers across files.
 
 ---
 
 ## Experiment Loop
 
 ```
-while gap > 0:
-    1. Run comparison:  python3 testbeds/compare.py
-    2. Pick the highest-impact discrepancy (most diagnostics off)
-    3. Investigate: sample 3-5 specific files causing the mismatch
-       - For FP: read the file, understand why ESLint doesn't flag it
-       - For FN: read the file, understand why ESLint DOES flag it
-    4. Fix the rule implementation in src/linter/rules/
-    5. Build:  cargo build --release
-    6. Verify fixture tests:  cargo test --lib
-       - Must still pass 280/280. If any regress, fix or revert.
-    7. Re-run comparison:  python3 testbeds/compare.py
-       - Record new gap numbers
+while improvement_possible:
+    1. Profile:  cargo flamegraph / samply on the slowest repo
+    2. Identify the hotspot (function taking most time)
+    3. Implement optimization in src/
+    4. Build:  cargo build --release
+    5. Verify correctness:
+       - cargo test --lib (281/281)
+       - bash verify_fixtures.sh --verify
+    6. Benchmark:  run 20 iterations per repo
+    7. Record in results.tsv
     8. Commit if improved:
-         git add src/ && git commit -m "parity: <rule> — <FP|FN> reduced by N"
-       If regressed: revert
+         git add src/ && git commit -m "perf: <description> — <repo> p95 Xms→Yms"
+       If regressed or broke correctness: revert
     9. Loop
 ```
 
 ---
 
-## Investigation Techniques
-
-### For False Positives
-
-```bash
-# Find what oxvelte flags that ESLint doesn't
-./target/release/oxvelte lint --json testbeds/<repo> 2>/dev/null | \
-  python3 -c "import json,sys; [print(f\"{d['file']}:{d['line']} [{d['rule']}] {d['message']}\") for d in json.load(sys.stdin) if d['rule']=='svelte/<rule-name>']" | head -10
-```
-
-Then read the specific files and understand:
-- Is the code actually valid? (ESLint is right, oxvelte is wrong)
-- Does the file use a pattern the rule doesn't handle?
-- Is there a config option that suppresses this in ESLint but not oxvelte?
-
-### For False Negatives
-
-```bash
-# Find what ESLint flags that oxvelte doesn't — run ESLint on specific files
-cd testbeds/_eslint-runner
-npx eslint --format json <file> | python3 -c "..."
-```
-
-Then check:
-- Does oxvelte's parser correctly parse the template? (parser bug?)
-- Does the rule's pattern matching miss this code shape?
-- Is there an AST node type the rule doesn't visit?
-
-### Vendor Reference
-
-Always check the eslint-plugin-svelte source for the rule's actual logic:
-```
-vendor/eslint-plugin-svelte/packages/eslint-plugin-svelte/src/rules/<rule-name>.ts
-```
-
----
-
-## Priority Order
-
-Fix in this order (highest impact first):
-
-1. **`no-navigation-without-resolve`** — 309 FP (restrict to SvelteKit route files)
-2. **`no-unused-props`** — 64 FP (Svelte 5 $props() patterns)
-3. **`require-each-key`** — 56 FN + 7 FP (missing patterns + false flags)
-4. **`no-useless-mustaches`** — 23 FN + 4 FP
-5. **`valid-each-key`** — 17 FP
-6. **`valid-prop-names-in-kit-pages`** — 9 FP
-7. **`infinite-reactive-loop`** — 8 FN
-8. **`no-dom-manipulating`** — 5 FP
-9. **`no-at-html-tags`** — 4 FN
-10. **Remaining small FP/FN** (≤4 each)
-
----
-
-## Rules to Skip
-
-- `no-unused-svelte-ignore` — requires Svelte compiler to know which ignores are used
-- `valid-compile` — IS the Svelte compiler
-- `system` — internal eslint-plugin-svelte rule, should produce 0 diagnostics
-
----
-
 ## Constraints
 
-Same as the original program:
-
-- **Only modify files in `src/`** — everything else is read-only
-- **Build must pass**: `cargo build` before every commit
-- **Fixture tests must not regress**: `cargo test --lib` must pass 280/280
+- **Only modify files in `src/`** — testbeds and fixtures are read-only
+- **Build must pass**: `cargo build --release` before every commit
+- **Tests must not regress**: `cargo test --lib` must pass 281/281
 - **Fixture integrity**: `bash verify_fixtures.sh --verify` before every commit
-- **Timeout**: no process > 2 minutes
-- **Never stop**: run the loop autonomously until gap reaches 0
+- **Correctness**: `python3 testbeds/compare.py` must show no regressions
+- **Timeout**: no single process > 2 minutes
+- **Never stop**: run the loop autonomously until diminishing returns
 
 ---
 
-## Metrics
+## Targets
 
-After every experiment, record in `testbeds/comparison-results.txt`:
+| Repo | Baseline p95 | Target p95 | Stretch |
+|------|-------------|------------|---------|
+| shadcn-svelte | 147ms | <100ms | <50ms |
+| open-webui | 3689ms | <500ms | <200ms |
+| immich | 510ms | <200ms | <100ms |
+| kit | 71ms | <50ms | <30ms |
 
-```
-Run comparison:  python3 testbeds/compare.py > testbeds/comparison-results.txt
-```
-
-Track the total gap: `sum(|ESLint_count - Oxvelte_count|)` across all rules and repos.
-
-Baseline gap: **531**. Target: **0**.
+The primary target is **open-webui < 500ms** (7x improvement).
