@@ -123,7 +123,9 @@ struct FuncInfo {
     has_await: bool,
     assigns_after_await: Vec<String>,
     /// Byte positions of assignment lines after await (relative to content start)
-    assign_positions_after_await: Vec<(String, usize)>, // (var_name, content_offset)
+    assign_positions_after_await: Vec<(String, usize)>,
+    /// Byte positions of ALL assignment lines (relative to content start)
+    all_assign_positions: Vec<(String, usize)>,
 }
 
 fn collect_func_info(content: &str, top_vars: &[String]) -> Vec<FuncInfo> {
@@ -162,17 +164,21 @@ fn collect_func_info(content: &str, top_vars: &[String]) -> Vec<FuncInfo> {
                 .filter(|v| body.lines().any(|l| has_assign(l.trim(), v)))
                 .cloned().collect();
 
+            // Calculate the content offset where this function body starts
+            let func_content_offset: usize = lines[..i].iter().map(|l| l.len() + 1).sum();
+
+            // Collect ALL assignment positions
+            let all_assign_positions = collect_all_assign_positions(&body, top_vars, func_content_offset);
+
             // Check if function has await and which vars are assigned after it
             let has_await = body.contains("await ");
             let (assigns_after_await, assign_positions_after_await) = if has_await {
-                // Calculate the content offset where this function body starts
-                let func_content_offset: usize = lines[..i].iter().map(|l| l.len() + 1).sum();
                 collect_assigns_after_await_with_positions(&body, top_vars, func_content_offset)
             } else {
                 (Vec::new(), Vec::new())
             };
 
-            results.push(FuncInfo { name, assigns, has_await, assigns_after_await, assign_positions_after_await });
+            results.push(FuncInfo { name, assigns, has_await, assigns_after_await, assign_positions_after_await, all_assign_positions });
         }
         i += 1;
     }
@@ -218,6 +224,23 @@ fn collect_assigns_after_await_with_positions(
         line_offset += line.len() + 1;
     }
     (result, positions)
+}
+
+/// Collect all (var, position) pairs for assignments in a function body.
+fn collect_all_assign_positions(body: &str, top_vars: &[String], body_content_offset: usize) -> Vec<(String, usize)> {
+    let mut positions = Vec::new();
+    let mut line_offset = 0usize;
+    for line in body.lines() {
+        let t = line.trim();
+        let indent = line.len() - t.len();
+        for var in top_vars {
+            if has_assign(t, var) {
+                positions.push((var.clone(), body_content_offset + line_offset + indent));
+            }
+        }
+        line_offset += line.len() + 1;
+    }
+    positions
 }
 
 fn extract_func_name(line: &str) -> Option<String> {
@@ -801,8 +824,8 @@ fn analyze_block(
                             format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", av),
                             Span::new(abs as u32, abs as u32 + 1),
                         );
-                        // Also report at assignment sites inside the function
-                        for (pos_var, pos_offset) in &fi.assign_positions_after_await {
+                        // Report at ALL assignment sites (function is called from async context)
+                        for (pos_var, pos_offset) in &fi.all_assign_positions {
                             if pos_var == av {
                                 let abs = base + pos_offset;
                                 ctx.diagnostic(
