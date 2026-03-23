@@ -71,6 +71,8 @@ pub trait Rule: Send + Sync {
     fn name(&self) -> &'static str;
     fn is_recommended(&self) -> bool { false }
     fn is_fixable(&self) -> bool { false }
+    /// Whether this rule can apply to plain .js/.ts files (not just .svelte).
+    fn applies_to_scripts(&self) -> bool { false }
     fn run(&self, ctx: &mut LintContext);
 }
 
@@ -94,6 +96,30 @@ impl Linter {
     pub fn lint(&self, ast: &SvelteAst, source: &str) -> Vec<LintDiagnostic> {
         let mut ctx = LintContext::new(ast, source);
         for rule in &self.rules {
+            ctx.set_rule(rule.name());
+            rule.run(&mut ctx);
+        }
+        filter_suppressed(ctx.into_diagnostics(), source)
+    }
+
+    /// Lint a plain JS/TS file. Only runs rules marked with `applies_to_scripts`.
+    /// Wraps the source in a synthetic SvelteAst with the content as an instance script.
+    pub fn lint_script(&self, source: &str) -> Vec<LintDiagnostic> {
+        use crate::ast::{SvelteAst, Script, Fragment};
+        let ast = SvelteAst {
+            html: Fragment { nodes: vec![], span: oxc::span::Span::new(0, 0) },
+            instance: Some(Script {
+                content: source.to_string(),
+                module: false,
+                lang: None,
+                span: oxc::span::Span::new(0, source.len() as u32),
+            }),
+            module: None,
+            css: None,
+        };
+        let mut ctx = LintContext::new(&ast, source);
+        for rule in &self.rules {
+            if !rule.applies_to_scripts() { continue; }
             ctx.set_rule(rule.name());
             rule.run(&mut ctx);
         }

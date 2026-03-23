@@ -12,6 +12,8 @@ impl Rule for DerivedHasSameInputsOutputs {
         "svelte/derived-has-same-inputs-outputs"
     }
 
+    fn applies_to_scripts(&self) -> bool { true }
+
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         // Look for `derived(` in scripts and check that the callback parameter
         // matches the store being derived from. This is a heuristic approach.
