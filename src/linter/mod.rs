@@ -93,9 +93,17 @@ impl Linter {
 
     pub fn lint(&self, ast: &SvelteAst, source: &str) -> Vec<LintDiagnostic> {
         let mut ctx = LintContext::new(ast, source);
+        let profile = std::env::var("OXVELTE_PROFILE").is_ok();
         for rule in &self.rules {
             ctx.set_rule(rule.name());
+            let start = if profile { Some(std::time::Instant::now()) } else { None };
             rule.run(&mut ctx);
+            if let Some(start) = start {
+                let elapsed = start.elapsed().as_micros();
+                if elapsed > 100 {
+                    eprintln!("  {:>8}µs  {}", elapsed, rule.name());
+                }
+            }
         }
         filter_suppressed(ctx.into_diagnostics(), source)
     }
