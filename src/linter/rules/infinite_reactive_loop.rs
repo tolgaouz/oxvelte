@@ -22,6 +22,9 @@ impl Rule for InfiniteReactiveLoop {
         };
         let content = &script.content;
         let base = script.span.start as usize;
+        let source = ctx.source;
+        let tag_text = &source[base..script.span.end as usize];
+        let content_offset = tag_text.find('>').map(|p| base + p + 1).unwrap_or(base);
 
         let mut top_vars = collect_top_level_vars(content);
         collect_store_refs(content, &mut top_vars);
@@ -31,7 +34,7 @@ impl Rule for InfiniteReactiveLoop {
         let mut search_pos = 0;
         while let Some((bs, be)) = find_reactive_block(content, search_pos) {
             let block = &content[bs..be];
-            analyze_block(ctx, block, bs, base, &top_vars, &aliases, &func_info);
+            analyze_block(ctx, block, bs, content_offset, &top_vars, &aliases, &func_info);
             search_pos = be;
         }
     }
@@ -726,7 +729,7 @@ fn analyze_block(
                 if !t.contains(&call_pat) { continue; }
 
                 for av in &fi.assigns {
-                    if block.contains(av.as_str()) {
+                    if block_has_var_ref(block, av) {
                         let indent = line.len() - t.len();
                         let call_col = t.find(&call_pat).unwrap_or(0);
                         let abs = base + block_start + line_offsets[idx] + indent + call_col;
