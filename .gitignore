@@ -25,6 +25,11 @@ test.log
 *.swo
 *~
 
+# npm platform binaries (staged by scripts/build-npm.sh)
+npm/@oxvelte/*/oxvelte
+npm/@oxvelte/*/oxvelte.exe
+npm/oxvelte/README.md
+
 # OS
 .DS_Store
 Thumbs.db
