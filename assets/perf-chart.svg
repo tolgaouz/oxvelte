@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 340" font-family="system-ui,-apple-system,sans-serif">
+  <rect width="700" height="340" fill="#0d1117" rx="8"/>
+  <text x="350.0" y="30" text-anchor="middle" fill="#e6edf3" font-size="16" font-weight="bold">Lint Time (p95) — Before vs After</text>
+  <line x1="70" y1="260" x2="670" y2="260" stroke="#21262d" stroke-width="1"/>
+  <text x="62" y="264" text-anchor="end" fill="#8b949e" font-size="11">0ms</text>
+  <line x1="70" y1="207.5" x2="670" y2="207.5" stroke="#21262d" stroke-width="1"/>
+  <text x="62" y="211.5" text-anchor="end" fill="#8b949e" font-size="11">925ms</text>
+  <line x1="70" y1="155.0" x2="670" y2="155.0" stroke="#21262d" stroke-width="1"/>
+  <text x="62" y="159.0" text-anchor="end" fill="#8b949e" font-size="11">1851ms</text>
+  <line x1="70" y1="102.5" x2="670" y2="102.5" stroke="#21262d" stroke-width="1"/>
+  <text x="62" y="106.5" text-anchor="end" fill="#8b949e" font-size="11">2776ms</text>
+  <line x1="70" y1="50.0" x2="670" y2="50.0" stroke="#21262d" stroke-width="1"/>
+  <text x="62" y="54.0" text-anchor="end" fill="#8b949e" font-size="11">3702ms</text>
+  <rect x="120.76923076923077" y="252.28525121555916" width="36.92307692307693" height="7.714748784440843" fill="#6b7280" rx="3"/>
+  <text x="139.23076923076923" y="247.28525121555916" text-anchor="middle" fill="#8b949e" font-size="10">136ms</text>
+  <rect x="166.92307692307693" y="257" width="36.92307692307693" height="3" fill="#10b981" rx="3"/>
+  <text x="185.3846153846154" y="252" text-anchor="middle" fill="#10b981" font-size="10" font-weight="bold">34ms</text>
+  <text x="162.30769230769232" y="278" text-anchor="middle" fill="#f0883e" font-size="12" font-weight="bold">4x faster</text>
+  <text x="162.30769230769232" y="295" text-anchor="middle" fill="#e6edf3" font-size="11">shadcn-svelte</text>
+  <text x="162.30769230769232" y="309" text-anchor="middle" fill="#8b949e" font-size="10">(1603 files)</text>
+  <rect x="259.2307692307692" y="50.0" width="36.92307692307693" height="210.0" fill="#6b7280" rx="3"/>
+  <text x="277.6923076923077" y="45.0" text-anchor="middle" fill="#8b949e" font-size="10">3702ms</text>
+  <rect x="305.3846153846154" y="244.85413290113453" width="36.92307692307693" height="15.145867098865478" fill="#10b981" rx="3"/>
+  <text x="323.84615384615387" y="239.85413290113453" text-anchor="middle" fill="#10b981" font-size="10" font-weight="bold">267ms</text>
+  <text x="300.7692307692308" y="278" text-anchor="middle" fill="#f0883e" font-size="12" font-weight="bold">14x faster</text>
+  <text x="300.7692307692308" y="295" text-anchor="middle" fill="#e6edf3" font-size="11">open-webui</text>
+  <text x="300.7692307692308" y="309" text-anchor="middle" fill="#8b949e" font-size="10">(549 files)</text>
+  <rect x="397.6923076923077" y="232.0907617504052" width="36.92307692307693" height="27.909238249594814" fill="#6b7280" rx="3"/>
+  <text x="416.15384615384613" y="227.0907617504052" text-anchor="middle" fill="#8b949e" font-size="10">492ms</text>
+  <rect x="443.84615384615387" y="257" width="36.92307692307693" height="3" fill="#10b981" rx="3"/>
+  <text x="462.3076923076923" y="252" text-anchor="middle" fill="#10b981" font-size="10" font-weight="bold">20ms</text>
+  <text x="439.2307692307692" y="278" text-anchor="middle" fill="#f0883e" font-size="12" font-weight="bold">25x faster</text>
+  <text x="439.2307692307692" y="295" text-anchor="middle" fill="#e6edf3" font-size="11">immich</text>
+  <text x="439.2307692307692" y="309" text-anchor="middle" fill="#8b949e" font-size="10">(400 files)</text>
+  <rect x="536.1538461538462" y="257.44732576985416" width="36.92307692307693" height="2.5526742301458674" fill="#6b7280" rx="3"/>
+  <text x="554.6153846153846" y="252.44732576985416" text-anchor="middle" fill="#8b949e" font-size="10">45ms</text>
+  <rect x="582.3076923076924" y="257" width="36.92307692307693" height="3" fill="#10b981" rx="3"/>
+  <text x="600.7692307692308" y="252" text-anchor="middle" fill="#10b981" font-size="10" font-weight="bold">33ms</text>
+  <text x="577.6923076923077" y="278" text-anchor="middle" fill="#f0883e" font-size="12" font-weight="bold">1x faster</text>
+  <text x="577.6923076923077" y="295" text-anchor="middle" fill="#e6edf3" font-size="11">kit</text>
+  <text x="577.6923076923077" y="309" text-anchor="middle" fill="#8b949e" font-size="10">(876 files)</text>
+  <rect x="510" y="60" width="12" height="12" fill="#6b7280" rx="2"/>
+  <text x="526" y="70" fill="#8b949e" font-size="11">eslint-plugin-svelte</text>
+  <rect x="510" y="78" width="12" height="12" fill="#10b981" rx="2"/>
+  <text x="526" y="88" fill="#10b981" font-size="11">oxvelte</text>
+</svg>
