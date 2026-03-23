@@ -101,15 +101,15 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
           # Update all package.json versions
-          for pkg_json in npm/oxvelte/package.json npm/@oxvelte/*/package.json; do
+          for pkg_json in npm/@oxvelte/*/package.json; do
             sed -i "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" "$pkg_json"
           done
 
           # Update optionalDependencies versions
-          sed -i "s/\"@oxvelte\/cli-\([^\"]*\)\": \"[^\"]*\"/\"@oxvelte\/cli-\1\": \"${VERSION}\"/g" npm/oxvelte/package.json
+          sed -i "s/\"@oxvelte\/cli-\([^\"]*\)\": \"[^\"]*\"/\"@oxvelte\/cli-\1\": \"${VERSION}\"/g" npm/@oxvelte/lint/package.json
 
       - name: Copy README
-        run: cp README.md npm/oxvelte/README.md
+        run: cp README.md npm/@oxvelte/lint/README.md
 
       - name: Publish platform packages
         env:
@@ -125,7 +125,7 @@ jobs:
       - name: Publish main package
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: cd npm/oxvelte && npm publish --access public
+        run: cd npm/@oxvelte/lint && npm publish --access public
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
