@@ -1,0 +1,253 @@
+{
+	"css": null,
+	"js": [],
+	"start": 0,
+	"end": 169,
+	"type": "Root",
+	"fragment": {
+		"type": "Fragment",
+		"nodes": [
+			{
+				"type": "Text",
+				"start": 65,
+				"end": 67,
+				"raw": "\n\n",
+				"data": "\n\n"
+			},
+			{
+				"type": "Text",
+				"start": 102,
+				"end": 104,
+				"raw": "\n\n",
+				"data": "\n\n"
+			}
+		]
+	},
+	"options": {
+		"start": 0,
+		"end": 65,
+		"attributes": [
+			{
+				"type": "Attribute",
+				"start": 16,
+				"end": 49,
+				"name": "customElement",
+				"name_loc": {
+					"start": {
+						"line": 1,
+						"column": 16,
+						"character": 16
+					},
+					"end": {
+						"line": 1,
+						"column": 29,
+						"character": 29
+					}
+				},
+				"value": [
+					{
+						"start": 31,
+						"end": 48,
+						"type": "Text",
+						"raw": "my-custom-element",
+						"data": "my-custom-element"
+					}
+				]
+			},
+			{
+				"type": "Attribute",
+				"start": 50,
+				"end": 62,
+				"name": "runes",
+				"name_loc": {
+					"start": {
+						"line": 1,
+						"column": 50,
+						"character": 50
+					},
+					"end": {
+						"line": 1,
+						"column": 55,
+						"character": 55
+					}
+				},
+				"value": {
+					"type": "ExpressionTag",
+					"start": 56,
+					"end": 62,
+					"expression": {
+						"type": "Literal",
+						"start": 57,
+						"end": 61,
+						"loc": {
+							"start": {
+								"line": 1,
+								"column": 57
+							},
+							"end": {
+								"line": 1,
+								"column": 61
+							}
+						},
+						"value": true,
+						"raw": "true"
+					}
+				}
+			}
+		],
+		"customElement": {
+			"tag": "my-custom-element"
+		},
+		"runes": true
+	},
+	"module": {
+		"type": "Script",
+		"start": 67,
+		"end": 102,
+		"context": "module",
+		"content": {
+			"type": "Program",
+			"start": 92,
+			"end": 93,
+			"loc": {
+				"start": {
+					"line": 3,
+					"column": 0
+				},
+				"end": {
+					"line": 4,
+					"column": 9
+				}
+			},
+			"body": [],
+			"sourceType": "module"
+		},
+		"attributes": [
+			{
+				"type": "Attribute",
+				"start": 75,
+				"end": 81,
+				"name": "module",
+				"name_loc": {
+					"start": {
+						"line": 3,
+						"column": 8,
+						"character": 75
+					},
+					"end": {
+						"line": 3,
+						"column": 14,
+						"character": 81
+					}
+				},
+				"value": true
+			},
+			{
+				"type": "Attribute",
+				"start": 82,
+				"end": 91,
+				"name": "lang",
+				"name_loc": {
+					"start": {
+						"line": 3,
+						"column": 15,
+						"character": 82
+					},
+					"end": {
+						"line": 3,
+						"column": 19,
+						"character": 86
+					}
+				},
+				"value": [
+					{
+						"start": 88,
+						"end": 90,
+						"type": "Text",
+						"raw": "ts",
+						"data": "ts"
+					}
+				]
+			}
+		]
+	},
+	"instance": {
+		"type": "Script",
+		"start": 104,
+		"end": 169,
+		"context": "default",
+		"content": {
+			"type": "Program",
+			"start": 159,
+			"end": 160,
+			"loc": {
+				"start": {
+					"line": 6,
+					"column": 0
+				},
+				"end": {
+					"line": 7,
+					"column": 9
+				}
+			},
+			"body": [],
+			"sourceType": "module"
+		},
+		"attributes": [
+			{
+				"type": "Attribute",
+				"start": 112,
+				"end": 121,
+				"name": "lang",
+				"name_loc": {
+					"start": {
+						"line": 6,
+						"column": 8,
+						"character": 112
+					},
+					"end": {
+						"line": 6,
+						"column": 12,
+						"character": 116
+					}
+				},
+				"value": [
+					{
+						"start": 118,
+						"end": 120,
+						"type": "Text",
+						"raw": "ts",
+						"data": "ts"
+					}
+				]
+			},
+			{
+				"type": "Attribute",
+				"start": 122,
+				"end": 158,
+				"name": "generics",
+				"name_loc": {
+					"start": {
+						"line": 6,
+						"column": 18,
+						"character": 122
+					},
+					"end": {
+						"line": 6,
+						"column": 26,
+						"character": 130
+					}
+				},
+				"value": [
+					{
+						"start": 132,
+						"end": 157,
+						"type": "Text",
+						"raw": "T extends { foo: number }",
+						"data": "T extends { foo: number }"
+					}
+				]
+			}
+		]
+	}
+}
