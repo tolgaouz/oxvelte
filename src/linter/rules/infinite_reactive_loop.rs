@@ -27,6 +27,11 @@ impl Rule for InfiniteReactiveLoop {
         let content_offset = tag_text.find('>').map(|p| base + p + 1).unwrap_or(base);
 
         let mut top_vars = collect_top_level_vars(content);
+        // Also collect vars from module script (context="module")
+        if let Some(module) = &ctx.ast.module {
+            let mut module_vars = collect_top_level_vars(&module.content);
+            top_vars.append(&mut module_vars);
+        }
         collect_store_refs(content, &mut top_vars);
         let aliases = collect_aliases(content);
         let func_info = collect_func_info(content, &top_vars);
@@ -399,10 +404,15 @@ fn find_stmt_end(content: &str, dollar: usize) -> usize {
             '{' => { bdepth += 1; has_c = true; }
             '}' => {
                 bdepth -= 1;
-                // If we close the outermost brace (for if/else/for/while blocks),
-                // the statement ends after the closing brace
+                // If we close the outermost brace, check if followed by `else`
+                // (if-else blocks continue past the first })
                 if bdepth <= 0 && has_c {
-                    return abs + 1;
+                    let rest = content[abs + 1..].trim_start();
+                    if rest.starts_with("else") {
+                        // Continue past the else block
+                    } else {
+                        return abs + 1;
+                    }
                 }
             }
             '(' => { pdepth += 1; has_c = true; }
@@ -441,27 +451,46 @@ fn block_has_var_ref(block: &str, var: &str) -> bool {
 }
 
 /// Check if a block reads a variable (not just assigns to it).
+/// Compound assignments (+=, -=) count as reads. Only simple `var = expr` is write-only.
 fn block_reads_var(block: &str, var: &str) -> bool {
     for line in block.lines() {
         let t = line.trim();
         if t.is_empty() || t.starts_with("//") || t.starts_with("$:") { continue; }
         if !t.contains(var) { continue; }
 
-        // Check if var appears with a word boundary
         let count = t.match_indices(var)
             .filter(|(pos, _)| is_word_start(t, *pos))
             .count();
-
         if count == 0 { continue; }
 
-        // If it's an assignment, there's still a read if var appears more than once
-        // (e.g., `a = a + 1` reads a)
-        if has_assign(t, var) {
-            if count > 1 { return true; }
-            continue;
+        // Multiple occurrences means at least one is a read
+        if count > 1 { return true; }
+
+        // Single occurrence: check if it's ONLY a simple assignment (write-only)
+        // Compound assignments (+=, -=, etc.) are read-modify-write → count as reads
+        let simple_assign = {
+            let pat = format!("{} = ", var);
+            if let Some(pos) = t.find(&pat) {
+                is_word_start(t, pos) && {
+                    let after = &t[pos + pat.len()..];
+                    !after.starts_with('=') // not ==
+                }
+            } else {
+                false
+            }
+        };
+        // Also check var.prop = and var[idx] = as simple writes
+        let member_assign = {
+            let dot_pat = format!("{}.", var);
+            let idx_pat = format!("{}[", var);
+            (t.contains(&dot_pat) || t.contains(&idx_pat)) && has_assign(t, var)
+        };
+        if simple_assign || member_assign {
+            continue; // write-only
         }
 
-        // var appears in non-assignment context = read
+        // If has_assign but not simple assign, it's a compound assignment (read)
+        // Or it's a non-assignment reference (read)
         return true;
     }
     false
@@ -708,10 +737,15 @@ fn analyze_block(
         let in_async_ctx = in_callback || after_await || in_then_catch;
 
         if in_async_ctx {
-            // Report direct assignments to reactive vars
+            // Report direct assignments to reactive vars.
+            // For callback-only context (setTimeout etc.), only flag vars the block reads
+            // (assigning unrelated vars in setTimeout can't re-trigger the block).
+            // For after-await and .then/.catch, flag all reactive var assignments.
+            let needs_read_check = in_callback && !after_await && !in_then_catch;
             for var in top_vars {
                 if local_names.contains(var) { continue; }
                 if !has_assign(t, var) { continue; }
+                if needs_read_check && !block_reads_var(block, var) { continue; }
 
                 let indent = line.len() - t.len();
                 let abs = base + block_start + line_offsets[idx] + indent;
