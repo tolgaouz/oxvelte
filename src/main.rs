@@ -69,13 +69,19 @@ fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool) -> ExitCode {
     use rayon::prelude::*;
 
     let lint = if all_rules { linter::Linter::all() } else { linter::Linter::recommended() };
-    let files = collect_svelte_files(paths);
+    let files = collect_lint_files(paths);
 
     // Process files in parallel: read → parse → lint → format diagnostics
     let file_results: Vec<Vec<serde_json::Value>> = files.par_iter().filter_map(|path| {
         let source = std::fs::read_to_string(path).ok()?;
-        let result = parser::parse(&source);
-        let diags = lint.lint(&result.ast, &source);
+        let is_svelte = path.extension().is_some_and(|e| e == "svelte");
+        let diags = if is_svelte {
+            let result = parser::parse(&source);
+            lint.lint(&result.ast, &source)
+        } else {
+            // JS/TS file — only run script-applicable rules
+            lint.lint_script(&source)
+        };
         if diags.is_empty() { return None; }
         let path_str = path.display().to_string();
         let entries: Vec<serde_json::Value> = diags.iter().map(|d| {
@@ -253,15 +259,25 @@ fn offset_to_line_col(source: &str, offset: usize) -> (usize, usize) {
     (line, col)
 }
 
-fn collect_svelte_files(paths: &[PathBuf]) -> Vec<PathBuf> {
+fn collect_lint_files(paths: &[PathBuf]) -> Vec<PathBuf> {
     let mut files = Vec::new();
+    let extensions = ["svelte", "js", "ts", "mjs", "mts"];
     for path in paths {
-        if path.is_file() && path.extension().is_some_and(|e| e == "svelte") {
-            files.push(path.clone());
+        if path.is_file() {
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                if extensions.contains(&ext) {
+                    files.push(path.clone());
+                }
+            }
         } else if path.is_dir() {
+            // Skip node_modules, .svelte-kit, build, dist
+            let dirname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if matches!(dirname, "node_modules" | ".svelte-kit" | "build" | "dist" | ".git") {
+                continue;
+            }
             if let Ok(entries) = std::fs::read_dir(path) {
                 let children: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
-                files.extend(collect_svelte_files(&children));
+                files.extend(collect_lint_files(&children));
             }
         }
     }

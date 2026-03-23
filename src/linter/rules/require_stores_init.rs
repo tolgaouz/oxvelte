@@ -9,6 +9,8 @@ impl Rule for RequireStoresInit {
         "svelte/require-stores-init"
     }
 
+    fn applies_to_scripts(&self) -> bool { true }
+
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         if let Some(script) = &ctx.ast.instance {
             let content = &script.content;
