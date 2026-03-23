@@ -578,7 +578,36 @@ fn has_await_on_prev_line(block: &str, line_start_pos: usize) -> bool {
     }
     target_depth = depth;
 
-    // Second pass: find `await` keywords at the same depth on preceding lines
+    // Find the depth of the innermost enclosing async function body.
+    // This is the depth right after `async ... {` — await at this depth or deeper
+    // within the same function is relevant.
+    let async_body_depth = {
+        let mut d = 0i32;
+        let mut is = false;
+        let mut sc = '"';
+        let mut best = 0i32;
+        let b = &block[..line_start_pos.min(block.len())];
+        let mut j = 0;
+        while j < b.len() {
+            let c = b.as_bytes()[j] as char;
+            if is { if c == sc && (j == 0 || b.as_bytes()[j-1] != b'\\') { is = false; } j += 1; continue; }
+            match c {
+                '\'' | '"' | '`' => { is = true; sc = c; }
+                '{' => d += 1,
+                '}' => d -= 1,
+                _ => {}
+            }
+            // Check for `async ` followed eventually by `{`
+            if j + 6 <= b.len() && &b[j..j+6] == "async " {
+                // This async's body depth = d + 1 (the { that follows)
+                best = d + 1;
+            }
+            j += 1;
+        }
+        best
+    };
+
+    // Second pass: find `await` keywords on preceding lines
     depth = 0;
     in_str = false;
     sch = '"';
@@ -601,11 +630,12 @@ fn has_await_on_prev_line(block: &str, line_start_pos: usize) -> bool {
             last_newline = i + 1;
         }
 
-        // Check for `await ` at the target depth
-        if depth == target_depth && i + 6 <= before.len() && &before[i..i+6] == "await " {
-            // Make sure it's a whole word (not part of another identifier)
+        // Check for `await ` at or above the target depth (within the same async function).
+        // Code in if/else branches after await in the same async function is still
+        // in a different microtask.
+        if depth >= async_body_depth && depth <= target_depth
+            && i + 6 <= before.len() && &before[i..i+6] == "await " {
             if i == 0 || !bytes[i-1].is_ascii_alphanumeric() {
-                // Make sure this await is on a line BEFORE the current line
                 if i < line_start_pos {
                     found_await_at_depth = true;
                 }
