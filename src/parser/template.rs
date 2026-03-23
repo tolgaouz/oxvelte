@@ -1138,7 +1138,13 @@ fn parse_each_header(header: &str) -> (String, String, Option<String>, Option<St
 
     // Split on " as "
     let (expression, rest) = if let Some(idx) = header.find(" as ") {
-        (header[..idx].trim().to_string(), &header[idx + 4..])
+        let expr = header[..idx].trim().to_string();
+        let mut r = &header[idx + 4..];
+        // Handle Svelte 5 `as const as context` — skip past `const as `
+        if r.starts_with("const as ") || r.starts_with("const as\t") {
+            r = &r[9..];
+        }
+        (expr, r)
     } else {
         return (header.to_string(), String::new(), None, None);
     };

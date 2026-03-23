@@ -72,13 +72,24 @@ impl Rule for PreferWritableDerived {
                         let effect_body = &body[1..body_end];
 
                         // Check if the effect body UNCONDITIONALLY reassigns our var
-                        // (not inside if/for/while/switch blocks)
+                        // at depth 1 (directly in effect body, not nested in callbacks like untrack)
                         let has_simple_reassign = {
-                            let lines: Vec<&str> = effect_body.lines().collect();
-                            lines.iter().any(|line| {
+                            let mut depth = 0i32;
+                            let mut found = false;
+                            for line in effect_body.lines() {
+                                for ch in line.chars() {
+                                    match ch {
+                                        '{' | '(' => depth += 1,
+                                        '}' | ')' => depth -= 1,
+                                        _ => {}
+                                    }
+                                }
                                 let t = line.trim();
-                                t.starts_with(&effect_pattern) && !t.starts_with("if") && !t.starts_with("for")
-                            })
+                                if depth <= 0 && t.starts_with(&effect_pattern) && !t.starts_with("if") && !t.starts_with("for") {
+                                    found = true;
+                                }
+                            }
+                            found
                         };
                         // Also check it's not inside a conditional
                         let has_conditional = effect_body.contains("if ") || effect_body.contains("if(")
@@ -119,11 +130,22 @@ impl Rule for PreferWritableDerived {
                         let effect_body = &body[1..body_end];
 
                         let has_simple_reassign2 = {
-                            let lines: Vec<&str> = effect_body.lines().collect();
-                            lines.iter().any(|line| {
+                            let mut depth = 0i32;
+                            let mut found = false;
+                            for line in effect_body.lines() {
+                                for ch in line.chars() {
+                                    match ch {
+                                        '{' | '(' => depth += 1,
+                                        '}' | ')' => depth -= 1,
+                                        _ => {}
+                                    }
+                                }
                                 let t = line.trim();
-                                t.starts_with(&effect_pattern) && !t.starts_with("if") && !t.starts_with("for")
-                            })
+                                if depth <= 0 && t.starts_with(&effect_pattern) && !t.starts_with("if") && !t.starts_with("for") {
+                                    found = true;
+                                }
+                            }
+                            found
                         };
                         let has_conditional2 = effect_body.contains("if ") || effect_body.contains("if(")
                             || effect_body.contains("for ") || effect_body.contains("while ");

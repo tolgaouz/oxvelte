@@ -127,6 +127,11 @@ fn check_inner_declarations(content: &str, content_offset: usize, ctx: &mut Lint
         }
 
         if bytes[i] == b'{' {
+            // Detect arrow function body: `=> {`
+            let before = content[..i].trim_end();
+            if before.ends_with("=>") {
+                scope_stack.push((brace_depth, true)); // arrow function body
+            }
             brace_depth += 1;
             i += 1;
             continue;
@@ -193,8 +198,20 @@ fn check_inner_declarations(content: &str, content_offset: usize, ctx: &mut Lint
 
                 if !is_expression {
                     // This is a function declaration
-                    // Check if we're inside a control flow block
-                    let in_control_flow = scope_stack.iter().any(|(_, is_fn)| !is_fn);
+                    // Only flag if inside control flow at the program/module level.
+                    // If we're inside any function body, declarations in blocks are fine.
+                    let in_control_flow = {
+                        let mut found_control = false;
+                        let mut inside_function = false;
+                        for &(_, is_fn) in scope_stack.iter().rev() {
+                            if is_fn {
+                                inside_function = true;
+                                break;
+                            }
+                            found_control = true;
+                        }
+                        found_control && !inside_function
+                    };
 
                     if in_control_flow && brace_depth > 0 {
                         let source_pos = content_offset + i;
