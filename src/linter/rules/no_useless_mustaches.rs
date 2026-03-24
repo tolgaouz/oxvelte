@@ -77,9 +77,18 @@ fn check_expression(expr: &str, span: oxc::span::Span, ctx: &mut LintContext<'_>
     let stripped = strip_leading_js_comments(trimmed);
     let stripped = stripped.trim();
     if let Some(inner) = extract_simple_string_literal(stripped) {
-        // If ignoreStringEscape is true, skip strings containing escape sequences
-        if ignore_string_escape && inner.contains('\\') {
-            return;
+        // If ignoreStringEscape is true, skip strings with meaningful control-character escapes
+        // Only \n \r \v \t \b \f \u \x are "meaningful" — plain \\ and \' \" are not
+        if ignore_string_escape {
+            let bytes = inner.as_bytes();
+            for i in 0..bytes.len().saturating_sub(1) {
+                if bytes[i] == b'\\' {
+                    let next = bytes[i + 1];
+                    if matches!(next, b'n' | b'r' | b'v' | b't' | b'b' | b'f' | b'u' | b'x') {
+                        return;
+                    }
+                }
+            }
         }
         // Don't flag strings containing { or } — they can't be
         // used as raw text in Svelte templates.
