@@ -18,17 +18,13 @@ impl Rule for NoUselessChildrenSnippet {
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
-                // Check if element is a component (capitalized name)
-                if el.name.starts_with(|c: char| c.is_uppercase()) {
-                    for child in &el.children {
-                        if let TemplateNode::SnippetBlock(snippet) = child {
-                            if snippet.name == "children" && snippet.params.trim().is_empty() {
-                                // A {#snippet children()} without parameters is useless
-                                ctx.diagnostic(
-                                    "Found an unnecessary children snippet.",
-                                    snippet.span,
-                                );
-                            }
+                for child in &el.children {
+                    if let TemplateNode::SnippetBlock(snippet) = child {
+                        if snippet.name == "children" && snippet.params.trim().is_empty() {
+                            ctx.diagnostic(
+                                "Found an unnecessary children snippet.",
+                                snippet.span,
+                            );
                         }
                     }
                 }
