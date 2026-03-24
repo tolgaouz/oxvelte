@@ -28,13 +28,18 @@ impl Rule for NoDupeUseDirectives {
                         groups.entry(name.clone()).or_default().push((expr_text, *span));
                     }
                 }
+                // Report ALL members of any duplicate group
                 for (_name, entries) in &groups {
-                    for i in 0..entries.len() {
-                        for j in (i + 1)..entries.len() {
-                            if entries[i].0 == entries[j].0 {
+                    let mut expr_groups: std::collections::HashMap<&str, Vec<oxc::span::Span>> = std::collections::HashMap::new();
+                    for (expr, span) in entries {
+                        expr_groups.entry(expr.as_str()).or_default().push(*span);
+                    }
+                    for (_expr, spans) in &expr_groups {
+                        if spans.len() >= 2 {
+                            for span in spans {
                                 ctx.diagnostic(
                                     format!("Duplicate use directive 'use:{}'.", _name),
-                                    entries[j].1,
+                                    *span,
                                 );
                             }
                         }
