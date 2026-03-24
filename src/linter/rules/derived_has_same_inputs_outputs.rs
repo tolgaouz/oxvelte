@@ -48,8 +48,8 @@ impl Rule for DerivedHasSameInputsOutputs {
                         if !param.is_empty() && param != expected && param != store_arg {
                             ctx.diagnostic(
                                 format!(
-                                    "Derived callback parameter `{}` should match input store `{}`.",
-                                    param, store_arg
+                                    "The argument name should be '{}'.",
+                                    expected
                                 ),
                                 Span::new(start, end),
                             );
