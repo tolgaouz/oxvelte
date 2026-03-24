@@ -2,12 +2,27 @@
 //! 🔧 Fixable
 //!
 //! Checks for patterns like `name = "value"` or `name ="value"` or `name= "value"`
-//! in element attributes via simple source text scanning.
+//! in element attributes and directives via simple source text scanning.
 
 use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::{Attribute, TemplateNode};
 
 pub struct NoSpacesAroundEqualSignsInAttribute;
+
+const MESSAGE: &str = "Unexpected spaces found around equal signs.";
+
+/// Checks the source text of an attribute for whitespace immediately before or after `=`.
+/// Returns `true` if a space-padded `=` is found.
+fn has_spaces_around_eq(text: &str) -> bool {
+    if let Some(eq_idx) = text.find('=') {
+        let before_eq = &text[..eq_idx];
+        let after_eq = &text[eq_idx + 1..];
+        before_eq.ends_with(|c: char| c.is_whitespace())
+            || after_eq.starts_with(|c: char| c.is_whitespace())
+    } else {
+        false
+    }
+}
 
 impl Rule for NoSpacesAroundEqualSignsInAttribute {
     fn name(&self) -> &'static str {
@@ -22,23 +37,28 @@ impl Rule for NoSpacesAroundEqualSignsInAttribute {
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
                 for attr in &el.attributes {
-                    if let Attribute::NormalAttribute { name, span, .. } = attr {
-                        // Inspect the source text of the attribute for spaces around `=`
-                        let start = span.start as usize;
-                        let end = span.end as usize;
-                        if end <= ctx.source.len() {
-                            let attr_text = &ctx.source[start..end];
-                            if let Some(eq_idx) = attr_text.find('=') {
-                                let before_eq = &attr_text[..eq_idx];
-                                let after_eq = &attr_text[eq_idx + 1..];
-                                if before_eq.ends_with(' ') || after_eq.starts_with(' ') {
-                                    ctx.diagnostic(
-                                        format!("Unexpected space(s) around `=` in attribute `{name}`."),
-                                        *span,
-                                    );
+                    match attr {
+                        Attribute::NormalAttribute { span, .. } => {
+                            let start = span.start as usize;
+                            let end = span.end as usize;
+                            if end <= ctx.source.len() {
+                                let attr_text = &ctx.source[start..end];
+                                if has_spaces_around_eq(attr_text) {
+                                    ctx.diagnostic(MESSAGE, *span);
                                 }
                             }
                         }
+                        Attribute::Directive { span, .. } => {
+                            let start = span.start as usize;
+                            let end = span.end as usize;
+                            if end <= ctx.source.len() {
+                                let attr_text = &ctx.source[start..end];
+                                if has_spaces_around_eq(attr_text) {
+                                    ctx.diagnostic(MESSAGE, *span);
+                                }
+                            }
+                        }
+                        Attribute::Spread { .. } => {}
                     }
                 }
             }
