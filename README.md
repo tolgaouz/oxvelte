@@ -43,11 +43,25 @@ The agent scaffolding (`program.md`, test fixtures, benchmark scripts) lives on 
 
 ## Install
 
+### From GitHub
+
 ```bash
-npm install oxvelte --save-dev
+cargo install --git https://github.com/tolgaouz/oxvelte.git
 ```
 
-Then add to your `package.json` scripts:
+### From source
+
+```bash
+git clone https://github.com/tolgaouz/oxvelte.git
+cd oxvelte
+cargo build --release
+```
+
+The binary will be at `./target/release/oxvelte`.
+
+### Adding to a project
+
+Copy the binary somewhere on your `$PATH` (or reference it directly), then add a script to your `package.json`:
 
 ```json
 {
@@ -57,20 +71,13 @@ Then add to your `package.json` scripts:
 }
 ```
 
-Or run directly:
+Or run it directly:
 
 ```bash
-npx oxvelte lint src/
-npx oxvelte lint --json src/
-npx oxvelte lint --fix src/
-```
-
-### From source
-
-```bash
-cargo install oxvelte
-# or
-cargo build --release && ./target/release/oxvelte lint src/
+oxvelte lint src/
+oxvelte lint --json src/
+oxvelte lint --fix src/
+oxvelte lint --all-rules src/
 ```
 
 ## Configuration
@@ -81,10 +88,10 @@ If you have an existing eslint-plugin-svelte config, oxvelte can convert it auto
 
 ```bash
 # Print the converted config to stdout
-npx oxvelte migrate .eslintrc.json
+oxvelte migrate .eslintrc.json
 
 # Or write directly to oxvelte.config.json
-npx oxvelte migrate eslint.config.js --write
+oxvelte migrate eslint.config.js --write
 ```
 
 This reads your ESLint config, extracts all `svelte/*` rule settings, and outputs the equivalent `oxvelte.config.json`.
@@ -119,7 +126,7 @@ Without a config file, oxvelte runs the **recommended** ruleset (same as eslint-
 ### List available rules
 
 ```bash
-npx oxvelte rules
+oxvelte rules
 ```
 
 ## What's implemented
