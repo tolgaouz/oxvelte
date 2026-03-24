@@ -100,7 +100,6 @@ impl Rule for PreferWritableDerived {
                                 "Prefer using writable $derived instead of $state and $effect",
                                 oxc::span::Span::new(source_pos as u32, (source_pos + var_name.len() + 4) as u32),
                             );
-                            break;
                         }
                     }
 
@@ -155,7 +154,6 @@ impl Rule for PreferWritableDerived {
                                 "Prefer using writable $derived instead of $state and $effect",
                                 oxc::span::Span::new(source_pos as u32, (source_pos + var_name.len() + 4) as u32),
                             );
-                            break;
                         }
                     }
 

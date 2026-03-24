@@ -2,7 +2,7 @@
 //! ⭐ Recommended
 
 use crate::linter::{walk_template_nodes, LintContext, Rule};
-use crate::ast::TemplateNode;
+use crate::ast::{Attribute, AttributeValue, AttributeValuePart, TemplateNode};
 
 pub struct NoObjectInTextMustaches;
 
@@ -17,15 +17,35 @@ impl Rule for NoObjectInTextMustaches {
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         walk_template_nodes(&ctx.ast.html, &mut |node| {
-            if let TemplateNode::MustacheTag(tag) = node {
-                let expr = tag.expression.trim();
-                let kind = detect_expression_kind(expr);
-                if let Some(label) = kind {
-                    ctx.diagnostic(
-                        format!("Unexpected {} in text mustache interpolation.", label),
-                        tag.span,
-                    );
+            match node {
+                TemplateNode::MustacheTag(tag) => {
+                    let expr = tag.expression.trim();
+                    let kind = detect_expression_kind(expr);
+                    if let Some(label) = kind {
+                        ctx.diagnostic(
+                            format!("Unexpected {} in text mustache interpolation.", label),
+                            tag.span,
+                        );
+                    }
                 }
+                TemplateNode::Element(el) => {
+                    for attr in &el.attributes {
+                        if let Attribute::NormalAttribute { value: AttributeValue::Concat(parts), span, .. } = attr {
+                            for part in parts {
+                                if let AttributeValuePart::Expression(expr) = part {
+                                    let trimmed = expr.trim();
+                                    if let Some(label) = detect_expression_kind(trimmed) {
+                                        ctx.diagnostic(
+                                            format!("Unexpected {} in text mustache interpolation.", label),
+                                            *span,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         });
     }

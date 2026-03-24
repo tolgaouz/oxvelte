@@ -23,14 +23,14 @@ impl Rule for NoDynamicSlotName {
                                     }
                                     AttributeValue::True => {
                                         ctx.diagnostic(
-                                            "<slot> name requires a value.",
+                                            "`<slot>` name requires a value.",
                                             *span,
                                         );
                                     }
                                     _ => {
                                         // Expression or Concat — dynamic
                                         ctx.diagnostic(
-                                            "<slot> name cannot be dynamic.",
+                                            "`<slot>` name cannot be dynamic.",
                                             *span,
                                         );
                                     }

@@ -5,8 +5,12 @@
 use crate::linter::{LintContext, Rule};
 use oxc::span::Span;
 
-/// Valid prop names for SvelteKit page components.
+/// Valid prop names for SvelteKit page components (Svelte 4 `export let` style).
 const VALID_KIT_PROPS: &[&str] = &["data", "errors", "form", "params", "snapshot"];
+
+/// Valid prop names for Svelte 5 `$props()` destructuring in SvelteKit page components.
+/// Includes `children` because it is a valid snippet prop in Svelte 5.
+const VALID_KIT_PROPS_SVELTE5: &[&str] = &["data", "errors", "form", "params", "snapshot", "children"];
 
 pub struct ValidPropNamesInKitPages;
 
@@ -44,27 +48,113 @@ impl Rule for ValidPropNamesInKitPages {
             let content = &script.content;
             let base = script.span.start as usize;
 
-            // Look for `export let <name>` patterns.
+            // Look for `export let <name>` or `export let { ... }` patterns.
             for (offset, _) in content.match_indices("export let ") {
                 let rest = &content[offset + "export let ".len()..];
-                let var_end = rest
-                    .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-                    .unwrap_or(rest.len());
-                if var_end == 0 {
-                    continue;
+
+                if rest.starts_with('{') {
+                    // Destructured export: `export let { baz, qux } = data;`
+                    if let Some(close) = rest.find('}') {
+                        let inner = &rest[1..close];
+                        let inner_base = base + offset + "export let ".len() + 1;
+                        check_destructured_props(inner, inner_base, VALID_KIT_PROPS, ctx);
+                    }
+                } else {
+                    // Simple export: `export let foo`
+                    let var_end = rest
+                        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                        .unwrap_or(rest.len());
+                    if var_end == 0 {
+                        continue;
+                    }
+                    let prop_name = &rest[..var_end];
+                    if !VALID_KIT_PROPS.contains(&prop_name) {
+                        let start = (base + offset) as u32;
+                        let end = (base + offset + "export let ".len() + var_end) as u32;
+                        ctx.diagnostic(
+                            "disallow props other than data or errors in SvelteKit page components.".to_string(),
+                            Span::new(start, end),
+                        );
+                    }
                 }
-                let prop_name = &rest[..var_end];
-                if !VALID_KIT_PROPS.contains(&prop_name) {
-                    let start = (base + offset) as u32;
-                    let end = (base + offset + "export let ".len() + var_end) as u32;
-                    ctx.diagnostic(
-                        format!(
-                            "disallow props other than data or errors in SvelteKit page components."
-                        ),
-                        Span::new(start, end),
-                    );
+            }
+
+            // Svelte 5: `let { foo, bar } = $props()`
+            for (offset, _) in content.match_indices("$props()") {
+                // Walk backwards from `$props()` to find the opening `{` of `let {`
+                let before = &content[..offset];
+                if let Some(brace_pos) = rfind_let_brace(before) {
+                    // Extract content between `{` and matching `}`
+                    let after_brace = &content[brace_pos + 1..];
+                    if let Some(close) = after_brace.find('}') {
+                        let inner = &after_brace[..close];
+                        let inner_base = base + brace_pos + 1;
+                        check_destructured_props(inner, inner_base, VALID_KIT_PROPS_SVELTE5, ctx);
+                    }
                 }
             }
         }
+    }
+}
+
+/// Find the position of `{` in `let {` searching backward from the end of `s`.
+/// Returns the byte offset of `{` within `s`.
+fn rfind_let_brace(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = s.len();
+    while i > 0 {
+        i -= 1;
+        if bytes[i] == b'{' {
+            let before_brace = &s[..i];
+            let trimmed = before_brace.trim_end();
+            if trimmed.ends_with("let") {
+                return Some(i);
+            }
+        }
+    }
+    None
+}
+
+/// Check each property name in a destructuring pattern like `baz, qux` or `data: data2, foo`.
+/// Reports diagnostics for any property key that is not in `valid_props`.
+fn check_destructured_props(
+    inner: &str,
+    inner_base: usize,
+    valid_props: &[&str],
+    ctx: &mut LintContext<'_>,
+) {
+    let mut pos = 0;
+    for token in inner.split(',') {
+        let token_trimmed = token.trim();
+        if token_trimmed.is_empty() {
+            pos += token.len() + 1;
+            continue;
+        }
+
+        // Handle rest element `...rest`
+        let name_part = if token_trimmed.starts_with("...") {
+            &token_trimmed[3..]
+        } else {
+            // For `key: localVar`, the prop name is the key (left side)
+            token_trimmed.split(':').next().unwrap_or(token_trimmed).trim()
+        };
+
+        // Handle default values: `foo = defaultVal` → prop name is `foo`
+        let prop_name = name_part.split('=').next().unwrap_or(name_part).trim();
+
+        if !prop_name.is_empty() && !valid_props.contains(&prop_name) {
+            // Find the offset of prop_name within the token (accounting for leading whitespace)
+            let leading_ws = token.len() - token.trim_start().len();
+            let name_offset_in_trimmed = token_trimmed.find(prop_name).unwrap_or(0);
+            let byte_offset = inner_base + pos + leading_ws + name_offset_in_trimmed;
+            let start = byte_offset as u32;
+            let end = (byte_offset + prop_name.len()) as u32;
+            ctx.diagnostic(
+                "disallow props other than data or errors in SvelteKit page components.".to_string(),
+                Span::new(start, end),
+            );
+        }
+
+        pos += token.len() + 1; // +1 for the comma separator
     }
 }
