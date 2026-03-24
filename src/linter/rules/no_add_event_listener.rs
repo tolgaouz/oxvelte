@@ -29,7 +29,7 @@ impl Rule for NoAddEventListener {
                     if let Some(gt) = tag_text.find('>') {
                         let source_pos = tag_start + gt + 1 + abs_pos;
                         ctx.diagnostic(
-                            "Avoid using `addEventListener`. Use Svelte's `on:event` directive or `$effect` with cleanup instead.",
+                            "Do not use `addEventListener`. Use the `on` function from `svelte/events` instead.",
                             oxc::span::Span::new(source_pos as u32, (source_pos + method.len()) as u32),
                         );
                     }
