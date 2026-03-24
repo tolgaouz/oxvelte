@@ -17,34 +17,38 @@ impl Rule for HtmlClosingBracketNewLine {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        // Parse config options
-        let opts = ctx.config.options.as_ref()
-            .and_then(|v| v.as_array())
-            .and_then(|arr| arr.first());
+        // Parse config options — extract all values as owned booleans so we don't hold a
+        // borrow on ctx.config across the walk_template_nodes closure.
+        let (singleline_expect_newline, multiline_expect_newline, sc_singleline, sc_multiline) = {
+            let opts = ctx.config.options.as_ref()
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.first());
 
-        let singleline_opt = opts
-            .and_then(|o| o.get("singleline"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("never");
-        let multiline_opt = opts
-            .and_then(|o| o.get("multiline"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("always");
+            let singleline_expect_newline = opts
+                .and_then(|o| o.get("singleline"))
+                .and_then(|v| v.as_str())
+                .map(|s| s == "always")
+                .unwrap_or(false); // default "never"
+            let multiline_expect_newline = opts
+                .and_then(|o| o.get("multiline"))
+                .and_then(|v| v.as_str())
+                .map(|s| s == "always")
+                .unwrap_or(true); // default "always"
 
-        let singleline_expect_newline = singleline_opt == "always";
-        let multiline_expect_newline = multiline_opt == "always";
+            // selfClosingTag option overrides singleline/multiline for self-closing tags
+            let sc_singleline: Option<bool> = opts
+                .and_then(|o| o.get("selfClosingTag"))
+                .and_then(|o| o.get("singleline"))
+                .and_then(|v| v.as_str())
+                .map(|s| s == "always");
+            let sc_multiline: Option<bool> = opts
+                .and_then(|o| o.get("selfClosingTag"))
+                .and_then(|o| o.get("multiline"))
+                .and_then(|v| v.as_str())
+                .map(|s| s == "always");
 
-        // selfClosingTag option overrides singleline/multiline for self-closing tags
-        let sc_singleline: Option<bool> = opts
-            .and_then(|o| o.get("selfClosingTag"))
-            .and_then(|o| o.get("singleline"))
-            .and_then(|v| v.as_str())
-            .map(|s| s == "always");
-        let sc_multiline: Option<bool> = opts
-            .and_then(|o| o.get("selfClosingTag"))
-            .and_then(|o| o.get("multiline"))
-            .and_then(|v| v.as_str())
-            .map(|s| s == "always");
+            (singleline_expect_newline, multiline_expect_newline, sc_singleline, sc_multiline)
+        };
 
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             let (span, attrs_count, source) = match node {

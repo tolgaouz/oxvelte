@@ -148,14 +148,92 @@ fn is_single_class_name(s: &str) -> bool {
     !trimmed.is_empty() && !trimmed.contains(' ')
 }
 
+/// Returns true if the string is a valid single CSS class name (matches /^[\w-]+$/).
+fn is_valid_class_name(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Returns true if the string (contents of a quoted literal, already unquoted) is empty or
+/// whitespace-only — i.e., effectively an empty class name.
+fn is_empty_class_branch(s: &str) -> bool {
+    s.trim().is_empty()
+}
+
+/// If `s` is a quoted string literal (single, double, or backtick without `${}`),
+/// return its inner content. Otherwise return None.
+fn unquote_str(s: &str) -> Option<&str> {
+    let s = s.trim();
+    if s.len() >= 2 {
+        let b = s.as_bytes();
+        if (b[0] == b'\'' && b[s.len()-1] == b'\'') || (b[0] == b'"' && b[s.len()-1] == b'"') {
+            return Some(&s[1..s.len()-1]);
+        }
+        // Backtick template literal with no interpolations
+        if b[0] == b'`' && b[s.len()-1] == b'`' {
+            let inner = &s[1..s.len()-1];
+            if !inner.contains("${") {
+                return Some(inner);
+            }
+        }
+    }
+    None
+}
+
+/// Split a ternary expression at the top-level `?` and `:` (depth 0).
+/// Returns `(condition, true_branch, false_branch)` or `None` if not a ternary.
+fn split_ternary(expr: &str) -> Option<(&str, &str, &str)> {
+    let bytes = expr.as_bytes();
+    let mut depth = 0i32;
+    let mut q_pos = None;
+    let mut c_pos = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b'\'' | b'"' | b'`' => {
+                // Skip string literal
+                let quote = bytes[i];
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'\\' { i += 1; }
+                    else if bytes[i] == quote { break; }
+                    i += 1;
+                }
+            }
+            b'?' if depth == 0 && q_pos.is_none() => q_pos = Some(i),
+            b':' if depth == 0 && q_pos.is_some() && c_pos.is_none() => c_pos = Some(i),
+            _ => {}
+        }
+        i += 1;
+    }
+    if let (Some(q), Some(c)) = (q_pos, c_pos) {
+        Some((
+            expr[..q].trim(),
+            expr[q+1..c].trim(),
+            expr[c+1..].trim(),
+        ))
+    } else {
+        None
+    }
+}
+
 /// Check if an expression is a simple ternary like `cond ? 'class-name' : ''`
+/// (either the true or false branch is empty/whitespace and the other is a valid class name).
 fn is_simple_class_ternary(expr: &str) -> bool {
     let trimmed = expr.trim();
-    if !trimmed.contains('?') || !trimmed.contains(':') {
+    let Some((_cond, true_branch, false_branch)) = split_ternary(trimmed) else {
         return false;
+    };
+    if let (Some(true_inner), Some(false_inner)) = (unquote_str(true_branch), unquote_str(false_branch)) {
+        // false branch empty, true branch is a valid single class name
+        if is_empty_class_branch(false_inner) && is_valid_class_name(true_inner.trim()) {
+            return true;
+        }
+        // true branch empty, false branch is a valid single class name
+        if is_empty_class_branch(true_inner) && is_valid_class_name(false_inner.trim()) {
+            return true;
+        }
     }
-    trimmed.ends_with(": ''")
-        || trimmed.ends_with(": \"\"")
-        || trimmed.starts_with("'' :")
-        || trimmed.starts_with("\"\" :")
+    false
 }
