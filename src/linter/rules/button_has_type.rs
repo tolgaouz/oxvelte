@@ -1,7 +1,7 @@
 //! `svelte/button-has-type` — disallow usage of button without an explicit type attribute.
 
 use crate::linter::{walk_template_nodes, LintContext, Rule};
-use crate::ast::{Attribute, AttributeValue, TemplateNode};
+use crate::ast::{Attribute, AttributeValue, DirectiveKind, TemplateNode};
 
 pub struct ButtonHasType;
 
@@ -42,36 +42,76 @@ impl Rule for ButtonHasType {
                     return;
                 }
 
+                // Check for bind:type directive first
+                let has_bind_type = el.attributes.iter().any(|attr| {
+                    matches!(attr, Attribute::Directive { kind: DirectiveKind::Binding, name, .. } if name == "type")
+                });
+                if has_bind_type {
+                    // bind:type is valid (it binds to a local variable)
+                    return;
+                }
+
+                // Find explicit type attribute
                 let type_attr = el.attributes.iter().find(|attr| {
                     matches!(attr, Attribute::NormalAttribute { name, .. } if name == "type")
                 });
 
                 match type_attr {
-                    None => {
-                        ctx.diagnostic(
-                            "Missing an explicit `type` attribute for `<button>`. Defaults to `\"submit\"` which may not be intended.",
-                            el.span,
-                        );
-                    }
                     Some(Attribute::NormalAttribute { value, span, .. }) => {
-                        let type_val = match value {
-                            AttributeValue::Static(v) => Some(v.as_str()),
-                            _ => None,
-                        };
-                        if let Some(val) = type_val {
-                            let is_forbidden = match val {
-                                "button" => button_forbidden,
-                                "submit" => submit_forbidden,
-                                "reset" => reset_forbidden,
-                                _ => false,
-                            };
-                            if is_forbidden {
+                        match value {
+                            // <button type> — bare attribute with no value
+                            AttributeValue::True => {
                                 ctx.diagnostic(
-                                    format!("{} is a forbidden value for button type attribute.", val),
+                                    "A value must be set for button type attribute.",
                                     *span,
                                 );
                             }
+                            // <button type=""> — empty string value
+                            AttributeValue::Static(v) if v.is_empty() => {
+                                ctx.diagnostic(
+                                    "A value must be set for button type attribute.",
+                                    *span,
+                                );
+                            }
+                            // <button type="button|submit|reset"> — known valid values
+                            AttributeValue::Static(v) => {
+                                let is_known = matches!(v.as_str(), "button" | "submit" | "reset");
+                                if !is_known {
+                                    ctx.diagnostic(
+                                        format!("{} is an invalid value for button type attribute.", v),
+                                        *span,
+                                    );
+                                } else {
+                                    let is_forbidden = match v.as_str() {
+                                        "button" => button_forbidden,
+                                        "submit" => submit_forbidden,
+                                        "reset" => reset_forbidden,
+                                        _ => false,
+                                    };
+                                    if is_forbidden {
+                                        ctx.diagnostic(
+                                            format!("{} is a forbidden value for button type attribute.", v),
+                                            *span,
+                                        );
+                                    }
+                                }
+                            }
+                            // Dynamic expression — can't statically determine the value; skip
+                            AttributeValue::Expression(_) | AttributeValue::Concat(_) => {}
                         }
+                    }
+                    None => {
+                        // No type attribute found — check for spread (type may be spread in)
+                        let has_spread = el.attributes.iter().any(|attr| {
+                            matches!(attr, Attribute::Spread { .. })
+                        });
+                        if has_spread {
+                            return;
+                        }
+                        ctx.diagnostic(
+                            "Missing an explicit type attribute for button.",
+                            el.span,
+                        );
                     }
                     _ => {}
                 }

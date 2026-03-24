@@ -6,6 +6,40 @@ use oxc::span::Span;
 
 pub struct BlockLang;
 
+/// Build a human-readable description of the allowed langs list.
+/// Examples:
+///   [null]          → "omitted"
+///   ["ts"]          → "\"ts\""
+///   ["ts", null]    → "either omitted or \"ts\""
+///   ["ts", "typescript", null] → "either omitted or one of \"ts\", \"typescript\""
+///   ["ts", "typescript"] → "\"ts\" or \"typescript\""  (2 items, no null)
+///   ["ts", "typescript", "js"] → "one of \"ts\", \"typescript\", \"js\""
+fn pretty_print_langs(allowed: &[Option<String>]) -> String {
+    let has_null = allowed.iter().any(|a| a.is_none());
+    let named: Vec<&str> = allowed.iter().filter_map(|a| a.as_deref()).collect();
+
+    match (has_null, named.len()) {
+        // Only null allowed
+        (true, 0) => "omitted".to_string(),
+        // One non-null, with null also allowed
+        (true, 1) => format!("either omitted or \"{}\"", named[0]),
+        // Multiple non-null, with null also allowed
+        (true, _) => {
+            let quoted: Vec<String> = named.iter().map(|s| format!("\"{}\"", s)).collect();
+            format!("either omitted or one of {}", quoted.join(", "))
+        }
+        // One non-null, no null
+        (false, 1) => format!("\"{}\"", named[0]),
+        // Two non-null, no null
+        (false, 2) => format!("\"{}\" or \"{}\"", named[0], named[1]),
+        // Three+ non-null, no null
+        (false, _) => {
+            let quoted: Vec<String> = named.iter().map(|s| format!("\"{}\"", s)).collect();
+            format!("one of {}", quoted.join(", "))
+        }
+    }
+}
+
 impl Rule for BlockLang {
     fn name(&self) -> &'static str {
         "svelte/block-lang"
@@ -54,22 +88,59 @@ impl Rule for BlockLang {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        // Check script blocks
+        // -----------------------------------------------------------------------
+        // Script block checks
+        // -----------------------------------------------------------------------
+
+        // enforceScriptPresent is independent — always check it if enabled.
+        if enforce_script_present {
+            if ctx.ast.instance.is_none() && ctx.ast.module.is_none() {
+                ctx.diagnostic(
+                    "A <script> block is required.",
+                    Span::new(0, 0),
+                );
+            }
+        }
+
+        // Lang check: only run when script option is explicitly configured.
         if let Some(allowed) = &script_langs {
-            // We have explicit allowed langs for script
             for script in [&ctx.ast.instance, &ctx.ast.module].iter().filter_map(|s| s.as_ref()) {
-                let lang = script.lang.as_deref();
-                if !allowed.iter().any(|a| a.as_deref() == lang) {
-                    // Find the first allowed lang string for the suggestion
-                    let first_allowed = allowed.first().and_then(|a| a.as_deref()).unwrap_or("javascript");
-                    let msg = format!("The lang attribute of the <script> block should be \"{}\".", first_allowed);
-                    // Build suggestion: replace script tag with correct lang
+                // Case-insensitive comparison
+                let lang = script.lang.as_deref().map(|l| l.to_lowercase());
+                let lang_ref = lang.as_deref();
+                let allowed_lower: Vec<Option<String>> = allowed.iter()
+                    .map(|a| a.as_deref().map(|s| s.to_lowercase()))
+                    .collect();
+
+                if !allowed_lower.iter().any(|a| a.as_deref() == lang_ref) {
+                    let pretty = pretty_print_langs(allowed);
+                    let msg = format!("The lang attribute of the <script> block should be {}.", pretty);
+
+                    // Build a single suggestion: fix to the first non-null allowed lang,
+                    // or remove lang if the first allowed is null.
                     let source = &ctx.source[script.span.start as usize..script.span.end as usize];
-                    let replacement = if let Some(l) = lang {
-                        source.replacen(&format!("lang=\"{}\"", l), &format!("lang=\"{}\"", first_allowed), 1)
+                    let first_allowed = allowed.iter().find_map(|a| a.as_deref());
+                    let replacement = if let Some(target_lang) = first_allowed {
+                        if let Some(l) = script.lang.as_deref() {
+                            source.replacen(&format!("lang=\"{}\"", l), &format!("lang=\"{}\"", target_lang), 1)
+                        } else {
+                            source.replacen("<script", &format!("<script lang=\"{}\"", target_lang), 1)
+                        }
                     } else {
-                        source.replacen("<script", &format!("<script lang=\"{}\"", first_allowed), 1)
+                        // null-only allowed: remove the lang attribute
+                        if let Some(l) = script.lang.as_deref() {
+                            // Remove ` lang="..."` (with leading space)
+                            let with_space = format!(" lang=\"{}\"", l);
+                            if source.contains(&with_space) {
+                                source.replacen(&with_space, "", 1)
+                            } else {
+                                source.replacen(&format!("lang=\"{}\"", l), "", 1)
+                            }
+                        } else {
+                            source.to_string()
+                        }
                     };
+
                     ctx.diagnostic_with_fix(
                         msg,
                         script.span,
@@ -77,67 +148,67 @@ impl Rule for BlockLang {
                     );
                 }
             }
-        } else if enforce_script_present {
-            // Only enforce that script is present, no lang requirement
-            if ctx.ast.instance.is_none() && ctx.ast.module.is_none() {
-                ctx.diagnostic(
-                    "A <script> block is required.",
-                    Span::new(0, 0),
-                );
-            }
-        } else {
-            // Default behavior: require lang attribute on script blocks
-            if let Some(script) = &ctx.ast.instance {
-                if script.lang.is_none() {
-                    ctx.diagnostic(
-                        "Script block should specify a `lang` attribute (e.g. `lang=\"ts\"`).",
-                        script.span,
-                    );
-                }
-            }
-            if let Some(module) = &ctx.ast.module {
-                if module.lang.is_none() {
-                    ctx.diagnostic(
-                        "Module script block should specify a `lang` attribute (e.g. `lang=\"ts\"`).",
-                        module.span,
-                    );
-                }
-            }
         }
+        // If script_langs is None (not configured), no lang diagnostics — vendor treats it as a no-op.
 
-        // Check style blocks
-        if let Some(allowed) = &style_langs {
-            if let Some(style) = &ctx.ast.css {
-                let lang = style.lang.as_deref();
-                if !allowed.iter().any(|a| a.as_deref() == lang) {
-                    let first_allowed = allowed.first().and_then(|a| a.as_deref());
-                    let target = match first_allowed {
-                        Some(l) => format!("\"{}\"", l),
-                        None => "null (no lang attribute)".to_string(),
-                    };
-                    ctx.diagnostic(
-                        format!("The lang attribute of the <style> block should be {}.", target),
-                        style.span,
-                    );
-                }
-            }
-        } else if enforce_style_present {
+        // -----------------------------------------------------------------------
+        // Style block checks
+        // -----------------------------------------------------------------------
+
+        // enforceStylePresent is independent — always check it if enabled.
+        if enforce_style_present {
             if ctx.ast.css.is_none() {
                 ctx.diagnostic(
                     "A <style> block is required.",
                     Span::new(0, 0),
                 );
             }
-        } else {
-            // Default behavior
+        }
+
+        // Lang check: only run when style option is explicitly configured.
+        if let Some(allowed) = &style_langs {
             if let Some(style) = &ctx.ast.css {
-                if style.lang.is_none() {
-                    ctx.diagnostic(
-                        "Style block should specify a `lang` attribute (e.g. `lang=\"scss\"`).",
+                // Case-insensitive comparison
+                let lang = style.lang.as_deref().map(|l| l.to_lowercase());
+                let lang_ref = lang.as_deref();
+                let allowed_lower: Vec<Option<String>> = allowed.iter()
+                    .map(|a| a.as_deref().map(|s| s.to_lowercase()))
+                    .collect();
+
+                if !allowed_lower.iter().any(|a| a.as_deref() == lang_ref) {
+                    let pretty = pretty_print_langs(allowed);
+                    let msg = format!("The lang attribute of the <style> block should be {}.", pretty);
+
+                    let source = &ctx.source[style.span.start as usize..style.span.end as usize];
+                    let first_allowed = allowed.iter().find_map(|a| a.as_deref());
+                    let replacement = if let Some(target_lang) = first_allowed {
+                        if let Some(l) = style.lang.as_deref() {
+                            source.replacen(&format!("lang=\"{}\"", l), &format!("lang=\"{}\"", target_lang), 1)
+                        } else {
+                            source.replacen("<style", &format!("<style lang=\"{}\"", target_lang), 1)
+                        }
+                    } else {
+                        // null-only allowed: remove the lang attribute
+                        if let Some(l) = style.lang.as_deref() {
+                            let with_space = format!(" lang=\"{}\"", l);
+                            if source.contains(&with_space) {
+                                source.replacen(&with_space, "", 1)
+                            } else {
+                                source.replacen(&format!("lang=\"{}\"", l), "", 1)
+                            }
+                        } else {
+                            source.to_string()
+                        }
+                    };
+
+                    ctx.diagnostic_with_fix(
+                        msg,
                         style.span,
+                        Fix { span: style.span, replacement },
                     );
                 }
             }
         }
+        // If style_langs is None (not configured), no lang diagnostics — vendor treats it as a no-op.
     }
 }

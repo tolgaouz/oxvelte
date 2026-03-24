@@ -1,0 +1,8 @@
+- message: A value must be set for button type attribute.
+  line: 1
+  column: 9
+  suggestions: null
+- message: A value must be set for button type attribute.
+  line: 2
+  column: 9
+  suggestions: null
