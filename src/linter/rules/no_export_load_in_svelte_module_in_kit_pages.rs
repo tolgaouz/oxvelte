@@ -20,8 +20,8 @@ impl Rule for NoExportLoadInSvelteModuleInKitPages {
         // The file must be named +page.svelte or +layout.svelte.
         if let Some(file_path) = &ctx.file_path {
             let fname = file_path.rsplit('/').next().unwrap_or(file_path);
-            if fname != "+page.svelte" && fname != "+layout.svelte"
-                && !fname.ends_with("+page.svelte") && !fname.ends_with("+layout.svelte") {
+            if fname != "+page.svelte" && fname != "+layout.svelte" && fname != "+error.svelte"
+                && !fname.ends_with("+page.svelte") && !fname.ends_with("+layout.svelte") && !fname.ends_with("+error.svelte") {
                 return;
             }
             // Check settings for custom routes directory
