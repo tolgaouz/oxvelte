@@ -73,7 +73,10 @@ impl Rule for NoTargetBlank {
                             name,
                             value: AttributeValue::Static(v),
                             ..
-                        } if name == "rel" && v.contains("noopener") && (allow_referrer || v.contains("noreferrer"))
+                        } if name == "rel" && {
+                            let tokens: Vec<&str> = v.split_whitespace().collect();
+                            tokens.contains(&"noopener") && (allow_referrer || tokens.contains(&"noreferrer"))
+                        }
                     )
                 });
 
