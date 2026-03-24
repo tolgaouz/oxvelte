@@ -113,7 +113,7 @@ fn simple_regex_match(pattern: &str, text: &str) -> bool {
 
     // For fully anchored patterns (^...$), do a full match
     if anchored_start && anchored_end {
-        return regex_match_inner(inner, text, 0, 0);
+        return regex_match_inner_full(inner, text, 0, 0);
     }
     if anchored_start {
         return regex_match_inner(inner, text, 0, 0);
@@ -137,9 +137,17 @@ fn simple_regex_match(pattern: &str, text: &str) -> bool {
 }
 
 fn regex_match_inner(pattern: &str, text: &str, pi: usize, ti: usize) -> bool {
+    regex_match_inner_impl(pattern, text, pi, ti, false)
+}
+
+fn regex_match_inner_full(pattern: &str, text: &str, pi: usize, ti: usize) -> bool {
+    regex_match_inner_impl(pattern, text, pi, ti, true)
+}
+
+fn regex_match_inner_impl(pattern: &str, text: &str, pi: usize, ti: usize, must_consume_all: bool) -> bool {
     if pi >= pattern.len() {
-        // Pattern exhausted — check if we need full match
-        return true;
+        // Pattern exhausted — only accept if text is also exhausted (full match) or not required
+        return if must_consume_all { ti >= text.len() } else { true };
     }
     let pb = pattern.as_bytes();
     let tb = text.as_bytes();
@@ -173,28 +181,28 @@ fn regex_match_inner(pattern: &str, text: &str, pi: usize, ti: usize) -> bool {
                 while count < max && t < tb.len() && matches_char(tb[t]) {
                     count += 1;
                     t += 1;
-                    if count >= min && regex_match_inner(pattern, text, next_pi, t) {
+                    if count >= min && regex_match_inner_impl(pattern, text, next_pi, t, must_consume_all) {
                         return true;
                     }
                 }
-                return count >= min && regex_match_inner(pattern, text, next_pi, ti + count);
+                return count >= min && regex_match_inner_impl(pattern, text, next_pi, ti + count, must_consume_all);
             }
         }
         // Single char match
         if ti < tb.len() && matches_char(tb[ti]) {
-            return regex_match_inner(pattern, text, pi + 2, ti + 1);
+            return regex_match_inner_impl(pattern, text, pi + 2, ti + 1, must_consume_all);
         }
         return false;
     }
 
     // Literal character
     if ti < tb.len() && pb[pi] == tb[ti] {
-        return regex_match_inner(pattern, text, pi + 1, ti + 1);
+        return regex_match_inner_impl(pattern, text, pi + 1, ti + 1, must_consume_all);
     }
 
     // . matches any
     if pb[pi] == b'.' && ti < tb.len() {
-        return regex_match_inner(pattern, text, pi + 1, ti + 1);
+        return regex_match_inner_impl(pattern, text, pi + 1, ti + 1, must_consume_all);
     }
 
     false
