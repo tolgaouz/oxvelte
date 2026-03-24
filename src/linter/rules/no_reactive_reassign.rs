@@ -248,7 +248,7 @@ impl Rule for NoReactiveReassign {
             for var in &reactive_vars {
                 let destructure_patterns = [
                     format!("{} }} =", var),     // { foo: reactiveVar } =
-                    format!("{} }} =", var),
+                    format!("{}}} =", var),      // {reactiveVar} = (no space)
                     format!("{}] =", var),       // [reactiveVar] =
                     format!("...{} }} =", var),  // { ...reactiveVar } =
                     format!("...{}] =", var),    // [...reactiveVar] =
