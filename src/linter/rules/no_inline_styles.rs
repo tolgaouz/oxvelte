@@ -31,7 +31,7 @@ impl Rule for NoInlineStyles {
                             ctx.diagnostic("Found disallowed style directive.", *span);
                         }
                         Attribute::Directive { kind, span, .. }
-                            if !allow_transitions && matches!(kind, DirectiveKind::Transition | DirectiveKind::In | DirectiveKind::Out) =>
+                            if !allow_transitions && matches!(kind, DirectiveKind::Transition) =>
                         {
                             ctx.diagnostic("Found disallowed transition.", *span);
                         }
