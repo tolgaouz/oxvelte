@@ -6,8 +6,6 @@
 
 use crate::linter::{LintContext, Rule};
 
-const INDENT: usize = 2;
-
 pub struct Indent;
 
 impl Rule for Indent {
@@ -38,6 +36,21 @@ impl Rule for Indent {
         let opts = ctx.config.options.as_ref()
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first());
+        // The first option element can be a number (indent size) or "tab"
+        let indent_size: usize = ctx.config.options.as_ref()
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize)
+            .unwrap_or(2);
+        let use_tabs: bool = ctx.config.options.as_ref()
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|v| v.as_str())
+            .map(|s| s == "tab")
+            .unwrap_or(false);
+        let indent = if use_tabs { 1 } else { indent_size };
+
         let indent_script = opts
             .and_then(|o| o.get("indentScript"))
             .and_then(|v| v.as_bool())
@@ -87,7 +100,7 @@ impl Rule for Indent {
                 continue;
             }
 
-            // Multiline tag: check attribute indentation using tag's column + INDENT
+            // Multiline tag: check attribute indentation using tag's column + indent
             if in_multiline_tag {
                 let is_end = trimmed.ends_with(">") || trimmed.ends_with("/>") || trimmed == ">" || trimmed == "/>";
                 // Check attribute indentation only for simple cases (not ignored):
@@ -95,13 +108,13 @@ impl Rule for Indent {
                 // (not inside {}, not value continuations, not deeper nesting)
                 if !is_end && !multiline_tag_ignored && multiline_brace_depth == 0 {
                     let actual = leading_spaces(line);
-                    let expected = multiline_tag_column + INDENT;
+                    let expected = multiline_tag_column + indent;
                     // Only check if it's a simple attribute name at the right depth
                     let first_char = trimmed.chars().next().unwrap_or(' ');
                     let is_simple_attr = first_char.is_ascii_alphabetic() || first_char == '_' || first_char == '$';
-                    let is_at_attr_depth = actual == expected || actual == expected + INDENT;
+                    let is_at_attr_depth = actual == expected || actual == expected + indent;
                     // Flag only exact attribute-name lines at wrong indent
-                    if is_simple_attr && actual != expected && actual < expected + INDENT {
+                    if is_simple_attr && actual != expected && actual < expected + indent {
                         let msg = format!("Expected indentation of {} spaces but found {} spaces.", expected, actual);
                         ctx.diagnostic(msg, oxc::span::Span::new(line_start as u32, (line_start + actual.max(1)) as u32));
                     }
@@ -147,7 +160,7 @@ impl Rule for Indent {
             // When indentScript=true, only check minimum (don't track JS nesting)
             if in_script {
                 let actual = leading_spaces(line);
-                let base = (script_base_depth.max(0) as usize) * INDENT;
+                let base = (script_base_depth.max(0) as usize) * indent;
                 if !indent_script {
                     // indentScript=false: top-level script content must be at depth 0
                     if actual != 0 && trimmed.starts_with("const ") || trimmed.starts_with("let ") || trimmed.starts_with("var ")
@@ -186,7 +199,7 @@ impl Rule for Indent {
             let pre_depth = depth - closes;
             let check_depth = pre_depth.max(0) as usize;
             let actual = leading_spaces(line);
-            let expected = check_depth * INDENT;
+            let expected = check_depth * indent;
 
             if actual != expected {
                 let msg = if actual == 1 {
