@@ -77,17 +77,17 @@ impl Rule for RequireStoresInit {
                             true
                         } else {
                             // Count top-level commas
-                            let mut comma_count = 0;
-                            let mut d = 0;
+                            let mut comma_count = 0usize;
+                            let mut d = 0i32;
                             for ch in args_text.chars() {
                                 match ch {
                                     '(' | '[' | '{' => d += 1,
-                                    ')' | ']' | '}' => d -= 1,
+                                    ')' | ']' | '}' => { if d > 0 { d -= 1; } }
                                     ',' if d == 0 => comma_count += 1,
                                     _ => {}
                                 }
                             }
-                            comma_count < 2 // less than 3 args
+                            comma_count < 2 // less than 3 args means no initial value
                         }
                     } else {
                         // writable/readable: need at least 1 argument
