@@ -22,11 +22,8 @@ impl Rule for RequireOptimizedStyleAttribute {
                 for attr in &el.attributes {
                     if let Attribute::NormalAttribute { name, value, span } = attr {
                         if name == "style" {
-                            if is_unoptimized(value) {
-                                ctx.diagnostic(
-                                    "Use `style:property={value}` directives instead of unoptimized style patterns for better performance.",
-                                    *span,
-                                );
+                            if let Some(reason) = unoptimized_reason(value) {
+                                ctx.diagnostic(reason, *span);
                             }
                         }
                     }
@@ -36,31 +33,30 @@ impl Rule for RequireOptimizedStyleAttribute {
     }
 }
 
-fn is_unoptimized(value: &AttributeValue) -> bool {
+fn unoptimized_reason(value: &AttributeValue) -> Option<String> {
     match value {
-        // style={dynamicExpr} — always unoptimized
-        AttributeValue::Expression(_) => true,
+        // style={dynamicExpr} — shorthand, always unoptimized
+        AttributeValue::Expression(_) => {
+            Some("It cannot be optimized because too complex.".to_string())
+        }
         AttributeValue::Concat(parts) => {
-            // Check for unoptimized patterns:
-            // 1. No CSS declarations in static parts (whole style is expression)
             let static_text: String = parts.iter().filter_map(|p| {
                 if let AttributeValuePart::Static(s) = p { Some(s.as_str()) } else { None }
             }).collect();
 
+            // No CSS declarations in static parts (whole style is expression)
             if !static_text.contains(':') {
-                return true;
+                return Some("It cannot be optimized because too complex.".to_string());
             }
 
-            // 2. CSS comments in static parts
+            // CSS comments in static parts
             if static_text.contains("/*") {
-                return true;
+                return Some("It cannot be optimized because contains comments.".to_string());
             }
 
-            // 3. Check for expressions that replace whole declarations
-            // (expression not between property: and ;)
+            // Check for expressions that replace whole declarations or dynamic property names
             for (i, part) in parts.iter().enumerate() {
                 if let AttributeValuePart::Expression(_) = part {
-                    // Check what's before and after this expression
                     let before = if i > 0 {
                         if let AttributeValuePart::Static(s) = &parts[i - 1] {
                             Some(s.as_str())
@@ -73,36 +69,30 @@ fn is_unoptimized(value: &AttributeValue) -> bool {
                         } else { None }
                     } else { None };
 
-                    // Pattern: expression followed by `:` = dynamic property name
+                    // Expression followed by `:` = dynamic property name
                     if let Some(a) = after {
-                        let trimmed = a.trim_start();
-                        if trimmed.starts_with(':') {
-                            return true;
+                        if a.trim_start().starts_with(':') {
+                            return Some("It cannot be optimized because property of style declaration contain interpolation.".to_string());
                         }
                     }
 
-                    // Pattern: expression at a declaration boundary (after ; or start)
-                    // but NOT after a property: (which would be a value interpolation)
+                    // Expression at a declaration boundary
                     if let Some(b) = before {
                         let trimmed = b.trim_end();
-                        // If the last non-whitespace before the expression is ; or { or
-                        // the expression is at position 0, it's replacing a whole declaration
                         if trimmed.ends_with(';') || trimmed.is_empty() {
-                            // Check if next part is NOT a colon (which would be property: {value})
                             let next_is_value = after.map(|a| {
-                                // If after has a semicolon, the expression was a value
                                 a.trim_start().starts_with(';') || a.trim_start().starts_with('}')
                             }).unwrap_or(false);
                             if !next_is_value {
-                                return true;
+                                return Some("It cannot be optimized because too complex.".to_string());
                             }
                         }
                     }
                 }
             }
 
-            false
+            None
         }
-        _ => false,
+        _ => None,
     }
 }
