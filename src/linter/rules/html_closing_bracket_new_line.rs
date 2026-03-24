@@ -34,6 +34,18 @@ impl Rule for HtmlClosingBracketNewLine {
         let singleline_expect_newline = singleline_opt == "always";
         let multiline_expect_newline = multiline_opt == "always";
 
+        // selfClosingTag option overrides singleline/multiline for self-closing tags
+        let sc_singleline: Option<bool> = opts
+            .and_then(|o| o.get("selfClosingTag"))
+            .and_then(|o| o.get("singleline"))
+            .and_then(|v| v.as_str())
+            .map(|s| s == "always");
+        let sc_multiline: Option<bool> = opts
+            .and_then(|o| o.get("selfClosingTag"))
+            .and_then(|o| o.get("multiline"))
+            .and_then(|v| v.as_str())
+            .map(|s| s == "always");
+
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             let (span, attrs_count, source) = match node {
                 TemplateNode::Element(el) => (el.span, el.attributes.len(), ctx.source),
@@ -115,8 +127,16 @@ impl Rule for HtmlClosingBracketNewLine {
                 }
             }
 
+            // Determine effective expect_newline based on selfClosingTag overrides
+            let effective_multi_expect = if is_self_closing {
+                sc_multiline.unwrap_or(multiline_expect_newline)
+            } else { multiline_expect_newline };
+            let effective_single_expect = if is_self_closing {
+                sc_singleline.unwrap_or(singleline_expect_newline)
+            } else { singleline_expect_newline };
+
             if is_multiline {
-                if multiline_expect_newline {
+                if effective_multi_expect {
                     // Multiline: expect exactly 1 line break
                     if line_breaks != 1 {
                         let abs_pos = span.start + bracket_start as u32;
@@ -144,7 +164,7 @@ impl Rule for HtmlClosingBracketNewLine {
                     }
                 }
             } else {
-                if singleline_expect_newline {
+                if effective_single_expect {
                     // Singleline "always": expect a line break
                     if line_breaks == 0 {
                         let abs_pos = span.start + bracket_start as u32;

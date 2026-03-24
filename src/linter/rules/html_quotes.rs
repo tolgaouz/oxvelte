@@ -22,6 +22,14 @@ impl Rule for HtmlQuotes {
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first());
 
+        // Read `prefer` option — default "double"
+        let prefer = opts
+            .and_then(|o| o.get("prefer"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("double");
+
+        let prefer_char = if prefer == "single" { '\'' } else { '"' };
+
         let dynamic_quoted = opts
             .and_then(|o| o.get("dynamic"))
             .and_then(|d| d.get("quoted"))
@@ -33,6 +41,13 @@ impl Rule for HtmlQuotes {
             .and_then(|d| d.get("avoidInvalidUnquotedInHTML"))
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+
+        let expected_msg = if prefer == "single" {
+            "Expected to be enclosed by single quotes."
+        } else {
+            "Expected to be enclosed by double quotes."
+        };
+        let unexpected_msg = "Unexpected to be enclosed by any quotes.";
 
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
@@ -49,33 +64,44 @@ impl Rule for HtmlQuotes {
                                 let val_part = attr_src[eq_pos + 1..].trim();
 
                                 match value {
-                                    AttributeValue::Static(_) => {
-                                        // Unquoted or single-quoted static values
-                                        if !val_part.starts_with('"') {
+                                    AttributeValue::Static(_) | AttributeValue::Concat(_) => {
+                                        // Static or mixed (concat) value: must use the preferred quote char
+                                        let is_correct = val_part.starts_with(prefer_char);
+                                        if !is_correct {
                                             ctx.diagnostic(
-                                                "Expected to be enclosed by double quotes.",
+                                                expected_msg,
                                                 Span::new(span.start, span.end),
                                             );
                                         }
                                     }
-                                    AttributeValue::Expression(_) | AttributeValue::Concat(_) => {
+                                    AttributeValue::Expression(_) => {
+                                        // Pure dynamic expression
                                         if dynamic_quoted {
-                                            // Check if the dynamic value is enclosed in quotes
-                                            if !val_part.starts_with('"') {
+                                            // dynamic.quoted = true: dynamic values should be quoted with prefer char
+                                            if !val_part.starts_with(prefer_char) {
                                                 ctx.diagnostic(
-                                                    "Expected to be enclosed by double quotes.",
+                                                    expected_msg,
                                                     Span::new(span.start, span.end),
                                                 );
                                             }
-                                        } else if avoid_invalid_unquoted && !val_part.starts_with('"') {
-                                            // Check if the unquoted value contains chars invalid in HTML
-                                            if val_part.contains('>') || val_part.contains('<')
-                                                || val_part.contains('=') || val_part.contains('`')
-                                            {
+                                        } else {
+                                            // dynamic.quoted = false (default): dynamic values should NOT be quoted
+                                            let is_quoted = val_part.starts_with('"') || val_part.starts_with('\'');
+                                            if is_quoted {
                                                 ctx.diagnostic(
-                                                    "Expected to be enclosed by double quotes.",
+                                                    unexpected_msg,
                                                     Span::new(span.start, span.end),
                                                 );
+                                            } else if avoid_invalid_unquoted {
+                                                // Check if the unquoted value contains chars invalid in HTML
+                                                if val_part.contains('>') || val_part.contains('<')
+                                                    || val_part.contains('=') || val_part.contains('`')
+                                                {
+                                                    ctx.diagnostic(
+                                                        expected_msg,
+                                                        Span::new(span.start, span.end),
+                                                    );
+                                                }
                                             }
                                         }
                                     }
@@ -91,21 +117,30 @@ impl Rule for HtmlQuotes {
                             if let Some(eq_pos) = attr_src.find('=') {
                                 let val_part = attr_src[eq_pos + 1..].trim();
                                 if dynamic_quoted {
-                                    // Check directive values like bind:value={(text)}
-                                    if val_part.starts_with('{') && !val_part.starts_with("\"") {
+                                    // dynamic.quoted = true: directive values should be quoted with preferred char
+                                    if val_part.starts_with('{') && !val_part.starts_with(prefer_char) {
                                         ctx.diagnostic(
-                                            "Expected to be enclosed by double quotes.",
+                                            expected_msg,
                                             Span::new(span.start, span.end),
                                         );
                                     }
-                                } else if avoid_invalid_unquoted && !val_part.starts_with('"') {
-                                    if val_part.contains('>') || val_part.contains('<')
-                                        || val_part.contains('=') || val_part.contains('`')
-                                    {
+                                } else {
+                                    // dynamic.quoted = false (default): directive values should NOT be quoted
+                                    let is_quoted = val_part.starts_with('"') || val_part.starts_with('\'');
+                                    if is_quoted {
                                         ctx.diagnostic(
-                                            "Expected to be enclosed by double quotes.",
+                                            unexpected_msg,
                                             Span::new(span.start, span.end),
                                         );
+                                    } else if avoid_invalid_unquoted {
+                                        if val_part.contains('>') || val_part.contains('<')
+                                            || val_part.contains('=') || val_part.contains('`')
+                                        {
+                                            ctx.diagnostic(
+                                                expected_msg,
+                                                Span::new(span.start, span.end),
+                                            );
+                                        }
                                     }
                                 }
                             }

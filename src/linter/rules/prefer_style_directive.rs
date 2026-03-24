@@ -32,7 +32,11 @@ impl Rule for PreferStyleDirective {
                             // Don't flag expression-only styles (variables), shorthand, or concat
                             match value {
                                 AttributeValue::Static(s) => {
-                                    if s.contains(':') {
+                                    // Report once per CSS declaration
+                                    let decl_count = s.split(';')
+                                        .filter(|d| d.trim().contains(':'))
+                                        .count();
+                                    for _ in 0..decl_count {
                                         ctx.diagnostic(
                                             "Can use style directives instead.",
                                             *span,

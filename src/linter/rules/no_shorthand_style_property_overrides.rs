@@ -57,9 +57,10 @@ impl Rule for NoShorthandStylePropertyOverrides {
 
                 // Check for shorthand overrides
                 for i in 0..all_props.len() {
-                    if let Some(shorthand) = get_shorthand_for(&all_props[i].0) {
+                    let shorthands = get_shorthands_for(&all_props[i].0);
+                    for shorthand in shorthands {
                         for j in (i + 1)..all_props.len() {
-                            if all_props[j].0 == shorthand {
+                            if all_props[j].0 == *shorthand {
                                 ctx.diagnostic(
                                     format!("Unexpected shorthand '{}' after '{}'.", all_props[j].0, all_props[i].0),
                                     all_props[j].1,
@@ -128,28 +129,83 @@ fn extract_props_from_expression(expr: &str) -> FxHashSet<String> {
     props
 }
 
-fn get_shorthand_for(property: &str) -> Option<&'static str> {
+/// Returns all shorthands that the given longhand property is a sub-property of.
+/// A longhand can belong to more than one shorthand (e.g. `grid-column-start` belongs
+/// to both `grid-area` and `grid-column`).
+fn get_shorthands_for(property: &str) -> &'static [&'static str] {
     match property {
-        "border-top-color" | "border-right-color" | "border-bottom-color" | "border-left-color" => Some("border-color"),
-        "border-top-width" | "border-right-width" | "border-bottom-width" | "border-left-width" => Some("border-width"),
-        "border-top-style" | "border-right-style" | "border-bottom-style" | "border-left-style" => Some("border-style"),
-        "padding-top" | "padding-right" | "padding-bottom" | "padding-left" => Some("padding"),
-        "margin-top" | "margin-right" | "margin-bottom" | "margin-left" => Some("margin"),
-        "border-top" | "border-right" | "border-bottom" | "border-left" => Some("border"),
-        "background-color" | "background-image" | "background-repeat" | "background-position"
-            | "background-size" | "background-attachment" | "background-origin" | "background-clip" => Some("background"),
-        "font-style" | "font-variant" | "font-weight" | "font-stretch" | "font-size" | "font-family"
-            | "line-height" => Some("font"),
-        "flex-grow" | "flex-shrink" | "flex-basis" => Some("flex"),
-        "grid-template-rows" | "grid-template-columns" | "grid-template-areas"
-            | "grid-auto-rows" | "grid-auto-columns" | "grid-auto-flow" => Some("grid"),
-        "overflow-x" | "overflow-y" => Some("overflow"),
-        "transition-property" | "transition-duration" | "transition-timing-function" | "transition-delay" => Some("transition"),
-        "animation-name" | "animation-duration" | "animation-timing-function" | "animation-delay"
-            | "animation-iteration-count" | "animation-direction" | "animation-fill-mode" | "animation-play-state" => Some("animation"),
-        "list-style-type" | "list-style-position" | "list-style-image" => Some("list-style"),
-        "outline-color" | "outline-style" | "outline-width" => Some("outline"),
-        "column-width" | "column-count" => Some("columns"),
-        _ => None,
+        // margin
+        "margin-top" | "margin-bottom" | "margin-left" | "margin-right" => &["margin"],
+        // padding
+        "padding-top" | "padding-bottom" | "padding-left" | "padding-right" => &["padding"],
+        // background
+        "background-image" | "background-size" | "background-position" | "background-repeat"
+            | "background-origin" | "background-clip" | "background-attachment"
+            | "background-color" => &["background"],
+        // font
+        "font-style" | "font-variant" | "font-weight" | "font-stretch" | "font-size"
+            | "font-family" | "line-height" => &["font"],
+        // border (all longhands of the top-level `border` shorthand)
+        // border-top, border-bottom, border-left, border-right are themselves shorthands of border
+        "border-top" | "border-bottom" | "border-left" | "border-right" => &["border"],
+        // border-width longhands → border-width AND border
+        "border-top-width" | "border-bottom-width" | "border-left-width" | "border-right-width" => &["border-width", "border"],
+        // border-style longhands → border-style AND border
+        "border-top-style" | "border-bottom-style" | "border-left-style" | "border-right-style" => &["border-style", "border"],
+        // border-color longhands → border-color AND border
+        "border-top-color" | "border-bottom-color" | "border-left-color" | "border-right-color" => &["border-color", "border"],
+        // list-style
+        "list-style-type" | "list-style-position" | "list-style-image" => &["list-style"],
+        // border-radius
+        "border-top-right-radius" | "border-top-left-radius"
+            | "border-bottom-right-radius" | "border-bottom-left-radius" => &["border-radius"],
+        // transition
+        "transition-delay" | "transition-duration" | "transition-property"
+            | "transition-timing-function" => &["transition"],
+        // animation
+        "animation-name" | "animation-duration" | "animation-timing-function"
+            | "animation-delay" | "animation-iteration-count" | "animation-direction"
+            | "animation-fill-mode" | "animation-play-state" => &["animation"],
+        // border-block-end
+        "border-block-end-width" | "border-block-end-style" | "border-block-end-color" => &["border-block-end"],
+        // border-block-start
+        "border-block-start-width" | "border-block-start-style" | "border-block-start-color" => &["border-block-start"],
+        // border-image
+        "border-image-source" | "border-image-slice" | "border-image-width"
+            | "border-image-outset" | "border-image-repeat" => &["border-image"],
+        // border-inline-end
+        "border-inline-end-width" | "border-inline-end-style" | "border-inline-end-color" => &["border-inline-end"],
+        // border-inline-start
+        "border-inline-start-width" | "border-inline-start-style" | "border-inline-start-color" => &["border-inline-start"],
+        // column-rule
+        "column-rule-width" | "column-rule-style" | "column-rule-color" => &["column-rule"],
+        // columns
+        "column-width" | "column-count" => &["columns"],
+        // flex
+        "flex-grow" | "flex-shrink" | "flex-basis" => &["flex"],
+        // flex-flow
+        "flex-direction" | "flex-wrap" => &["flex-flow"],
+        // grid — longhands exclusive to `grid`
+        "grid-auto-rows" | "grid-auto-columns" | "grid-auto-flow"
+            | "grid-column-gap" | "grid-row-gap" => &["grid"],
+        // grid-template-* → grid-template AND grid
+        "grid-template-columns" | "grid-template-rows" | "grid-template-areas" => &["grid-template", "grid"],
+        // grid-area → grid-area; grid-column-start / grid-column-end also belong to grid-column
+        "grid-row-start" | "grid-row-end" => &["grid-row", "grid-area"],
+        "grid-column-start" | "grid-column-end" => &["grid-column", "grid-area"],
+        // grid-gap
+        "grid-gap" => &["grid"],
+        // outline
+        "outline-color" | "outline-style" | "outline-width" => &["outline"],
+        // overflow
+        "overflow-x" | "overflow-y" => &["overflow"],
+        // text-decoration
+        "text-decoration-color" | "text-decoration-style" | "text-decoration-line" => &["text-decoration"],
+        // text-emphasis
+        "text-emphasis-style" | "text-emphasis-color" => &["text-emphasis"],
+        // mask
+        "mask-image" | "mask-mode" | "mask-position" | "mask-size" | "mask-repeat"
+            | "mask-origin" | "mask-clip" | "mask-composite" => &["mask"],
+        _ => &[],
     }
 }
