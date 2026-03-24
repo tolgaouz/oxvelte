@@ -65,52 +65,110 @@ fn main() -> ExitCode {
     }
 }
 
+struct FileDiagnostic {
+    line: usize,
+    col: usize,
+    end_line: usize,
+    end_col: usize,
+    message: String,
+    rule_name: &'static str,
+}
+
+struct FileResult {
+    path: String,
+    diagnostics: Vec<FileDiagnostic>,
+}
+
 fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool) -> ExitCode {
     use rayon::prelude::*;
 
     let lint = if all_rules { linter::Linter::all() } else { linter::Linter::recommended() };
     let files = collect_lint_files(paths);
+    let use_color = !json_output && atty::is(atty::Stream::Stderr);
 
-    // Process files in parallel: read → parse → lint → format diagnostics
-    let file_results: Vec<Vec<serde_json::Value>> = files.par_iter().filter_map(|path| {
+    let mut file_results: Vec<FileResult> = files.par_iter().filter_map(|path| {
         let source = std::fs::read_to_string(path).ok()?;
         let is_svelte = path.extension().is_some_and(|e| e == "svelte");
         let diags = if is_svelte {
-            let result = parser::parse(&source);
-            lint.lint(&result.ast, &source)
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let result = parser::parse(&source);
+                lint.lint(&result.ast, &source)
+            })) {
+                Ok(d) => d,
+                Err(_) => {
+                    eprintln!("oxvelte: internal error parsing {}", path.display());
+                    return None;
+                }
+            }
         } else {
-            // JS/TS file — only run script-applicable rules
             lint.lint_script(&source)
         };
         if diags.is_empty() { return None; }
-        let path_str = path.display().to_string();
-        let entries: Vec<serde_json::Value> = diags.iter().map(|d| {
+        let abs_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+        let path_str = abs_path.display().to_string();
+        let diagnostics: Vec<FileDiagnostic> = diags.iter().map(|d| {
             let (line, col) = offset_to_line_col(&source, d.span.start as usize);
             let (end_line, end_col) = offset_to_line_col(&source, d.span.end as usize);
-            if !json_output {
-                eprintln!("{}:{}:{}: {} [{}]", path_str, line, col, d.message, d.rule_name);
-            }
-            serde_json::json!({
-                "file": &path_str,
-                "rule": &d.rule_name,
-                "message": &d.message,
-                "line": line,
-                "column": col,
-                "endLine": end_line,
-                "endColumn": end_col,
-            })
+            FileDiagnostic { line, col, end_line, end_col, message: d.message.clone(), rule_name: d.rule_name }
         }).collect();
-        Some(entries)
+        Some(FileResult { path: path_str, diagnostics })
     }).collect();
 
-    let json_results: Vec<serde_json::Value> = file_results.into_iter().flatten().collect();
-    let total_diags = json_results.len();
-    let total_files = files.len();
+    file_results.sort_by(|a, b| a.path.cmp(&b.path));
+
+    let total_diags: usize = file_results.iter().map(|f| f.diagnostics.len()).sum();
+    let files_with_diags = file_results.len();
 
     if json_output {
+        let json_results: Vec<serde_json::Value> = file_results.iter().flat_map(|f| {
+            f.diagnostics.iter().map(|d| serde_json::json!({
+                "file": &f.path,
+                "rule": d.rule_name,
+                "message": &d.message,
+                "line": d.line,
+                "column": d.col,
+                "endLine": d.end_line,
+                "endColumn": d.end_col,
+            }))
+        }).collect();
         println!("{}", serde_json::to_string_pretty(&json_results).unwrap_or_default());
     } else {
-        eprintln!("\n{} problem(s) in {} file(s).", total_diags, total_files);
+        for file_result in &file_results {
+            // File header — underlined, clickable in VS Code
+            if use_color {
+                eprintln!("\n\x1b[4m{}\x1b[0m", file_result.path);
+            } else {
+                eprintln!("\n{}", file_result.path);
+            }
+
+            // Find max widths for alignment
+            let max_loc_width = file_result.diagnostics.iter()
+                .map(|d| format!("{}:{}", d.line, d.col).len())
+                .max().unwrap_or(0);
+
+            for d in &file_result.diagnostics {
+                let loc = format!("{}:{}", d.line, d.col);
+                if use_color {
+                    eprintln!(
+                        "  \x1b[2m{:<width$}\x1b[0m  \x1b[33mwarning\x1b[0m  {}  \x1b[2m{}\x1b[0m",
+                        loc, d.message, d.rule_name, width = max_loc_width
+                    );
+                } else {
+                    eprintln!(
+                        "  {:<width$}  warning  {}  {}",
+                        loc, d.message, d.rule_name, width = max_loc_width
+                    );
+                }
+            }
+        }
+
+        if total_diags > 0 {
+            if use_color {
+                eprintln!("\n\x1b[1;31m\u{2716} {} problem(s) in {} file(s).\x1b[0m", total_diags, files_with_diags);
+            } else {
+                eprintln!("\n{} problem(s) in {} file(s).", total_diags, files_with_diags);
+            }
+        }
     }
     if total_diags > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS }
 }
