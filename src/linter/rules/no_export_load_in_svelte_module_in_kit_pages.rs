@@ -41,11 +41,28 @@ impl Rule for NoExportLoadInSvelteModuleInKitPages {
         if let Some(module) = &ctx.ast.module {
             if module.content.contains("export") && module.content.contains("load") {
                 // Simple heuristic: check if "export" and "load" appear together
-                if module.content.contains("export function load") || module.content.contains("export const load") {
-                    ctx.diagnostic(
-                        "Do not export `load` from a component's module script. Use `+page.ts` or `+layout.ts` instead.",
-                        module.span,
-                    );
+                // Check for `export function load` or `export const load` with word boundary
+                for pattern in &["export function load", "export const load", "export let load"] {
+                    if let Some(pos) = module.content.find(pattern) {
+                        let after_pos = pos + pattern.len();
+                        // Word boundary check: next char must not be alphanumeric or _
+                        if after_pos < module.content.len() {
+                            let next = module.content.as_bytes()[after_pos];
+                            if next.is_ascii_alphanumeric() || next == b'_' {
+                                continue;
+                            }
+                        }
+                        // Compute span at the `load` identifier
+                        let load_offset = pos + pattern.len() - 4; // "load" is 4 chars
+                        let base = module.span.start as usize;
+                        let tag_text = &ctx.source[base..module.span.end as usize];
+                        let gt = tag_text.find('>').unwrap_or(0);
+                        let source_pos = (base + gt + 1 + load_offset) as u32;
+                        ctx.diagnostic(
+                            "Do not export `load` from a component's module script. Use `+page.ts` or `+layout.ts` instead.",
+                            oxc::span::Span::new(source_pos, source_pos + 4),
+                        );
+                    }
                 }
             }
         }

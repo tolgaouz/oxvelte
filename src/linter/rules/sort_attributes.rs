@@ -103,7 +103,6 @@ impl Rule for SortAttributes {
                                     format!("Attribute '{}' should go before '{}'.", window[1], window[0]),
                                     el.span,
                                 );
-                                break;
                             }
                             // Within the same category, enforce alphabetical order
                             // But skip comparison between different sub-categories (e.g. bind: vs on:)
@@ -118,7 +117,6 @@ impl Rule for SortAttributes {
                                         format!("Attribute '{}' should go before '{}'.", window[1], window[0]),
                                         el.span,
                                     );
-                                    break;
                                 }
                             }
                         }
@@ -141,7 +139,6 @@ impl Rule for SortAttributes {
                                             format!("Attribute '{}' should go before '{}'.", group[i], group[last_matched_idx]),
                                             el.span,
                                         );
-                                        break;
                                     }
                                 }
                                 last_matched_pos = Some(pos);
@@ -163,7 +160,6 @@ impl Rule for SortAttributes {
                                         format!("Attribute '{}' should go before '{}'.", window[1], window[0]),
                                         el.span,
                                     );
-                                    break;
                                 }
                             }
                         }
