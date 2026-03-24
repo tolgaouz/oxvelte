@@ -22,8 +22,8 @@ impl Rule for PreferClassDirective {
             .and_then(|arr| arr.first())
             .and_then(|v| v.get("prefer"))
             .and_then(|v| v.as_str())
-            .map(|s| s == "empty")
-            .unwrap_or(false);
+            .map(|s| s != "always")
+            .unwrap_or(true);
 
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
