@@ -22,7 +22,13 @@ impl Rule for PreferDestructuredStoreProps {
                 // Check for dot access: $store.prop
                 if let Some(dot_pos) = expr.find('.') {
                     let store = &expr[..dot_pos];
-                    let property = &expr[dot_pos + 1..];
+                    // Only use the first segment (stop at second dot)
+                    let rest = &expr[dot_pos + 1..];
+                    let property = rest.split('.').next().unwrap_or(rest);
+                    // Skip $$props, $$slots, $$restProps
+                    if store.starts_with("$$") {
+                        return;
+                    }
                     ctx.diagnostic(
                         format!(
                             "Destructure {} from {} for better change tracking & fewer redraws",

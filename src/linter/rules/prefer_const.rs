@@ -114,6 +114,10 @@ impl Rule for PreferConst {
                 let var_name = &rest[..var_end];
                 // Check if initializer uses a Svelte rune
                 let after_name = rest[var_end..].trim_start();
+                // Skip uninitialized declarations (let foo; — no `=`)
+                if !after_name.starts_with('=') {
+                    continue;
+                }
                 if after_name.starts_with("= ") || after_name.starts_with("=\t") || after_name.starts_with("=$") {
                     let init_start = if after_name.starts_with("=$") { 1 } else { 1 };
                     let init = after_name[init_start..].trim_start();
