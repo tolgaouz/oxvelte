@@ -25,8 +25,23 @@ impl Rule for NoExtraReactiveCurlies {
 
                 // Check for `$: { ... }` pattern with a single statement inside
                 if after.starts_with('{') {
-                    // Find the matching closing brace
-                    if let Some(close) = after.find('}') {
+                    // Find the matching closing brace using depth-aware search
+                    let close = {
+                        let mut depth = 0i32;
+                        let mut found = None;
+                        for (i, ch) in after.char_indices() {
+                            match ch {
+                                '{' => depth += 1,
+                                '}' => {
+                                    depth -= 1;
+                                    if depth == 0 { found = Some(i); break; }
+                                }
+                                _ => {}
+                            }
+                        }
+                        found
+                    };
+                    if let Some(close) = close {
                         let block_body = after[1..close].trim();
                         // If the block body contains no semicolons (single statement)
                         // or exactly one semicolon at the end, it's unnecessary braces
@@ -34,10 +49,14 @@ impl Rule for NoExtraReactiveCurlies {
                         if semicolons <= 1 {
                             let tag_text = &source[tag_start..script.span.end as usize];
                             if let Some(gt) = tag_text.find('>') {
-                                let source_pos = tag_start + gt + 1 + abs_pos;
+                                // Offset to the `{` character: abs_pos + 2 (for "$:") + whitespace
+                                let after_dollar_colon = &content[abs_pos + 2..];
+                                let ws_len = after_dollar_colon.len() - after_dollar_colon.trim_start().len();
+                                let open_brace_pos = abs_pos + 2 + ws_len;
+                                let source_pos = tag_start + gt + 1 + open_brace_pos;
                                 ctx.diagnostic(
                                     "Do not wrap reactive statements in curly braces unless necessary.",
-                                    oxc::span::Span::new(source_pos as u32, (source_pos + 2) as u32),
+                                    oxc::span::Span::new(source_pos as u32, (source_pos + 1) as u32),
                                 );
                             }
                         }

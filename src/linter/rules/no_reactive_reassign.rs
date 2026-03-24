@@ -150,13 +150,13 @@ impl Rule for NoReactiveReassign {
                         }
                         let source_pos = content_offset + abs;
                         ctx.diagnostic(
-                            format!("Assignment to property of reactive value '{}'.", var),
+                            format!("Assignment to reactive value '{}'.", var),
                             oxc::span::Span::new(source_pos as u32, (source_pos + pattern.len()) as u32),
                         );
                         search_from = abs + pattern.len();
                     }
                 }
-                // Also check member increment/decrement: var.prop++ var.prop--
+                // Also check member increment/decrement: var.prop++ var.prop-- and var?.prop++ var?.prop--
                 for suffix in &["++", "--"] {
                     let mut search_from = 0;
                     while let Some(pos) = content[search_from..].find(&format!("{}.", var)) {
@@ -187,8 +187,8 @@ impl Rule for NoReactiveReassign {
                         search_from = abs + var.len() + 1;
                     }
                 }
-                // Also check member assignment: var.prop = and var[idx] =
-                for pattern_base in &[format!("{}.", var), format!("{}[", var)] {
+                // Also check member assignment: var.prop = and var[idx] = and var?.prop =
+                for pattern_base in &[format!("{}.", var), format!("{}?.", var), format!("{}[", var)] {
                     for (pos, _) in content.match_indices(pattern_base.as_str()) {
                         if pos > 0 {
                             let prev = content.as_bytes()[pos - 1];

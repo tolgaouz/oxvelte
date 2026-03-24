@@ -59,10 +59,10 @@ impl Rule for NoNavigationWithoutResolve {
             // Check if resolveRoute is imported
             let resolve_local: Option<String> = imports.iter()
                 .find(|(_, imported, module)| {
-                    (imported == "resolveRoute" || imported == "*") && module == "$app/paths"
+                    (imported == "resolve" || imported == "asset" || imported == "*") && module == "$app/paths"
                 })
                 .map(|(local, imported, _)| {
-                    if imported == "*" { format!("{}.resolveRoute", local) } else { local.clone() }
+                    if imported == "*" { format!("{}.resolve", local) } else { local.clone() }
                 });
 
             let base = script.span.start as usize;
@@ -111,17 +111,47 @@ impl Rule for NoNavigationWithoutResolve {
                                 let source_pos = base + gt + 1 + abs;
                                 ctx.diagnostic(
                                     format!(
-                                        "Use `resolveRoute` from `$app/paths` instead of passing a raw string to `{}`.",
+                                        "Unexpected {}() call without resolve().",
                                         orig_name
                                     ),
                                     Span::new(source_pos as u32, (source_pos + search_pattern.len()) as u32),
                                 );
                             }
                         }
-                    } else if trimmed.starts_with("resolve") || trimmed.starts_with("resolveRoute") {
-                        // resolve() is being used — but check if it's the full argument
-                        // (partial resolve like `resolve('/foo') + '/bar'` should also be flagged)
-                        // For now, allow any use of resolve in the argument
+                    } else if trimmed.starts_with("resolve") || trimmed.starts_with("asset") {
+                        // resolve()/asset() at the start — check for concatenation
+                        let call_text = &content[abs + search_pattern.len()..];
+                        // Find the matching close paren of the outer navigation call
+                        let mut depth = 0i32;
+                        let mut outer_end = call_text.len();
+                        for (i, ch) in call_text.char_indices() {
+                            match ch {
+                                '(' => depth += 1,
+                                ')' => {
+                                    if depth == 0 { outer_end = i; break; }
+                                    depth -= 1;
+                                }
+                                _ => {}
+                            }
+                        }
+                        let call_body = &call_text[..outer_end];
+                        // Check for `+` at top level (concatenation)
+                        let mut d = 0i32;
+                        let has_concat = call_body.chars().any(|ch| {
+                            match ch {
+                                '(' | '[' | '{' => { d += 1; false }
+                                ')' | ']' | '}' => { if d > 0 { d -= 1; } false }
+                                '+' if d == 0 => true,
+                                _ => false,
+                            }
+                        });
+                        if has_concat {
+                            let source_pos = base + gt + 1 + abs;
+                            ctx.diagnostic(
+                                format!("Unexpected {}() call without resolve().", orig_name),
+                                Span::new(source_pos as u32, (source_pos + search_pattern.len()) as u32),
+                            );
+                        }
                     } else {
                         // Variable argument — don't flag (could be a resolved value)
                     }
@@ -149,7 +179,7 @@ impl Rule for NoNavigationWithoutResolve {
         if has_any_imports && !has_sveltekit_imports { return; }
 
         let has_resolve = imports.iter().any(|(_, imported, module)| {
-            (imported == "resolveRoute" || imported == "*") && module == "$app/paths"
+            (imported == "resolve" || imported == "asset" || imported == "*") && module == "$app/paths"
         });
 
         walk_template_nodes(&ctx.ast.html, &mut |node| {
