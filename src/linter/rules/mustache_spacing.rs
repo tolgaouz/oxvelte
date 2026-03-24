@@ -109,13 +109,13 @@ impl Rule for MustacheSpacing {
                             }
                             if !tags_opening_always && inner.starts_with(' ') {
                                 ctx.diagnostic(
-                                    "Unexpected space after '{'.",
+                                    "Expected no space after '{', but found.",
                                     Span::new(tag.span.start, tag.span.end),
                                 );
                             }
                             if !require_closing && !is_bare_continuation && inner.ends_with(' ') {
                                 ctx.diagnostic(
-                                    "Unexpected space before '}'.",
+                                    "Expected no space before '}', but found.",
                                     Span::new(tag.span.start, tag.span.end),
                                 );
                             }
@@ -155,10 +155,10 @@ fn check_brace_tag(src: &str, span: Span, opening_always: bool, closing_mode: &s
             ctx.diagnostic("Expected 1 space before '}', but not found.", span);
         }
         if !opening_always && inner.starts_with(' ') {
-            ctx.diagnostic("Unexpected space after '{'.", span);
+            ctx.diagnostic("Expected no space after '{', but found.", span);
         }
         if !require_closing_space && inner.ends_with(' ') {
-            ctx.diagnostic("Unexpected space before '}'.", span);
+            ctx.diagnostic("Expected no space before '}', but found.", span);
         }
     }
 }
