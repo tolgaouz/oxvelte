@@ -46,7 +46,9 @@ impl Rule for ValidPropNamesInKitPages {
 
         if let Some(script) = &ctx.ast.instance {
             let content = &script.content;
-            let base = script.span.start as usize;
+            let tag_text = &ctx.source[script.span.start as usize..script.span.end as usize];
+            let gt = tag_text.find('>').unwrap_or(0);
+            let base = script.span.start as usize + gt + 1;
 
             // Look for `export let <name>` or `export let { ... }` patterns.
             for (offset, _) in content.match_indices("export let ") {
