@@ -30,7 +30,7 @@ impl Rule for PreferConst {
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         // Parse excludedRunes from config. Default: all Svelte runes excluded.
-        let default_excluded = vec!["$state", "$derived", "$props", "$bindable"];
+        let default_excluded = vec!["$props", "$derived"];
         let excluded_runes: Vec<String> = ctx.config.options.as_ref()
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first())

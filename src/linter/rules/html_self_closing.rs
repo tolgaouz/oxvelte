@@ -67,7 +67,7 @@ impl Rule for HtmlSelfClosing {
 
         let (component_opt, normal_opt, void_opt, svg_opt, math_opt, svelte_opt) = if let Some(ref p) = preset {
             match p.as_str() {
-                "html" => ("always", "never", "always", "always", "always", "always"),
+                "html" => ("never", "never", "always", "always", "never", "always"),
                 "none" => ("never", "never", "never", "never", "never", "never"),
                 "all" => ("always", "always", "always", "always", "always", "always"),
                 _ => ("always", "never", "always", "always", "always", "always"),
@@ -77,8 +77,8 @@ impl Rule for HtmlSelfClosing {
                 opts.and_then(|o| o.get("component")).and_then(|v| v.as_str()).unwrap_or("always"),
                 opts.and_then(|o| o.get("normal")).and_then(|v| v.as_str()).unwrap_or("never"),
                 opts.and_then(|o| o.get("void")).and_then(|v| v.as_str()).unwrap_or("always"),
-                opts.and_then(|o| o.get("svg")).and_then(|v| v.as_str()).unwrap_or("ignore"),
-                opts.and_then(|o| o.get("math")).and_then(|v| v.as_str()).unwrap_or("ignore"),
+                opts.and_then(|o| o.get("svg")).and_then(|v| v.as_str()).unwrap_or("always"),
+                opts.and_then(|o| o.get("math")).and_then(|v| v.as_str()).unwrap_or("never"),
                 opts.and_then(|o| o.get("svelte")).and_then(|v| v.as_str()).unwrap_or("always"),
             )
         };

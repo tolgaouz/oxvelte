@@ -6,7 +6,7 @@ use crate::linter::{LintContext, Rule};
 use oxc::span::Span;
 
 /// Valid prop names for SvelteKit page components.
-const VALID_KIT_PROPS: &[&str] = &["data", "form", "snapshot"];
+const VALID_KIT_PROPS: &[&str] = &["data", "errors", "form", "params", "snapshot"];
 
 pub struct ValidPropNamesInKitPages;
 
@@ -23,7 +23,7 @@ impl Rule for ValidPropNamesInKitPages {
         // Only check files that are SvelteKit page/layout files (+page.svelte, +layout.svelte).
         if let Some(file_path) = &ctx.file_path {
             let fname = file_path.rsplit('/').next().unwrap_or(file_path);
-            if fname != "+page.svelte" && fname != "+layout.svelte" {
+            if fname != "+page.svelte" && fname != "+layout.svelte" && fname != "+error.svelte" {
                 return;
             }
             // Check settings for custom routes directory
@@ -59,9 +59,7 @@ impl Rule for ValidPropNamesInKitPages {
                     let end = (base + offset + "export let ".len() + var_end) as u32;
                     ctx.diagnostic(
                         format!(
-                            "Prop `{}` is not a valid SvelteKit page prop. Expected one of: {}.",
-                            prop_name,
-                            VALID_KIT_PROPS.join(", ")
+                            "disallow props other than data or errors in SvelteKit page components."
                         ),
                         Span::new(start, end),
                     );
