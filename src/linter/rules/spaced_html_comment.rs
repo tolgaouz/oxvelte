@@ -28,7 +28,7 @@ impl Rule for SpacedHtmlComment {
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Comment(comment) = node {
                 let data = &comment.data;
-                if data.is_empty() {
+                if data.trim().is_empty() {
                     return;
                 }
 

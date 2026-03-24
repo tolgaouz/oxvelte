@@ -32,7 +32,7 @@ impl Rule for ShorthandDirective {
                         let directive_prefix = match kind {
                             DirectiveKind::Binding => "bind",
                             DirectiveKind::Class => "class",
-                            DirectiveKind::Let => "let",
+                            DirectiveKind::StyleDirective => "style",
                             _ => continue,
                         };
 
@@ -57,7 +57,7 @@ impl Rule for ShorthandDirective {
                                 };
                                 if expr.trim() == name.as_str() {
                                     ctx.diagnostic(
-                                        format!("Use shorthand `{}:{}` instead of `{}:{}={{{}}}`.", directive_prefix, name, directive_prefix, name, name),
+                                        "Expected shorthand directive.",
                                         *span,
                                     );
                                 }

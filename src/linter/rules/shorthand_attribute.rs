@@ -43,7 +43,7 @@ impl Rule for ShorthandAttribute {
                                 // "always" mode (default): flag longhand, expect {name}
                                 if !src.starts_with('{') {
                                     ctx.diagnostic(
-                                        format!("Use shorthand `{{{}}}` instead of `{}={{{}}}`.", name, name, name),
+                                        "Expected shorthand attribute.",
                                         *span,
                                     );
                                 }
