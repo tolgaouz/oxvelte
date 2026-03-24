@@ -26,8 +26,8 @@ impl Rule for ExperimentalRequireStrictEvents {
             .unwrap_or(false);
         if !instance_is_ts && !module_is_ts { return; }
 
-        // Check for strictEvents attribute on the script tag
-        let script = ctx.ast.instance.as_ref().unwrap();
+        // Check for strictEvents attribute on the instance script tag
+        let Some(script) = ctx.ast.instance.as_ref() else { return; };
         let tag_text = &ctx.source[script.span.start as usize..script.span.end as usize];
         let tag_attrs = tag_text.split('>').next().unwrap_or("");
         if tag_attrs.contains("strictEvents") {

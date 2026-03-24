@@ -51,6 +51,22 @@ impl Rule for ButtonHasType {
                     return;
                 }
 
+                // Check for shorthand {type} attribute — treated as valid (dynamic)
+                let has_shorthand_type = el.attributes.iter().any(|attr| {
+                    if let Attribute::NormalAttribute { name, value, span, .. } = attr {
+                        if name == "type" {
+                            if let AttributeValue::Expression(_) = value {
+                                let src = &ctx.source[span.start as usize..span.end as usize];
+                                return src.starts_with('{');
+                            }
+                        }
+                    }
+                    false
+                });
+                if has_shorthand_type {
+                    return;
+                }
+
                 // Find explicit type attribute
                 let type_attr = el.attributes.iter().find(|attr| {
                     matches!(attr, Attribute::NormalAttribute { name, .. } if name == "type")
