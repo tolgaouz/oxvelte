@@ -61,7 +61,7 @@ impl Rule for RequireEventDispatcherTypes {
                     if !before.ends_with('>') {
                         let source_pos = base + gt + 1 + abs;
                         ctx.diagnostic(
-                            "Provide type parameters for `createEventDispatcher` to specify event types.",
+                            "Type parameters missing for the `createEventDispatcher` function call.",
                             oxc::span::Span::new(source_pos as u32, (source_pos + pattern.len()) as u32),
                         );
                     }

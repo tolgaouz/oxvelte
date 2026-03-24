@@ -20,11 +20,13 @@ impl Rule for PreferDestructuredStoreProps {
                 }
 
                 // Check for dot access: $store.prop
-                if expr.contains('.') {
+                if let Some(dot_pos) = expr.find('.') {
+                    let store = &expr[..dot_pos];
+                    let property = &expr[dot_pos + 1..];
                     ctx.diagnostic(
                         format!(
-                            "Prefer destructuring `{}` from the store rather than accessing it directly.",
-                            expr
+                            "Destructure {} from {} for better change tracking & fewer redraws",
+                            property, store
                         ),
                         tag.span,
                     );
@@ -34,6 +36,7 @@ impl Rule for PreferDestructuredStoreProps {
                 // Check for bracket access: $store[prop] or $store['prop']
                 // But NOT $store[`template${var}`] (computed access)
                 if let Some(bracket_pos) = expr.find('[') {
+                    let store = &expr[..bracket_pos];
                     let inner = &expr[bracket_pos + 1..];
                     if let Some(close) = inner.rfind(']') {
                         let key = inner[..close].trim();
@@ -44,8 +47,8 @@ impl Rule for PreferDestructuredStoreProps {
                         if is_simple {
                             ctx.diagnostic(
                                 format!(
-                                    "Prefer destructuring `{}` from the store rather than accessing it directly.",
-                                    expr
+                                    "Destructure {} from {} for better change tracking & fewer redraws",
+                                    key, store
                                 ),
                                 tag.span,
                             );

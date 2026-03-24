@@ -26,7 +26,7 @@ impl Rule for RequireEachKey {
                         return;
                     }
                     ctx.diagnostic(
-                        "Require a key expression in `{#each}` block for efficient list updates.",
+                        "Each block should have a key",
                         block.span,
                     );
                 }

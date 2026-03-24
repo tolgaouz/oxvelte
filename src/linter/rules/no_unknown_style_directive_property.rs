@@ -105,7 +105,7 @@ impl Rule for NoUnknownStyleDirectiveProperty {
                         }
                         if !KNOWN_CSS_PROPERTIES.contains(&name.as_str()) {
                             ctx.diagnostic(
-                                format!("Unknown CSS property '{}'.", name),
+                                format!("Unexpected unknown style directive property '{}'.", name),
                                 *span,
                             );
                         }

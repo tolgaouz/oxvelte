@@ -24,7 +24,7 @@ impl Rule for NoSvelteInternal {
                     let start = search_from + offset;
                     let end = start + "svelte/internal".len();
                     ctx.diagnostic(
-                        "Do not import from `svelte/internal`. It is not a public API.",
+                        "Using svelte/internal is prohibited. This will be removed in Svelte 6.",
                         oxc::span::Span::new(start as u32, end as u32),
                     );
                     search_from = end;

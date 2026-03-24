@@ -22,7 +22,7 @@ impl Rule for ValidStyleParse {
                 let known = ["css", "scss", "less", "postcss", "stylus", "sass"];
                 if !known.contains(&lang.as_str()) {
                     ctx.diagnostic(
-                        format!("Unknown style language: '{}'.", lang),
+                        format!("Found unsupported style element language \"{}\"", lang),
                         style.span,
                     );
                     return;

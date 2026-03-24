@@ -25,10 +25,10 @@ impl Rule for NoInlineStyles {
                 for attr in &el.attributes {
                     match attr {
                         Attribute::NormalAttribute { name, span, .. } if name == "style" => {
-                            ctx.diagnostic("Avoid inline styles.", *span);
+                            ctx.diagnostic("Found disallowed style attribute.", *span);
                         }
                         Attribute::Directive { kind: DirectiveKind::StyleDirective, span, .. } => {
-                            ctx.diagnostic("Avoid inline styles.", *span);
+                            ctx.diagnostic("Found disallowed style directive.", *span);
                         }
                         Attribute::Directive { kind, span, .. }
                             if !allow_transitions && matches!(kind, DirectiveKind::Transition | DirectiveKind::In | DirectiveKind::Out) =>

@@ -50,7 +50,7 @@ impl Rule for NoReactiveLiterals {
                         if let Some(gt) = tag_text.find('>') {
                             let source_pos = tag_start + gt + 1 + abs_pos;
                             ctx.diagnostic(
-                                "Don't use a reactive statement to assign a literal value. Use `let` or `const` instead.",
+                                "Do not assign literal values inside reactive statements unless absolutely necessary.",
                                 oxc::span::Span::new(source_pos as u32, (source_pos + 2) as u32),
                             );
                         }

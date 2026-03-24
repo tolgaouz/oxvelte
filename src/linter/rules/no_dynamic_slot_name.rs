@@ -21,10 +21,16 @@ impl Rule for NoDynamicSlotName {
                                     AttributeValue::Static(_) => {
                                         // Static string is fine
                                     }
-                                    _ => {
-                                        // Expression, Concat, or True (boolean) — all non-static
+                                    AttributeValue::True => {
                                         ctx.diagnostic(
-                                            "Slot name should be a static string, not a dynamic expression.",
+                                            "<slot> name requires a value.",
+                                            *span,
+                                        );
+                                    }
+                                    _ => {
+                                        // Expression or Concat — dynamic
+                                        ctx.diagnostic(
+                                            "<slot> name cannot be dynamic.",
                                             *span,
                                         );
                                     }

@@ -2,6 +2,13 @@
 
 use crate::linter::{LintContext, Rule};
 
+fn is_ts_lang(lang: Option<&str>) -> bool {
+    match lang {
+        Some(l) => l.eq_ignore_ascii_case("ts") || l.eq_ignore_ascii_case("typescript"),
+        None => false,
+    }
+}
+
 pub struct ExperimentalRequireStrictEvents;
 
 impl Rule for ExperimentalRequireStrictEvents {
@@ -11,10 +18,13 @@ impl Rule for ExperimentalRequireStrictEvents {
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         // Only applies to TypeScript components
-        let is_ts = ctx.ast.instance.as_ref()
-            .map(|s| s.lang.as_deref() == Some("ts"))
+        let instance_is_ts = ctx.ast.instance.as_ref()
+            .map(|s| is_ts_lang(s.lang.as_deref()))
             .unwrap_or(false);
-        if !is_ts { return; }
+        let module_is_ts = ctx.ast.module.as_ref()
+            .map(|s| is_ts_lang(s.lang.as_deref()))
+            .unwrap_or(false);
+        if !instance_is_ts && !module_is_ts { return; }
 
         // Check for strictEvents attribute on the script tag
         let script = ctx.ast.instance.as_ref().unwrap();
@@ -30,15 +40,12 @@ impl Rule for ExperimentalRequireStrictEvents {
                 .map(|s| s.content.contains("$$Events"))
                 .unwrap_or(false);
 
-        // Check if createEventDispatcher is used with type parameters
-        let has_typed_dispatcher = script.content.contains("createEventDispatcher<");
-
-        if !has_events_type && !has_typed_dispatcher {
+        if !has_events_type {
             let span = ctx.ast.instance.as_ref()
                 .map(|s| s.span)
                 .unwrap_or(ctx.ast.html.span);
             ctx.diagnostic(
-                "Component should define strict event types using `$$Events` or typed `createEventDispatcher<Events>()`.",
+                "The component must have the strictEvents attribute on its <script> tag or it must define the $$Events interface.",
                 span,
             );
         }

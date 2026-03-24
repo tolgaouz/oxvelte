@@ -19,7 +19,7 @@ impl Rule for NoAtDebugTags {
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::DebugTag(tag) = node {
                 ctx.diagnostic(
-                    "Unexpected `{@debug}` tag. Remove before deploying to production.",
+                    "Unexpected `{@debug}`.",
                     tag.span,
                 );
             }

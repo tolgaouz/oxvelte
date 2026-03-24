@@ -79,7 +79,7 @@ impl Rule for NoTargetBlank {
 
                 if !has_safe_rel {
                     ctx.diagnostic(
-                        "Using `target=\"_blank\"` without `rel=\"noopener noreferrer\"` is a security risk.",
+                        "Using target=\"_blank\" without rel=\"noopener noreferrer\" is a security risk.",
                         el.span,
                     );
                 }

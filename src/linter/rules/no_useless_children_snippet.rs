@@ -25,7 +25,7 @@ impl Rule for NoUselessChildrenSnippet {
                             if snippet.name == "children" && snippet.params.trim().is_empty() {
                                 // A {#snippet children()} without parameters is useless
                                 ctx.diagnostic(
-                                    "Useless `{#snippet children()}` — place content directly as children of the component.",
+                                    "Found an unnecessary children snippet.",
                                     snippet.span,
                                 );
                             }

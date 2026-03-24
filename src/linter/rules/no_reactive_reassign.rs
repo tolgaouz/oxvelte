@@ -113,7 +113,7 @@ impl Rule for NoReactiveReassign {
 
                         let source_pos = content_offset + abs;
                         ctx.diagnostic(
-                            format!("Do not reassign the reactive variable `{}`. It is derived from a reactive declaration.", var),
+                            format!("Assignment to reactive value '{}'.", var),
                             oxc::span::Span::new(source_pos as u32, (source_pos + pattern.len()) as u32),
                         );
                         search_from = abs + pattern.len();
@@ -150,7 +150,7 @@ impl Rule for NoReactiveReassign {
                         }
                         let source_pos = content_offset + abs;
                         ctx.diagnostic(
-                            format!("Do not mutate the reactive variable `{}`. It is derived from a reactive declaration.", var),
+                            format!("Assignment to property of reactive value '{}'.", var),
                             oxc::span::Span::new(source_pos as u32, (source_pos + pattern.len()) as u32),
                         );
                         search_from = abs + pattern.len();
@@ -179,7 +179,7 @@ impl Rule for NoReactiveReassign {
                                 let source_pos = content_offset + abs;
                                 let end_pos = source_pos + var.len() + 1 + prop_end + suffix.len();
                                 ctx.diagnostic(
-                                    format!("Do not mutate the reactive variable `{}`. It is derived from a reactive declaration.", var),
+                                    format!("Assignment to property of reactive value '{}'.", var),
                                     oxc::span::Span::new(source_pos as u32, end_pos as u32),
                                 );
                             }
@@ -223,7 +223,7 @@ impl Rule for NoReactiveReassign {
                         if rest.starts_with('=') && !rest.starts_with("==") {
                             let source_pos = content_offset + pos;
                             ctx.diagnostic(
-                                format!("Do not mutate the reactive variable `{}`. It is derived from a reactive declaration.", var),
+                                format!("Assignment to property of reactive value '{}'.", var),
                                 oxc::span::Span::new(source_pos as u32, (source_pos + pattern_base.len()) as u32),
                             );
                         }
@@ -237,7 +237,7 @@ impl Rule for NoReactiveReassign {
                     if line.starts_with("$:") { continue; }
                     let source_pos = content_offset + pos;
                     ctx.diagnostic(
-                        format!("Do not mutate the reactive variable `{}`. It is derived from a reactive declaration.", var),
+                        format!("Assignment to property of reactive value '{}'.", var),
                         oxc::span::Span::new(source_pos as u32, (source_pos + delete_pattern.len()) as u32),
                     );
                 }
@@ -260,7 +260,7 @@ impl Rule for NoReactiveReassign {
                         if line.starts_with("$:") { continue; }
                         let source_pos = content_offset + pos;
                         ctx.diagnostic(
-                            format!("Do not reassign the reactive variable `{}`. It is derived from a reactive declaration.", var),
+                            format!("Assignment to reactive value '{}'.", var),
                             oxc::span::Span::new(source_pos as u32, (source_pos + var.len()) as u32),
                         );
                         break; // Only report once per var per pattern type
@@ -292,7 +292,7 @@ impl Rule for NoReactiveReassign {
                         if after.contains(" of ") || after.contains(" in ") {
                             let source_pos = content_offset + pos;
                             ctx.diagnostic(
-                                format!("Do not mutate the reactive variable `{}`. It is derived from a reactive declaration.", var),
+                                format!("Assignment to property of reactive value '{}'.", var),
                                 oxc::span::Span::new(source_pos as u32, (source_pos + pattern.len()) as u32),
                             );
                         }
@@ -318,7 +318,7 @@ impl Rule for NoReactiveReassign {
                                 if let Some(pos) = content.find(trimmed) {
                                     let source_pos = content_offset + pos;
                                     ctx.diagnostic(
-                                        format!("Do not mutate the reactive variable `{}`. It is derived from a reactive declaration.", var),
+                                        format!("Assignment to property of reactive value '{}'.", var),
                                         oxc::span::Span::new(source_pos as u32, (source_pos + trimmed.len()) as u32),
                                     );
                                 }
@@ -344,7 +344,7 @@ impl Rule for NoReactiveReassign {
                                         let is_member = bound_var.contains('.');
                                         if reactive_vars.contains(bound_var) || (reactive_vars.contains(base_var) && (check_props || !is_member)) {
                                             ctx.diagnostic(
-                                                format!("Do not bind to the reactive variable `{}`. It is derived from a reactive declaration.", bound_var),
+                                                format!("Assignment to reactive value '{}'.", base_var),
                                                 *span,
                                             );
                                         }
