@@ -3,53 +3,106 @@
 use crate::linter::{LintContext, Rule};
 use oxc::span::Span;
 
-/// Default maximum number of lines allowed per block.
-const DEFAULT_MAX_LINES: usize = 200;
-
 pub struct MaxLinesPerBlock;
 
 /// Count lines in content after trimming leading/trailing whitespace.
+/// Supports skipping blank lines and comment-only lines (including multi-line block comments).
 /// Returns 0 for empty/whitespace-only content.
 fn count_lines(content: &str, skip_blank_lines: bool, skip_comments: bool) -> usize {
     let trimmed = content.trim();
     if trimmed.is_empty() {
         return 0;
     }
-    let lines: Vec<&str> = trimmed.lines().collect();
     if !skip_blank_lines && !skip_comments {
-        return lines.len();
+        return trimmed.lines().count();
     }
-    lines.iter().filter(|line| {
+
+    let lines: Vec<&str> = trimmed.lines().collect();
+
+    if !skip_comments {
+        // Only skip blank lines — no comment state needed.
+        return lines.iter().filter(|line| !line.trim().is_empty()).count();
+    }
+
+    // Track multi-line block comment state across lines.
+    let mut in_block_comment = false;
+    let mut count = 0usize;
+
+    for line in &lines {
         let l = line.trim();
+
         if skip_blank_lines && l.is_empty() {
-            return false;
+            continue;
         }
-        if skip_comments && is_comment_only_line(l) {
-            return false;
+
+        // Determine whether this line is entirely within a comment context.
+        let is_comment = classify_line(l, &mut in_block_comment);
+
+        if !is_comment {
+            count += 1;
         }
-        true
-    }).count()
+    }
+
+    count
 }
 
-/// Check if a line is a comment-only line (JS/CSS comments).
-fn is_comment_only_line(line: &str) -> bool {
-    // Single-line comment
+/// Classify a trimmed line as a full-comment line or not, updating `in_block_comment` state.
+///
+/// Returns `true` when the line contributes only comment text (and no code).
+fn classify_line(line: &str, in_block_comment: &mut bool) -> bool {
+    if *in_block_comment {
+        // We're inside a `/* … */` block comment that started on a previous line.
+        if let Some(end) = line.find("*/") {
+            *in_block_comment = false;
+            // After `*/`, check whether any non-whitespace code follows.
+            let after = line[end + 2..].trim();
+            // The line opened inside a block comment and closed it — check for trailing code.
+            return after.is_empty();
+        }
+        // Entire line is inside the block comment.
+        return true;
+    }
+
+    // Not in a block comment — classify from the start of the line.
+
+    // Single-line `//` comment.
     if line.starts_with("//") {
         return true;
     }
-    // Single-line block comment: /* ... */
-    if line.starts_with("/*") && line.ends_with("*/") {
-        return true;
-    }
-    false
-}
 
-/// Check if a line is an HTML comment-only line.
-fn is_html_comment_only_line(line: &str) -> bool {
-    if line.starts_with("<!--") && line.ends_with("-->") {
+    // HTML comment: `<!-- … -->` on a single line.
+    if line.starts_with("<!--") {
+        if line.contains("-->") {
+            // Single-line HTML comment — only comment if nothing comes after `-->`.
+            let after_idx = line.find("-->").unwrap() + 3;
+            return line[after_idx..].trim().is_empty();
+        }
+        // Multi-line HTML comment start — treat whole line as comment (no code precedes it).
+        // We don't track HTML comment state across lines (rare in Svelte templates).
         return true;
     }
-    is_comment_only_line(line)
+
+    // Block comment start `/* … */`.
+    if line.starts_with("/*") {
+        if let Some(end) = line.find("*/") {
+            // Closed on the same line — check for trailing code.
+            let after = line[end + 2..].trim();
+            if after.is_empty() {
+                return true;
+            }
+            // Code follows after `*/` on the same line — not a pure comment line.
+            return false;
+        }
+        // Block comment opens and does not close on this line.
+        *in_block_comment = true;
+        return true;
+    }
+
+    // Lines that are continuation lines of a block comment, e.g. ` * foo`.
+    // These only appear inside a block comment started on a previous line, which is handled
+    // above.  At this point `in_block_comment` is false, so this is regular code.
+
+    false
 }
 
 impl Rule for MaxLinesPerBlock {
@@ -74,6 +127,7 @@ impl Rule for MaxLinesPerBlock {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
+        // When a block type has no configured limit, it is not checked (no default).
         let script_limit = opts.as_ref()
             .and_then(|o| o.get("script"))
             .and_then(|v| v.as_u64())
@@ -89,16 +143,8 @@ impl Rule for MaxLinesPerBlock {
             .and_then(|v| v.as_u64())
             .map(|v| v as usize);
 
-        // Determine if we're using per-block config or defaults
-        let has_per_block = script_limit.is_some() || style_limit.is_some() || template_limit.is_some();
-
-        // Resolve effective limits: if per-block config exists, only check configured blocks
-        let eff_script = if has_per_block { script_limit } else { Some(DEFAULT_MAX_LINES) };
-        let eff_style = if has_per_block { style_limit } else { Some(DEFAULT_MAX_LINES) };
-        let eff_template = if has_per_block { template_limit } else { None };
-
         // Check instance script block
-        if let Some(max) = eff_script {
+        if let Some(max) = script_limit {
             if let Some(script) = &ctx.ast.instance {
                 let line_count = count_lines(&script.content, skip_blank_lines, skip_comments);
                 if line_count > max {
@@ -113,7 +159,7 @@ impl Rule for MaxLinesPerBlock {
         }
 
         // Check module script block
-        if let Some(max) = eff_script {
+        if let Some(max) = script_limit {
             if let Some(module) = &ctx.ast.module {
                 let line_count = count_lines(&module.content, skip_blank_lines, skip_comments);
                 if line_count > max {
@@ -128,7 +174,7 @@ impl Rule for MaxLinesPerBlock {
         }
 
         // Check style block
-        if let Some(max) = eff_style {
+        if let Some(max) = style_limit {
             if let Some(style) = &ctx.ast.css {
                 let line_count = count_lines(&style.content, skip_blank_lines, skip_comments);
                 if line_count > max {
@@ -143,7 +189,7 @@ impl Rule for MaxLinesPerBlock {
         }
 
         // Check template block
-        if let Some(max) = eff_template {
+        if let Some(max) = template_limit {
             let source = ctx.source;
             let template_content = extract_template_content(source, ctx);
             let line_count = count_template_lines(&template_content, skip_blank_lines, skip_comments);
@@ -196,21 +242,26 @@ fn count_template_lines(content: &str, skip_blank_lines: bool, skip_comments: bo
     if !skip_blank_lines && !skip_comments {
         return content.matches('\n').count();
     }
-    // When skipping, we need to filter individual lines
-    // Template line count = number of \n transitions between kept lines
+    // When skipping, we need to filter individual lines.
+    // Template line count = number of \n transitions between kept lines.
     let lines: Vec<&str> = content.split('\n').collect();
     let kept_count = lines.iter().filter(|line| {
         let l = line.trim();
         if skip_blank_lines && l.is_empty() {
             return false;
         }
-        if skip_comments && is_html_comment_only_line(l) {
-            return false;
+        if skip_comments {
+            // Use a fresh state for each template line — HTML comments don't nest with
+            // JS block comments in templates; simple single-line detection is sufficient here.
+            let mut dummy = false;
+            if classify_line(l, &mut dummy) && !dummy {
+                return false;
+            }
         }
         true
     }).count();
     // Template lines are counted as newline count, which is kept_count - 1 for the
-    // transitions between lines, but we need at least the count if there are lines
+    // transitions between lines, but we need at least the count if there are lines.
     if kept_count <= 1 {
         kept_count
     } else {
