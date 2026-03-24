@@ -118,7 +118,8 @@ impl Rule for NoNavigationWithoutResolve {
                                 );
                             }
                         }
-                    } else if trimmed.starts_with("resolve") || trimmed.starts_with("asset") {
+                    } else if trimmed.starts_with("resolve") || trimmed.starts_with("asset")
+                        || resolve_local.as_ref().map_or(false, |r| trimmed.starts_with(r.as_str())) {
                         // resolve()/asset() at the start — check for concatenation
                         let call_text = &content[abs + search_pattern.len()..];
                         // Find the matching close paren of the outer navigation call
@@ -153,7 +154,15 @@ impl Rule for NoNavigationWithoutResolve {
                             );
                         }
                     } else {
-                        // Variable argument — don't flag (could be a resolved value)
+                        // Variable argument — trace to its initializer
+                        let var_ident = trimmed.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '$').next().unwrap_or("");
+                        if !var_ident.is_empty() && !is_value_safe(var_ident, content, 0) {
+                            let source_pos = base + gt + 1 + abs;
+                            ctx.diagnostic(
+                                format!("Unexpected {}() call without resolve().", orig_name),
+                                Span::new(source_pos as u32, (source_pos + search_pattern.len()) as u32),
+                            );
+                        }
                     }
 
                     search_from = abs + search_pattern.len();
