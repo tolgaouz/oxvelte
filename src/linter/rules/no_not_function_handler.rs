@@ -125,7 +125,7 @@ fn check_handler_value(ctx: &mut LintContext, non_fn_vars: &HashSet<String>, spa
                 } else if expr.starts_with("new ") {
                     "Unexpected new expression in event handler.".to_string()
                 } else if expr.starts_with("class ") {
-                    "Unexpected class expression in event handler.".to_string()
+                    "Unexpected class in event handler.".to_string()
                 } else {
                     format!("Expected a function as event handler, got '{}'.", expr)
                 };

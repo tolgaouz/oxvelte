@@ -34,7 +34,7 @@ impl Rule for PreferStyleDirective {
                                 AttributeValue::Static(s) => {
                                     if s.contains(':') {
                                         ctx.diagnostic(
-                                            "Prefer using `style:property={value}` directive instead of the `style` attribute.",
+                                            "Can use style directives instead.",
                                             *span,
                                         );
                                     }
@@ -53,7 +53,7 @@ impl Rule for PreferStyleDirective {
                                     });
                                     if has_css_pattern {
                                         ctx.diagnostic(
-                                            "Prefer using `style:property={value}` directive instead of the `style` attribute.",
+                                            "Can use style directives instead.",
                                             *span,
                                         );
                                     }

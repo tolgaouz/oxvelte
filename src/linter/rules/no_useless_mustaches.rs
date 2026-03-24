@@ -91,7 +91,7 @@ fn check_expression(expr: &str, span: oxc::span::Span, ctx: &mut LintContext<'_>
             return;
         }
         ctx.diagnostic_with_fix(
-            "Unnecessary mustache interpolation around a string literal. Use the text directly.",
+            "Unexpected mustache interpolation with a string literal value.",
             span,
             Fix {
                 span,

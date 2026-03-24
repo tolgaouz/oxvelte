@@ -19,7 +19,7 @@ impl Rule for NoRestrictedHtmlElements {
                 for v in arr {
                     match v {
                         serde_json::Value::String(s) => {
-                            let msg = format!("The `<{}>` element is restricted.", s);
+                            let msg = format!("Unexpected use of forbidden HTML element {}.", s);
                             restricted.push((s.clone(), msg));
                         }
                         serde_json::Value::Object(obj) => {

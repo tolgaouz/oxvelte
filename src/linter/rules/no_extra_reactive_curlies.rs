@@ -31,12 +31,12 @@ impl Rule for NoExtraReactiveCurlies {
                         // If the block body contains no semicolons (single statement)
                         // or exactly one semicolon at the end, it's unnecessary braces
                         let semicolons = block_body.matches(';').count();
-                        if semicolons <= 1 && !block_body.contains('\n') {
+                        if semicolons <= 1 {
                             let tag_text = &source[tag_start..script.span.end as usize];
                             if let Some(gt) = tag_text.find('>') {
                                 let source_pos = tag_start + gt + 1 + abs_pos;
                                 ctx.diagnostic(
-                                    "Unnecessary curly braces around a single reactive statement. Use `$: statement;` instead.",
+                                    "Do not wrap reactive statements in curly braces unless necessary.",
                                     oxc::span::Span::new(source_pos as u32, (source_pos + 2) as u32),
                                 );
                             }

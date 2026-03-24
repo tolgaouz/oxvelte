@@ -61,7 +61,7 @@ impl Rule for NoShorthandStylePropertyOverrides {
                         for j in (i + 1)..all_props.len() {
                             if all_props[j].0 == shorthand {
                                 ctx.diagnostic(
-                                    format!("Shorthand property '{}' overrides '{}'.", all_props[j].0, all_props[i].0),
+                                    format!("Unexpected shorthand '{}' after '{}'.", all_props[j].0, all_props[i].0),
                                     all_props[j].1,
                                 );
                             }

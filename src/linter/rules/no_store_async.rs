@@ -61,7 +61,7 @@ impl Rule for NoStoreAsync {
                         let start = (base + offset) as u32;
                         let end = start + factory.len() as u32;
                         ctx.diagnostic(
-                            "Do not use async functions in store callbacks. The return value of the callback should be an unsubscribe function, not a Promise.",
+                            "Do not pass async functions to svelte stores.",
                             Span::new(start, end),
                         );
                     }

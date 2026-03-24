@@ -36,8 +36,8 @@ impl Rule for NoRawSpecialElements {
                     if el.name == *raw {
                         ctx.diagnostic(
                             format!(
-                                "Use `<{}>` instead of raw `<{}>` element.",
-                                svelte, raw
+                                "Special {} element is deprecated in v5, use svelte:{} instead.",
+                                raw, raw
                             ),
                             el.span,
                         );

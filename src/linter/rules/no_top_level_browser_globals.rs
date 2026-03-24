@@ -266,7 +266,7 @@ impl Rule for NoTopLevelBrowserGlobals {
                 let start = (content_offset + byte_offset) as u32;
                 let end = start + global.len() as u32;
                 ctx.diagnostic(
-                    format!("Avoid referencing `{}` at the top level — it is not available during SSR.", global),
+                    format!("Unexpected top-level browser global variable \"{}\".", global),
                     Span::new(start, end),
                 );
             }
@@ -370,7 +370,7 @@ fn check_expr_for_globals(expr: &str, span: Span, ctx: &mut LintContext<'_>) {
                 if a.is_ascii_alphanumeric() || a == b'_' { continue; }
             }
             ctx.diagnostic(
-                format!("Avoid referencing `{}` at the top level — it is not available during SSR.", global),
+                format!("Unexpected top-level browser global variable \"{}\".", global),
                 span,
             );
         }

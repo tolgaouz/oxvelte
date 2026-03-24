@@ -80,7 +80,7 @@ impl Rule for RequireStoreCallbacksUseSetParam {
                         let start = (base + offset) as u32;
                         let end = start + factory.len() as u32;
                         ctx.diagnostic(
-                            "Store callback should use the `set` parameter.",
+                            "Store callbacks must use `set` param.",
                             Span::new(start, end),
                         );
                     }

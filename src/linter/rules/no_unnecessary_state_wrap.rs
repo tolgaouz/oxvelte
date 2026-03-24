@@ -105,10 +105,15 @@ impl Rule for NoUnnecessaryStateWrap {
                     let should_flag = uses_const || (allow_reassign && uses_let && !var_is_reassigned);
                     if is_reactive && should_flag {
                         let tag_text = &source[tag_start..script.span.end as usize];
+                        // Find the matching reactive class name
+                        let class_name = reactive_local_names.iter()
+                            .find(|cls| after_new.starts_with(cls.as_str()))
+                            .cloned()
+                            .unwrap_or_default();
                         if let Some(gt) = tag_text.find('>') {
                             let source_pos = tag_start + gt + 1 + abs_pos;
                             ctx.diagnostic(
-                                "Unnecessary `$state()` wrapping a value that is already reactive.",
+                                format!("{} is already reactive, $state wrapping is unnecessary.", class_name),
                                 oxc::span::Span::new(source_pos as u32, (source_pos + 7) as u32),
                             );
                         }
