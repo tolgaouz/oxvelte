@@ -30,7 +30,10 @@ impl Rule for NoUnnecessaryStateWrap {
 
             // Build a mapping of local names -> original reactive class names
             let imports = parse_imports(content);
-            let mut reactive_local_names: Vec<String> = REACTIVE_CLASSES.iter().map(|s| s.to_string()).collect();
+            // reactive_local_names: local name -> original (canonical) reactive class name
+            let mut reactive_local_names: Vec<(String, String)> = REACTIVE_CLASSES.iter()
+                .map(|s| (s.to_string(), s.to_string()))
+                .collect();
 
             // Add additional reactive classes from config
             if let Some(options) = &ctx.config.options {
@@ -39,7 +42,7 @@ impl Rule for NoUnnecessaryStateWrap {
                         if let Some(additional) = opt.get("additionalReactiveClasses").and_then(|v| v.as_array()) {
                             for cls in additional {
                                 if let Some(s) = cls.as_str() {
-                                    reactive_local_names.push(s.to_string());
+                                    reactive_local_names.push((s.to_string(), s.to_string()));
                                 }
                             }
                         }
@@ -50,7 +53,8 @@ impl Rule for NoUnnecessaryStateWrap {
                 if module.starts_with("svelte/") || module == "svelte" {
                     if REACTIVE_CLASSES.contains(&imported.as_str()) && local != imported {
                         // Aliased import: import { SvelteSet as CustomSet }
-                        reactive_local_names.push(local.clone());
+                        // Map local alias -> original imported name for error reporting
+                        reactive_local_names.push((local.clone(), imported.clone()));
                     }
                 }
             }
@@ -72,9 +76,9 @@ impl Rule for NoUnnecessaryStateWrap {
 
                 if trimmed.starts_with("new ") {
                     let after_new = trimmed[4..].trim_start();
-                    let is_reactive = reactive_local_names.iter().any(|cls| {
-                        after_new.starts_with(cls.as_str())
-                    });
+                    let matched_class = reactive_local_names.iter()
+                        .find(|(local, _)| after_new.starts_with(local.as_str()));
+                    let is_reactive = matched_class.is_some();
                     // Check declaration type
                     let before = content[..abs_pos].trim_end();
                     let (uses_const, uses_let) = if before.ends_with('=') {
@@ -102,13 +106,15 @@ impl Rule for NoUnnecessaryStateWrap {
                             script_reassign || template_reassign
                         }
                     } else { false };
-                    let should_flag = uses_const || (allow_reassign && uses_let && !var_is_reassigned);
+                    // Flag if: const (always), or let when allowReassign is false, or let when allowReassign is true but not reassigned
+                    let should_flag = uses_const
+                        || (!allow_reassign && uses_let)
+                        || (allow_reassign && uses_let && !var_is_reassigned);
                     if is_reactive && should_flag {
                         let tag_text = &source[tag_start..script.span.end as usize];
-                        // Find the matching reactive class name
-                        let class_name = reactive_local_names.iter()
-                            .find(|cls| after_new.starts_with(cls.as_str()))
-                            .cloned()
+                        // Use the original (canonical) reactive class name for error reporting
+                        let class_name = matched_class
+                            .map(|(_, original)| original.clone())
                             .unwrap_or_default();
                         if let Some(gt) = tag_text.find('>') {
                             let source_pos = tag_start + gt + 1 + abs_pos;
