@@ -98,10 +98,21 @@ impl Rule for NoNavigationWithoutResolve {
                         } else { false };
 
                         if !is_empty && !is_absolute_uri {
-                            // Check if resolveRoute is used in this call
-                            let call_text = &content[abs..];
-                            let call_end = call_text.find(')').unwrap_or(call_text.len());
-                            let call_body = &call_text[search_pattern.len()..call_end];
+                            // Check if resolve is used in this call (balanced paren search)
+                            let call_text = &content[abs + search_pattern.len()..];
+                            let mut depth = 0i32;
+                            let mut call_end = call_text.len();
+                            for (ci, ch) in call_text.char_indices() {
+                                match ch {
+                                    '(' => depth += 1,
+                                    ')' => {
+                                        if depth == 0 { call_end = ci; break; }
+                                        depth -= 1;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            let call_body = &call_text[..call_end];
 
                             let uses_resolve = if let Some(ref rname) = resolve_local {
                                 call_body.contains(rname)
@@ -311,8 +322,8 @@ fn is_value_safe(var_name: &str, script_content: &str, depth: usize) -> bool {
             if init.is_empty() { continue; }
             // null/undefined → safe
             if init == "null" || init == "undefined" { return true; }
-            // resolve() call → safe
-            if init.contains("resolve") || init.contains("asset") { return true; }
+            // resolve()/asset() call → safe only if it's a pure call (no concatenation)
+            if (init.contains("resolve") || init.contains("asset")) && !init.contains('+') { return true; }
             // Absolute URL → safe
             if init.starts_with("'http") || init.starts_with("\"http")
                 || init.starts_with("'//") || init.starts_with("\"//")

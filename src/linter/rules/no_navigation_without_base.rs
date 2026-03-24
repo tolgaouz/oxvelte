@@ -84,7 +84,7 @@ impl Rule for NoNavigationWithoutBase {
                 let tag_text = &source[script_base..script.span.end as usize];
                 let gt = tag_text.find('>').unwrap_or(0);
 
-                for (local_name, _orig_name) in &nav_local_names {
+                for (local_name, orig_name) in &nav_local_names {
                     let search_pattern = format!("{}(", local_name);
                     let mut search_from = 0;
                     while let Some(pos) = content[search_from..].find(&search_pattern) {
@@ -119,7 +119,7 @@ impl Rule for NoNavigationWithoutBase {
                                 if !uses_base {
                                     let source_pos = script_base + gt + 1 + abs;
                                     ctx.diagnostic(
-                                        "Use `base` from `$app/paths` when calling navigation functions with paths.",
+                                        format!("Found a {}() call with a url that isn't prefixed with the base path.", orig_name),
                                         oxc::span::Span::new(source_pos as u32, (source_pos + search_pattern.len()) as u32),
                                     );
                                 }
@@ -152,7 +152,7 @@ impl Rule for NoNavigationWithoutBase {
                                 let inner = &val[1..val.len()-1];
                                 if inner.starts_with('/') && !is_exempt_href(inner) {
                                     ctx.diagnostic(
-                                        "Use `base` from `$app/paths` in `<a>` href attributes with paths.",
+                                        "Found a link with a url that isn't prefixed with the base path.",
                                         *span,
                                     );
                                 }
@@ -187,7 +187,7 @@ impl Rule for NoNavigationWithoutBase {
 
                                 if is_path_literal || has_path_concat {
                                     ctx.diagnostic(
-                                        "Use `base` from `$app/paths` in `<a>` href attributes with paths.",
+                                        "Found a link with a url that isn't prefixed with the base path.",
                                         *span,
                                     );
                                 }
