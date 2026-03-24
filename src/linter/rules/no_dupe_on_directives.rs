@@ -31,14 +31,19 @@ impl Rule for NoDupeOnDirectives {
                         groups.entry(name.clone()).or_default().push((expr_text, *span));
                     }
                 }
-                // Report duplicates within each group that have the same expression
+                // Report ALL members of any duplicate group (same expression text)
                 for (_name, entries) in &groups {
-                    for i in 0..entries.len() {
-                        for j in (i + 1)..entries.len() {
-                            if entries[i].0 == entries[j].0 {
+                    // Sub-group by expression text
+                    let mut expr_groups: std::collections::HashMap<&str, Vec<oxc::span::Span>> = std::collections::HashMap::new();
+                    for (expr, span) in entries {
+                        expr_groups.entry(expr.as_str()).or_default().push(*span);
+                    }
+                    for (_expr, spans) in &expr_groups {
+                        if spans.len() >= 2 {
+                            for span in spans {
                                 ctx.diagnostic(
                                     format!("Duplicate on directive 'on:{}'.", _name),
-                                    entries[j].1,
+                                    *span,
                                 );
                             }
                         }
