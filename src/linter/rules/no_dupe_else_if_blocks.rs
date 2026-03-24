@@ -90,10 +90,7 @@ fn check_alternate(
                 let parsed = split_or_and(&condition);
                 if is_covered(&parsed, seen) {
                     ctx.diagnostic(
-                        format!(
-                            "Duplicate condition `{}` in `{{:else if}}` chain.",
-                            condition
-                        ),
+                        "This branch can never execute. Its condition is a duplicate or covered by previous conditions in the `{#if}` / `{:else if}` chain.",
                         block.span,
                     );
                 }

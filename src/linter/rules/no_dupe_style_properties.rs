@@ -32,7 +32,7 @@ impl Rule for NoDupeStyleProperties {
                         } => {
                             if !seen_style_props.insert(name.clone()) {
                                 ctx.diagnostic(
-                                    format!("Duplicate style property `{}`.", name),
+                                    format!("Duplicate property '{}'.", name),
                                     *span,
                                 );
                             }
@@ -72,7 +72,7 @@ fn check_style_value(
                         for prop in expr_props {
                             if !seen.insert(prop.clone()) {
                                 ctx.diagnostic(
-                                    format!("Duplicate style property `{}`.", prop),
+                                    format!("Duplicate property '{}'.", prop),
                                     span,
                                 );
                             }
@@ -86,7 +86,7 @@ fn check_style_value(
             for prop in expr_props {
                 if !seen.insert(prop.clone()) {
                     ctx.diagnostic(
-                        format!("Duplicate style property `{}`.", prop),
+                        format!("Duplicate property '{}'.", prop),
                         span,
                     );
                 }
@@ -105,7 +105,7 @@ fn extract_style_props(
     for prop in collect_props_from_css_text(text) {
         if !seen.insert(prop.clone()) {
             ctx.diagnostic(
-                format!("Duplicate style property `{}`.", prop),
+                format!("Duplicate property '{}'.", prop),
                 span,
             );
         }
