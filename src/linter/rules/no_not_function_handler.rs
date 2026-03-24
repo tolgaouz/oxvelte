@@ -4,7 +4,7 @@
 use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::{TemplateNode, Attribute, DirectiveKind};
 use oxc::span::Span;
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 pub struct NoNotFunctionHandler;
 
@@ -54,10 +54,25 @@ fn is_non_function_literal(expr: &str) -> bool {
     false
 }
 
+/// Get the type label for a non-function literal expression.
+fn non_function_phrase(expr: &str) -> &'static str {
+    let s = expr.trim();
+    if s.starts_with('[') { "array" }
+    else if s.starts_with('{') { "object" }
+    else if s.starts_with('"') || s.starts_with('\'') || s.starts_with('`') { "string value" }
+    else if s == "true" || s == "false" { "boolean value" }
+    else if s.starts_with("new ") { "new expression" }
+    else if s.starts_with("class ") { "class" }
+    else if s.ends_with('n') && s[..s.len()-1].parse::<i64>().is_ok() { "bigint value" }
+    else if s.parse::<f64>().is_ok() { "number value" }
+    else if s.starts_with('/') { "regex value" }
+    else { "non-function value" }
+}
+
 /// Scan script content for variable declarations with non-function initializers.
-/// Returns set of variable names that are known to be non-functions.
-fn find_non_function_vars(content: &str) -> HashSet<String> {
-    let mut non_fn_vars = HashSet::new();
+/// Returns map of variable names → type phrase.
+fn find_non_function_vars(content: &str) -> HashMap<String, &'static str> {
+    let mut non_fn_vars = HashMap::new();
     // Simple heuristic: look for `const|let|var NAME = <literal>;`
     for line in content.lines() {
         let trimmed = line.trim();
@@ -75,7 +90,7 @@ fn find_non_function_vars(content: &str) -> HashSet<String> {
                     // Strip trailing semicolon
                     let init = init.strip_suffix(';').unwrap_or(init).trim();
                     if !init.is_empty() && is_non_function_literal(init) {
-                        non_fn_vars.insert(name.to_string());
+                        non_fn_vars.insert(name.to_string(), non_function_phrase(init));
                     }
                 }
             }
@@ -85,7 +100,7 @@ fn find_non_function_vars(content: &str) -> HashSet<String> {
 }
 
 /// Check if a handler attribute value contains a non-function expression.
-fn check_handler_value(ctx: &mut LintContext, non_fn_vars: &HashSet<String>, span: Span) {
+fn check_handler_value(ctx: &mut LintContext, non_fn_vars: &HashMap<String, &'static str>, span: Span) {
     let region = &ctx.source[span.start as usize..span.end as usize];
     if let Some(eq_pos) = region.find('=') {
         let value = region[eq_pos + 1..].trim();
@@ -132,8 +147,8 @@ fn check_handler_value(ctx: &mut LintContext, non_fn_vars: &HashSet<String>, spa
                 ctx.diagnostic(msg, expr_span);
             } else if expr.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
                 // Simple identifier reference — check if it's a known non-function var
-                if non_fn_vars.contains(expr) {
-                    let msg = "Unexpected string value in event handler.".to_string();
+                if let Some(phrase) = non_fn_vars.get(expr) {
+                    let msg = format!("Unexpected {} in event handler.", phrase);
                     ctx.diagnostic(msg, expr_span);
                 }
             }
@@ -155,7 +170,7 @@ impl Rule for NoNotFunctionHandler {
         let non_fn_vars = if let Some(script) = &ctx.ast.instance {
             find_non_function_vars(&script.content)
         } else {
-            HashSet::new()
+            HashMap::new()
         };
 
         walk_template_nodes(&ctx.ast.html, &mut |node| {
