@@ -78,6 +78,37 @@ const KNOWN_CSS_PROPERTIES: &[&str] = &[
     "z-index", "zoom",
 ];
 
+fn is_property_ignored(prop: &str, ignore_list: &[String]) -> bool {
+    for pattern in ignore_list {
+        if pattern.starts_with('/') && pattern.ends_with('/') && pattern.len() > 2 {
+            // Regex pattern: /^foo/ → match regex against property name
+            let regex_str = &pattern[1..pattern.len() - 1];
+            // Simple regex support: ^ for start anchor, . for any char, * for repeat
+            if simple_regex_match(regex_str, prop) {
+                return true;
+            }
+        } else if prop == pattern {
+            return true;
+        }
+    }
+    false
+}
+
+fn simple_regex_match(pattern: &str, text: &str) -> bool {
+    // Handle common regex patterns: ^prefix, suffix$, exact
+    if let Some(prefix) = pattern.strip_prefix('^') {
+        if let Some(inner) = prefix.strip_suffix('$') {
+            text == inner
+        } else {
+            text.starts_with(prefix)
+        }
+    } else if let Some(suffix) = pattern.strip_suffix('$') {
+        text.ends_with(suffix)
+    } else {
+        text.contains(pattern)
+    }
+}
+
 pub struct NoUnknownStyleDirectiveProperty;
 
 impl Rule for NoUnknownStyleDirectiveProperty {
@@ -90,6 +121,15 @@ impl Rule for NoUnknownStyleDirectiveProperty {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
+        // Read ignoreProperties from config
+        let ignore_properties: Vec<String> = ctx.config.options.as_ref()
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|v| v.get("ignoreProperties"))
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default();
+
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
                 for attr in &el.attributes {
@@ -101,6 +141,10 @@ impl Rule for NoUnknownStyleDirectiveProperty {
                             || name.starts_with("-ms-")
                             || name.starts_with("-o-")
                         {
+                            continue;
+                        }
+                        // Check ignoreProperties
+                        if is_property_ignored(name, &ignore_properties) {
                             continue;
                         }
                         if !KNOWN_CSS_PROPERTIES.contains(&name.as_str()) {
