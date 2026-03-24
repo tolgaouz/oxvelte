@@ -126,7 +126,8 @@ fn class_is_in_iteration_or_component(html: &[TemplateNode], class_name: &str) -
                     if check_nodes(&kb.body.nodes, class_name, in_iteration) { return true; }
                 }
                 TemplateNode::SnippetBlock(sb) => {
-                    if check_nodes(&sb.body.nodes, class_name, in_iteration) { return true; }
+                    // Snippets can be called 0+ times, treat as iteration
+                    if check_nodes(&sb.body.nodes, class_name, true) { return true; }
                 }
                 _ => {}
             }
@@ -214,10 +215,10 @@ impl Rule for ConsistentSelectorStyle {
         let preferred = if allowed_styles.is_empty() { &default_preferred } else { &allowed_styles[0] };
 
         // Compute priority positions (lower index = higher priority)
-        // Default priority when no config: id(0) > type(1) > class(2)
-        let id_pos = allowed_styles.iter().position(|s| s == "id").or(if allowed_styles.is_empty() { Some(0) } else { None });
+        // Vendor default priority: type(0) > id(1) > class(2)
+        let id_pos = allowed_styles.iter().position(|s| s == "id").or(if allowed_styles.is_empty() { Some(1) } else { None });
         let class_pos = allowed_styles.iter().position(|s| s == "class").or(if allowed_styles.is_empty() { Some(2) } else { None });
-        let type_pos = allowed_styles.iter().position(|s| s == "type").or(if allowed_styles.is_empty() { Some(1) } else { None });
+        let type_pos = allowed_styles.iter().position(|s| s == "type").or(if allowed_styles.is_empty() { Some(0) } else { None });
 
         // Flag selector if there's a higher-priority (lower position) alternative available
         // Class selectors can potentially be replaced by id (if single use) or type

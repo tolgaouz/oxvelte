@@ -95,8 +95,13 @@ impl Rule for BlockLang {
         // enforceScriptPresent is independent — always check it if enabled.
         if enforce_script_present {
             if ctx.ast.instance.is_none() && ctx.ast.module.is_none() {
+                let lang_desc = if let Some(ref allowed) = script_langs {
+                    pretty_print_langs(allowed)
+                } else {
+                    "omitted".to_string()
+                };
                 ctx.diagnostic(
-                    "A <script> block is required.",
+                    format!("The <script> block should be present and its lang attribute should be {}.", lang_desc),
                     Span::new(0, 0),
                 );
             }
@@ -158,8 +163,13 @@ impl Rule for BlockLang {
         // enforceStylePresent is independent — always check it if enabled.
         if enforce_style_present {
             if ctx.ast.css.is_none() {
+                let lang_desc = if let Some(ref allowed) = style_langs {
+                    pretty_print_langs(allowed)
+                } else {
+                    "omitted".to_string()
+                };
                 ctx.diagnostic(
-                    "A <style> block is required.",
+                    format!("The <style> block should be present and its lang attribute should be {}.", lang_desc),
                     Span::new(0, 0),
                 );
             }
