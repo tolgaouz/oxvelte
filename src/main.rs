@@ -92,7 +92,8 @@ fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool) -> ExitCode {
         let diags = if is_svelte {
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let result = parser::parse(&source);
-                lint.lint(&result.ast, &source)
+                let file_path_str = path.to_string_lossy().to_string();
+                lint.lint_with_config_and_path(&result.ast, &source, oxvelte::linter::RuleConfig::default(), &file_path_str)
             })) {
                 Ok(d) => d,
                 Err(_) => {
