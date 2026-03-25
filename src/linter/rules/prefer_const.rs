@@ -96,7 +96,13 @@ impl Rule for PreferConst {
                                 let is_reassigned = after_decl.match_indices(&pattern).any(|(pos, _)| {
                                     let after_eq = pos + pattern.len();
                                     after_eq >= after_decl.len() || after_decl.as_bytes()[after_eq] != b'='
-                                });
+                                })
+                                || after_decl.contains(&format!("{}++", var))
+                                || after_decl.contains(&format!("{}--", var))
+                                || after_decl.contains(&format!("++{}", var))
+                                || after_decl.contains(&format!("--{}", var))
+                                || after_decl.contains(&format!("{} +=", var))
+                                || after_decl.contains(&format!("{} -=", var));
                                 if !is_reassigned {
                                     // Find the position of this variable name in the source
                                     let var_in_inner = inner.find(var).unwrap_or(0);
@@ -132,18 +138,33 @@ impl Rule for PreferConst {
                 if var_name == "{" || var_name == "[" {
                     continue;
                 }
-                // Check if this variable is reassigned anywhere (simple: look for `var_name =` but not `==`).
+                // Check if this variable is reassigned anywhere
                 let after_decl = &content[offset + 4 + var_end..];
                 let pattern = format!("{} =", var_name);
                 let is_reassigned = after_decl.match_indices(&pattern).any(|(pos, _)| {
                     let after_eq = pos + pattern.len();
                     after_eq >= after_decl.len() || after_decl.as_bytes()[after_eq] != b'='
-                });
+                })
+                // Also check compound assignments: +=, -=, *=, /=, ++, --
+                || after_decl.contains(&format!("{}++", var_name))
+                || after_decl.contains(&format!("{}--", var_name))
+                || after_decl.contains(&format!("++{}", var_name))
+                || after_decl.contains(&format!("--{}", var_name))
+                || after_decl.contains(&format!("{} +=", var_name))
+                || after_decl.contains(&format!("{} -=", var_name))
+                || after_decl.contains(&format!("{} *=", var_name))
+                || after_decl.contains(&format!("{} /=", var_name))
+                || after_decl.contains(&format!("{} %=", var_name))
+                || after_decl.contains(&format!("{} |=", var_name))
+                || after_decl.contains(&format!("{} &=", var_name))
+                || after_decl.contains(&format!("{} ^=", var_name))
+                || after_decl.contains(&format!("{} <<=", var_name))
+                || after_decl.contains(&format!("{} >>=", var_name));
                 if !is_reassigned {
                     let start = (base + offset) as u32;
                     let end = start + 3; // length of "let"
                     ctx.diagnostic(
-                        format!("`{}` is never reassigned. Use `const` instead.", var_name),
+                        format!("'{}' is never reassigned. Use 'const' instead.", var_name),
                         Span::new(start, end),
                     );
                 }
