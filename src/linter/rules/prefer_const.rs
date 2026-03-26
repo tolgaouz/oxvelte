@@ -1,18 +1,18 @@
 //! `svelte/prefer-const` — require `const` declarations for variables that are never reassigned.
 //! 🔧 Fixable
 //!
-//! Mirrors the vendor eslint-plugin-svelte approach: wraps ESLint core `prefer-const`
-//! logic with a Svelte-specific filter that skips declarations initialized with
-//! excluded runes (`$props`, `$derived` by default). When a `VariableDeclaration`
-//! contains any declarator whose init is an excluded rune call (direct or member
-//! expression like `$derived.by(...)`), the entire declaration is skipped.
+//! Uses `oxc_semantic` for proper scope-based analysis. Parses each script block
+//! with `oxc::parser::Parser`, builds semantic information with `SemanticBuilder`,
+//! then iterates symbols to find `let` declarations that are never reassigned.
+//! Declarations initialized with excluded runes (`$props`, `$derived` by default)
+//! are skipped.
 
 use crate::linter::{LintContext, Rule};
-use oxc::span::Span;
+use oxc::span::{GetSpan, Span};
 
 pub struct PreferConst;
 
-/// Given an initializer expression string (the RHS of `=`), extract the rune name
+/// Given an initializer expression source text, extract the rune name
 /// if the expression is a rune call like `$state(0)` or `$derived.by(calc())`.
 ///
 /// - `$state(0)` → Some("$state")
@@ -33,53 +33,6 @@ fn extract_rune_name(init: &str) -> Option<&str> {
     } else {
         None
     }
-}
-
-/// Check if `var_name` is reassigned anywhere in `source_after_decl`.
-/// Looks for: `name =` (not `==`), `name +=`, `name++`, `++name`, etc.
-fn is_var_reassigned(var_name: &str, source_after_decl: &str) -> bool {
-    // Simple assignment: `name =` but not `name ==` or `name =>`
-    let assign_pattern = format!("{} =", var_name);
-    let has_simple_assign = source_after_decl.match_indices(&assign_pattern).any(|(pos, _)| {
-        let after = pos + assign_pattern.len();
-        if after >= source_after_decl.len() { return true; }
-        let next = source_after_decl.as_bytes()[after];
-        // Not == or =>
-        next != b'=' && next != b'>'
-    });
-    if has_simple_assign { return true; }
-
-    // Also check: name= (no space)
-    let assign_nospace = format!("{}=", var_name);
-    let has_nospace = source_after_decl.match_indices(&assign_nospace).any(|(pos, _)| {
-        // Word boundary before
-        if pos > 0 {
-            let prev = source_after_decl.as_bytes()[pos - 1];
-            if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' { return false; }
-        }
-        let after = pos + assign_nospace.len();
-        if after >= source_after_decl.len() { return true; }
-        let next = source_after_decl.as_bytes()[after];
-        // Must not be == or => or part of ===
-        next != b'=' && next != b'>'
-    });
-    if has_nospace { return true; }
-
-    // Compound assignments and increment/decrement
-    for op in &["++", "--"] {
-        // postfix: name++
-        if source_after_decl.contains(&format!("{}{}", var_name, op)) { return true; }
-        // prefix: ++name
-        if source_after_decl.contains(&format!("{}{}", op, var_name)) { return true; }
-    }
-    for op in &["+=", "-=", "*=", "/=", "%=", "|=", "&=", "^=", "<<=", ">>=", ">>>=", "**=", "&&=", "||=", "??="] {
-        if source_after_decl.contains(&format!("{} {}", var_name, op))
-            || source_after_decl.contains(&format!("{}{}", var_name, op)) {
-            return true;
-        }
-    }
-
-    false
 }
 
 impl Rule for PreferConst {
@@ -103,136 +56,121 @@ impl Rule for PreferConst {
 
         if let Some(script) = &ctx.ast.instance {
             let content = &script.content;
+            if content.trim().is_empty() {
+                return;
+            }
+
+            // Compute the byte offset where script content starts in the full source.
             let tag_text = &ctx.source[script.span.start as usize..script.span.end as usize];
             let gt = tag_text.find('>').unwrap_or(0);
-            let content_start = script.span.start as usize + gt + 1;
+            let content_offset = script.span.start as usize + gt + 1;
 
-            // Process each line to find `let` declarations
-            for (offset, _) in content.match_indices("let ") {
-                // Word boundary check
-                if offset > 0 {
-                    let prev = content.as_bytes()[offset - 1];
-                    if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' {
-                        continue;
-                    }
-                }
+            // Determine source type based on lang attribute
+            let is_ts = script.lang.as_deref() == Some("ts")
+                || script.lang.as_deref() == Some("typescript");
 
-                let rest = &content[offset + 4..];
+            self.check_script(ctx, content, content_offset, is_ts, &excluded_runes);
+        }
+    }
+}
 
-                // --- Destructuring: let { ... } = expr  or  let [ ... ] = expr ---
-                if rest.starts_with('{') || rest.starts_with('[') {
-                    let close_char = if rest.starts_with('{') { '}' } else { ']' };
-                    let Some(close_pos) = rest.find(close_char) else { continue; };
-                    let after_close = rest[close_pos + 1..].trim_start();
+impl PreferConst {
+    fn check_script(
+        &self,
+        ctx: &mut LintContext,
+        content: &str,
+        content_offset: usize,
+        is_ts: bool,
+        excluded_runes: &[String],
+    ) {
+        use oxc::allocator::Allocator;
+        use oxc::ast::AstKind;
+        use oxc::parser::Parser;
+        use oxc::semantic::SemanticBuilder;
+        use oxc::span::SourceType;
 
-                    // Must have an initializer
-                    if !after_close.starts_with('=') { continue; }
-                    let init = after_close[1..].trim_start();
+        let alloc = Allocator::default();
+        let source_type = if is_ts {
+            SourceType::ts()
+        } else {
+            SourceType::mjs()
+        };
 
-                    // Vendor logic: if ANY declarator in this declaration has an
-                    // excluded rune init, skip the ENTIRE declaration.
-                    if let Some(rune) = extract_rune_name(init) {
-                        if excluded_runes.iter().any(|r| r == rune) {
-                            continue;
-                        }
-                    }
+        let parse_result = Parser::new(&alloc, content, source_type).parse();
+        if !parse_result.errors.is_empty() {
+            return; // Don't lint files with parse errors
+        }
 
-                    // Check each destructured variable
-                    let inner = &rest[1..close_pos];
-                    let after_decl = &content[offset + 4 + close_pos + 1..];
-                    let mut char_pos = 0;
-                    for part in inner.split(',') {
-                        let trimmed = part.trim();
-                        if !trimmed.is_empty() {
-                            // Handle rename: `key: localName`
-                            let local = if let Some((_, renamed)) = trimmed.split_once(':') {
-                                renamed.trim()
-                            } else {
-                                trimmed
-                            };
-                            // Handle default: `name = default`
-                            let local = local.split('=').next().unwrap_or(local).trim();
-                            // Handle rest: `...rest`
-                            let local = local.strip_prefix("...").unwrap_or(local);
+        let semantic_ret = SemanticBuilder::new().build(&parse_result.program);
+        let semantic = semantic_ret.semantic;
 
-                            if !local.is_empty()
-                                && local.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
-                                && !is_var_reassigned(local, after_decl)
-                            {
-                                // Report at the variable name position
-                                let name_offset_in_inner = inner[char_pos..].find(local)
-                                    .map(|p| char_pos + p)
-                                    .unwrap_or(char_pos);
-                                let abs = content_start + offset + 4 + 1 + name_offset_in_inner;
-                                ctx.diagnostic(
-                                    format!("'{}' is never reassigned. Use 'const' instead.", local),
-                                    Span::new(abs as u32, (abs + local.len()) as u32),
-                                );
-                            }
-                        }
-                        char_pos += part.len() + 1; // +1 for comma
-                    }
-                    continue;
-                }
+        let scoping = semantic.scoping();
+        let nodes = semantic.nodes();
 
-                // --- Simple declaration: let name = expr ---
-                let var_end = rest.find(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '$')
-                    .unwrap_or(rest.len());
-                if var_end == 0 { continue; }
+        // Iterate over all symbols
+        for symbol_id in scoping.symbol_ids() {
+            let symbol_name = scoping.symbol_name(symbol_id);
+            let flags = scoping.symbol_flags(symbol_id);
 
-                let var_name = &rest[..var_end];
-                let mut after_name = rest[var_end..].trim_start();
+            // We only care about `let` declarations:
+            // BlockScopedVariable but NOT ConstVariable
+            if !flags.intersects(oxc::semantic::SymbolFlags::BlockScopedVariable) {
+                continue;
+            }
+            if flags.intersects(oxc::semantic::SymbolFlags::ConstVariable) {
+                continue;
+            }
 
-                // Skip TypeScript type annotation: `let foo: Type = ...`
-                if after_name.starts_with(':') {
-                    // Find the `=` after the type annotation, handling generics like `Type<A, B>`
-                    let mut depth = 0i32;
-                    let mut found_eq = false;
-                    for (i, ch) in after_name.char_indices() {
-                        match ch {
-                            '<' | '(' => depth += 1,
-                            '>' | ')' => { if depth > 0 { depth -= 1; } }
-                            '=' if depth == 0 && i > 0 => {
-                                // Make sure it's not part of => or ==
-                                let next = after_name.as_bytes().get(i + 1).copied().unwrap_or(0);
-                                if next != b'>' && next != b'=' {
-                                    after_name = &after_name[i..];
-                                    found_eq = true;
-                                    break;
+            // Check if there are any write references (reassignment).
+            // The declaration itself is NOT counted as a reference by oxc semantic -
+            // references are only usages after the declaration.
+            let has_write = scoping
+                .get_resolved_references(symbol_id)
+                .any(|r| r.is_write());
+
+            if has_write {
+                continue; // Variable is reassigned, skip
+            }
+
+            // Walk up from the declaration node to find the VariableDeclarator,
+            // then check if its initializer is an excluded rune.
+            let decl_node_id = scoping.symbol_declaration(symbol_id);
+            let mut skip = false;
+
+            // Check the declaration node itself and its ancestors for VariableDeclarator
+            let node_ids = std::iter::once(decl_node_id).chain(nodes.ancestor_ids(decl_node_id));
+            for node_id in node_ids {
+                let kind = nodes.kind(node_id);
+                if let AstKind::VariableDeclarator(declarator) = kind {
+                    if let Some(init) = &declarator.init {
+                        let init_start = init.span().start as usize;
+                        let init_end = init.span().end as usize;
+                        if init_end <= content.len() {
+                            let init_text = &content[init_start..init_end];
+                            if let Some(rune) = extract_rune_name(init_text) {
+                                if excluded_runes.iter().any(|r| r == rune) {
+                                    skip = true;
                                 }
                             }
-                            ';' | '\n' if depth == 0 => break, // end of statement, no initializer
-                            _ => {}
                         }
                     }
-                    if !found_eq {
-                        continue; // No initializer found after type annotation
-                    }
-                }
-
-                // Skip uninitialized: `let foo;`
-                if !after_name.starts_with('=') {
-                    continue;
-                }
-
-                // Check if initializer is an excluded rune
-                let init = after_name[1..].trim_start();
-                if let Some(rune) = extract_rune_name(init) {
-                    if excluded_runes.iter().any(|r| r == rune) {
-                        continue;
-                    }
-                }
-
-                // Check reassignment
-                let after_decl = &content[offset + 4 + var_end..];
-                if !is_var_reassigned(var_name, after_decl) {
-                    let abs = content_start + offset + 4; // position of variable name
-                    ctx.diagnostic(
-                        format!("'{}' is never reassigned. Use 'const' instead.", var_name),
-                        Span::new(abs as u32, (abs + var_name.len()) as u32),
-                    );
+                    break;
                 }
             }
+
+            if skip {
+                continue;
+            }
+
+            // Report diagnostic with proper offset into the full .svelte source
+            let symbol_span = scoping.symbol_span(symbol_id);
+            let abs_start = content_offset + symbol_span.start as usize;
+            let abs_end = content_offset + symbol_span.end as usize;
+
+            ctx.diagnostic(
+                format!("'{}' is never reassigned. Use 'const' instead.", symbol_name),
+                Span::new(abs_start as u32, abs_end as u32),
+            );
         }
     }
 }
