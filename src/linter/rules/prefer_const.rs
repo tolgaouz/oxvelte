@@ -181,7 +181,34 @@ impl Rule for PreferConst {
                 if var_end == 0 { continue; }
 
                 let var_name = &rest[..var_end];
-                let after_name = rest[var_end..].trim_start();
+                let mut after_name = rest[var_end..].trim_start();
+
+                // Skip TypeScript type annotation: `let foo: Type = ...`
+                if after_name.starts_with(':') {
+                    // Find the `=` after the type annotation, handling generics like `Type<A, B>`
+                    let mut depth = 0i32;
+                    let mut found_eq = false;
+                    for (i, ch) in after_name.char_indices() {
+                        match ch {
+                            '<' | '(' => depth += 1,
+                            '>' | ')' => { if depth > 0 { depth -= 1; } }
+                            '=' if depth == 0 && i > 0 => {
+                                // Make sure it's not part of => or ==
+                                let next = after_name.as_bytes().get(i + 1).copied().unwrap_or(0);
+                                if next != b'>' && next != b'=' {
+                                    after_name = &after_name[i..];
+                                    found_eq = true;
+                                    break;
+                                }
+                            }
+                            ';' | '\n' if depth == 0 => break, // end of statement, no initializer
+                            _ => {}
+                        }
+                    }
+                    if !found_eq {
+                        continue; // No initializer found after type annotation
+                    }
+                }
 
                 // Skip uninitialized: `let foo;`
                 if !after_name.starts_with('=') {
