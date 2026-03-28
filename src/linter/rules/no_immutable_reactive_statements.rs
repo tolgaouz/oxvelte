@@ -26,7 +26,9 @@ impl Rule for NoImmutableReactiveStatements {
 
         // Classify declarations
         let mut immutable_names: HashSet<&str> = HashSet::new();
+        let mut const_names: HashSet<&str> = HashSet::new();
         let mut let_names: HashSet<&str> = HashSet::new();
+        let mut prop_names: HashSet<&str> = HashSet::new();
 
         for line in content.lines() {
             let trimmed = line.trim();
@@ -35,11 +37,14 @@ impl Rule for NoImmutableReactiveStatements {
             if let Some(n) = name {
                 if trimmed.starts_with("export let ") {
                     // Props are mutable
+                    prop_names.insert(n);
                 } else if trimmed.starts_with("let ") || trimmed.starts_with("var ") {
                     let_names.insert(n);
                 } else if trimmed.starts_with("const ") || trimmed.starts_with("export const ") {
-                    if is_primitive_init(trimmed) {
-                        immutable_names.insert(n);
+                    // const vars are immutable unless their members are written.
+                    // Skip names shadowing props or lets (different scopes).
+                    if !prop_names.contains(n) && !let_names.contains(n) {
+                        const_names.insert(n);
                     }
                 } else if trimmed.starts_with("function ") || trimmed.starts_with("export function ") {
                     immutable_names.insert(n);
@@ -95,6 +100,48 @@ impl Rule for NoImmutableReactiveStatements {
                 }
             }
         });
+
+        // Classify const variables: immutable unless they have member writes
+        // or are bound in template directives
+        let mut const_member_written: HashSet<&str> = HashSet::new();
+
+        // Check for member writes in script and template text
+        for &var in &const_names {
+            if has_member_write(content, var) || has_member_write(ctx.source, var) {
+                const_member_written.insert(var);
+            }
+        }
+
+        // Check if const vars are bound via bind: directives (implicit member write)
+        walk_template_nodes(&ctx.ast.html, &mut |node| {
+            if let TemplateNode::Element(el) = node {
+                for attr in &el.attributes {
+                    if let Attribute::Directive { kind: DirectiveKind::Binding, span, .. } = attr {
+                        let region = &ctx.source[span.start as usize..span.end as usize];
+                        if let Some(open) = region.find('{') {
+                            if let Some(close) = region.find('}') {
+                                let expr = region[open+1..close].trim();
+                                // Check if the expression references a const var member
+                                for &var in &const_names {
+                                    if expr.starts_with(var) && expr.len() > var.len() {
+                                        let next = expr.as_bytes()[var.len()];
+                                        if next == b'.' || next == b'[' {
+                                            const_member_written.insert(var);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        for &var in &const_names {
+            if !const_member_written.contains(var) {
+                immutable_names.insert(var);
+            }
+        }
 
         // Rebuild immutable set excluding each-source consts
         let immutable: HashSet<&str> = immutable_names.iter()
@@ -368,6 +415,76 @@ fn has_reassignment(content: &str, var: &str) -> bool {
                 if after < content.len() && content.as_bytes()[after] == b'=' { continue; }
             }
             return true;
+        }
+    }
+    false
+}
+
+/// Check if a variable has member write access (e.g., `var.prop = ...`, `var[idx] = ...`)
+fn has_member_write(content: &str, var: &str) -> bool {
+    // Check patterns like: var.something = or var[something] =
+    let dot_pat = format!("{}.", var);
+    let bracket_pat = format!("{}[", var);
+
+    for pat in &[&dot_pat, &bracket_pat] {
+        let is_bracket = pat == &&bracket_pat;
+        for (pos, _) in content.match_indices(pat.as_str()) {
+            // Verify word boundary before var
+            if pos > 0 {
+                let prev = content.as_bytes()[pos - 1];
+                if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' { continue; }
+            }
+            // Find the end of the member expression and check for assignment
+            let after_var = pos + pat.len();
+            let rest = &content[after_var..];
+            let mut i = 0;
+            let bytes = rest.as_bytes();
+
+            // If pattern was `var[`, skip the bracket expression first
+            if is_bracket {
+                let mut depth = 1;
+                while i < bytes.len() && depth > 0 {
+                    if bytes[i] == b'[' { depth += 1; }
+                    if bytes[i] == b']' { depth -= 1; }
+                    i += 1;
+                }
+            } else {
+                // For `var.`, skip the property name
+                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') { i += 1; }
+            }
+
+            // Skip further member chain (e.g., var.a.b.c = ...)
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'.' => {
+                        i += 1;
+                        // skip identifier
+                        while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') { i += 1; }
+                    }
+                    b'[' => {
+                        // skip bracket expression
+                        let mut depth = 1;
+                        i += 1;
+                        while i < bytes.len() && depth > 0 {
+                            if bytes[i] == b'[' { depth += 1; }
+                            if bytes[i] == b']' { depth -= 1; }
+                            i += 1;
+                        }
+                    }
+                    _ => break,
+                }
+            }
+            // Check what follows the member expression
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() { i += 1; }
+            if i < bytes.len() {
+                match bytes[i] {
+                    b'=' if i + 1 < bytes.len() && bytes[i + 1] != b'=' => return true,
+                    b'+' | b'-' if i + 1 < bytes.len() && bytes[i + 1] == bytes[i] => return true, // ++ or --
+                    b'+' | b'-' | b'*' | b'/' | b'%' | b'&' | b'|' | b'^'
+                        if i + 1 < bytes.len() && bytes[i + 1] == b'=' => return true, // +=, -=, etc.
+                    _ => {}
+                }
+            }
         }
     }
     false
