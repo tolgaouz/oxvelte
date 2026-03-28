@@ -335,22 +335,26 @@ impl Rule for NoReactiveReassign {
                 if let TemplateNode::Element(el) = node {
                     for attr in &el.attributes {
                         if let Attribute::Directive { kind: DirectiveKind::Binding, name, span, .. } = attr {
-                            if name == "value" || name == "checked" || name == "group" {
-                                let region = &ctx.source[span.start as usize..span.end as usize];
-                                if let Some(open) = region.find('{') {
-                                    if let Some(close) = region.find('}') {
-                                        let bound_var = region[open+1..close].trim();
-                                        // Check both direct var and var.member
-                                        let base_var = bound_var.split('.').next().unwrap_or(bound_var);
-                                        let is_member = bound_var.contains('.');
-                                        if reactive_vars.contains(bound_var) || (reactive_vars.contains(base_var) && (check_props || !is_member)) {
-                                            ctx.diagnostic(
-                                                format!("Assignment to reactive value '{}'.", base_var),
-                                                *span,
-                                            );
-                                        }
+                            let region = &ctx.source[span.start as usize..span.end as usize];
+                            if let Some(open) = region.find('{') {
+                                if let Some(close) = region.find('}') {
+                                    let bound_var = region[open+1..close].trim();
+                                    // Check both direct var and var.member
+                                    let base_var = bound_var.split('.').next().unwrap_or(bound_var);
+                                    let is_member = bound_var.contains('.');
+                                    if reactive_vars.contains(bound_var) || (reactive_vars.contains(base_var) && (check_props || !is_member)) {
+                                        ctx.diagnostic(
+                                            format!("Assignment to reactive value '{}'.", base_var),
+                                            *span,
+                                        );
                                     }
                                 }
+                            } else if reactive_vars.contains(name.as_str()) {
+                                // Shorthand binding: bind:varName (no expression)
+                                ctx.diagnostic(
+                                    format!("Assignment to reactive value '{}'.", name),
+                                    *span,
+                                );
                             }
                         }
                     }
