@@ -63,7 +63,8 @@ impl Rule for NoImmutableReactiveStatements {
         // Find mutable let vars (reassigned or bound in template)
         let mut mutable_lets: HashSet<&str> = HashSet::new();
         for &var in &let_names {
-            if has_reassignment(content, var) {
+            // Check both script content and full source (template event handlers)
+            if has_reassignment(content, var) || has_reassignment(ctx.source, var) {
                 mutable_lets.insert(var);
             }
         }
