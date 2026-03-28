@@ -51,16 +51,71 @@ fn collect_top_level_vars(content: &str) -> Vec<String> {
         let t = line.trim();
         // Handle `export let` and `export var` in addition to `let` and `var`
         let t = t.strip_prefix("export ").unwrap_or(t);
-        for kw in &["let ", "var "] {
+        for kw in &["let ", "var ", "const "] {
             if let Some(rest) = t.strip_prefix(kw) {
-                let name: String = rest.chars()
+                extract_declared_names(rest, &mut vars);
+            }
+        }
+    }
+    vars
+}
+
+/// Extract variable names from a declaration's right-hand side.
+/// Handles: simple (`a = 0`), multi (`a = 0, b = 1`), destructured (`{ a, b } = ...`, `[a, b] = ...`).
+fn extract_declared_names(decl: &str, vars: &mut Vec<String>) {
+    let trimmed = decl.trim();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        // Destructured: extract identifiers between braces/brackets up to `}`/`]`
+        let close = if trimmed.starts_with('{') { '}' } else { ']' };
+        if let Some(end) = trimmed.find(close) {
+            let inner = &trimmed[1..end];
+            for part in inner.split(',') {
+                let p = part.trim();
+                // Handle renaming: `orig: alias` → take alias
+                let name_part = if let Some(colon) = p.find(':') {
+                    p[colon + 1..].trim()
+                } else {
+                    p
+                };
+                // Handle defaults: `name = default` → take name
+                let name_part = if let Some(eq) = name_part.find('=') {
+                    name_part[..eq].trim()
+                } else {
+                    name_part
+                };
+                // Skip rest elements (`...rest` → `rest`)
+                let name_part = name_part.strip_prefix("...").unwrap_or(name_part);
+                let name: String = name_part.chars()
                     .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
                     .collect();
                 if !name.is_empty() { vars.push(name); }
             }
         }
+    } else {
+        // Simple or multi-variable: `a = 0, b = 1` or just `a = 0`
+        // Split by commas that are at depth 0 (not inside parens/brackets/braces)
+        let mut depth = 0i32;
+        let mut seg_start = 0;
+        let bytes = trimmed.as_bytes();
+        for i in 0..=bytes.len() {
+            let at_end = i == bytes.len();
+            let is_comma = !at_end && bytes[i] == b',' && depth == 0;
+            if at_end || is_comma {
+                let seg = trimmed[seg_start..i].trim();
+                let name: String = seg.chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
+                    .collect();
+                if !name.is_empty() { vars.push(name); }
+                seg_start = i + 1;
+            } else {
+                match bytes[i] {
+                    b'(' | b'[' | b'{' => depth += 1,
+                    b')' | b']' | b'}' => depth -= 1,
+                    _ => {}
+                }
+            }
+        }
     }
-    vars
 }
 
 fn collect_store_refs(content: &str, vars: &mut Vec<String>) {
@@ -126,6 +181,10 @@ struct FuncInfo {
     assign_positions_after_await: Vec<(String, usize)>,
     /// Byte positions of ALL assignment lines (relative to content start)
     all_assign_positions: Vec<(String, usize)>,
+    /// Function names called after await (for transitive propagation)
+    calls_after_await: Vec<String>,
+    /// Function names called anywhere in the body
+    all_calls: Vec<String>,
 }
 
 fn collect_func_info(content: &str, top_vars: &[String]) -> Vec<FuncInfo> {
@@ -145,6 +204,12 @@ fn collect_func_info(content: &str, top_vars: &[String]) -> Vec<FuncInfo> {
         }
         offset += line.len() + 1;
     }
+
+    // Pre-collect all function names for call tracking
+    let func_names_seen: Vec<String> = lines.iter().enumerate()
+        .filter(|(idx, _)| line_depths[*idx] == 0)
+        .filter_map(|(_, line)| extract_func_name(line.trim()))
+        .collect();
 
     let mut i = 0;
     while i < lines.len() {
@@ -168,11 +233,13 @@ fn collect_func_info(content: &str, top_vars: &[String]) -> Vec<FuncInfo> {
             }
             let func_start_offset = line_offsets[i];
 
-            // Single pass: collect assigns and positions
+            // Single pass: collect assigns, positions, and function calls
             let mut assigns = Vec::new();
             let mut all_assign_positions = Vec::new();
             let mut assigns_after_await = Vec::new();
             let mut assign_positions_after_await = Vec::new();
+            let mut calls_after_await = Vec::new();
+            let mut all_calls = Vec::new();
             let mut seen_await = false;
 
             for j in i..=end_line {
@@ -181,10 +248,15 @@ fn collect_func_info(content: &str, top_vars: &[String]) -> Vec<FuncInfo> {
                 let indent = line.len() - t.len();
                 let line_pos = line_offsets[j];
 
+                // Skip the declaration line itself — `const name = () => {` is not
+                // an assignment to `name` inside the function body.
+                if j == i { continue; }
+
                 if t.contains("await ") {
                     // Check for `var = await expr` on this line
                     if seen_await || j > i {
                         for var in top_vars {
+                            if var == &name { continue; }
                             let pat = format!("{} = await ", var);
                             if t.contains(&pat) {
                                 if !assigns_after_await.contains(var) { assigns_after_await.push(var.clone()); }
@@ -195,11 +267,11 @@ fn collect_func_info(content: &str, top_vars: &[String]) -> Vec<FuncInfo> {
                         }
                     }
                     seen_await = true;
-                    continue;
                 }
 
                 // Check assignments on this line
                 for var in top_vars {
+                    if var == &name { continue; }
                     if !t.contains(var.as_str()) { continue; }
                     if has_assign(t, var) {
                         if !assigns.contains(var) { assigns.push(var.clone()); }
@@ -210,12 +282,74 @@ fn collect_func_info(content: &str, top_vars: &[String]) -> Vec<FuncInfo> {
                         }
                     }
                 }
+
+                // Track function calls on this line (for transitive propagation)
+                // Look for `funcName(` patterns that aren't the function itself
+                for other in &func_names_seen {
+                    if other == &name { continue; }
+                    let call_pat = format!("{}(", other);
+                    if t.contains(&call_pat) {
+                        if !all_calls.contains(other) { all_calls.push(other.clone()); }
+                        if seen_await && !calls_after_await.contains(other) {
+                            calls_after_await.push(other.clone());
+                        }
+                    }
+                }
             }
 
-            results.push(FuncInfo { name, assigns, has_await, assigns_after_await, assign_positions_after_await, all_assign_positions });
+            results.push(FuncInfo { name, assigns, has_await, assigns_after_await, assign_positions_after_await, all_assign_positions, calls_after_await, all_calls });
         }
         i += 1;
     }
+
+    // Propagation pass: if func A calls func B (after await or always), inherit B's assigns.
+    // This handles chains like: backgroundResendVerification → resetTurnstile → turnstileReady = false
+    // Run multiple rounds to handle deeper chains.
+    for _ in 0..4 {
+        let snapshot: Vec<(String, Vec<String>, Vec<(String, usize)>)> = results.iter()
+            .map(|fi| (fi.name.clone(), fi.assigns.clone(), fi.all_assign_positions.clone()))
+            .collect();
+
+        for fi in results.iter_mut() {
+            // For calls after await: inherit callee's ALL assigns (they happen after our await)
+            for callee_name in fi.calls_after_await.clone() {
+                if let Some((_, callee_assigns, callee_positions)) = snapshot.iter().find(|(n, _, _)| n == &callee_name) {
+                    for var in callee_assigns {
+                        if !fi.assigns_after_await.contains(var) {
+                            fi.assigns_after_await.push(var.clone());
+                        }
+                        if !fi.assigns.contains(var) {
+                            fi.assigns.push(var.clone());
+                        }
+                    }
+                    for (var, pos) in callee_positions {
+                        if !fi.assign_positions_after_await.iter().any(|(v, p)| v == var && p == pos) {
+                            fi.assign_positions_after_await.push((var.clone(), *pos));
+                        }
+                        if !fi.all_assign_positions.iter().any(|(v, p)| v == var && p == pos) {
+                            fi.all_assign_positions.push((var.clone(), *pos));
+                        }
+                    }
+                }
+            }
+            // For all calls: inherit callee's assigns into our assigns list
+            for callee_name in fi.all_calls.clone() {
+                if let Some((_, callee_assigns, callee_positions)) = snapshot.iter().find(|(n, _, _)| n == &callee_name) {
+                    for var in callee_assigns {
+                        if !fi.assigns.contains(var) {
+                            fi.assigns.push(var.clone());
+                        }
+                    }
+                    for (var, pos) in callee_positions {
+                        if !fi.all_assign_positions.iter().any(|(v, p)| v == var && p == pos) {
+                            fi.all_assign_positions.push((var.clone(), *pos));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     results
 }
 
@@ -800,19 +934,19 @@ fn analyze_block(
 
         if in_async_ctx {
             // Report direct assignments to reactive vars.
-            // For callback-only context (setTimeout etc.), only flag vars the block reads
-            // (assigning unrelated vars in setTimeout can't re-trigger the block).
+            // For callback-only context (setTimeout etc.), only flag vars referenced
+            // in the block (Svelte tracks any reference inside $: as a dependency).
             // For after-await and .then/.catch, flag all reactive var assignments.
-            let needs_read_check = in_callback && !after_await && !in_then_catch;
+            let needs_ref_check = in_callback && !after_await && !in_then_catch;
             for var in top_vars {
                 if local_names.contains(var) { continue; }
                 if !has_assign(t, var) { continue; }
-                if needs_read_check && !block_reads_var(block, var) { continue; }
+                if needs_ref_check && !block_has_var_ref(block, var) { continue; }
 
                 let indent = line.len() - t.len();
                 let abs = base + block_start + line_offsets[idx] + indent;
                 ctx.diagnostic(
-                    "Possibly it may occur an infinite reactive loop.",
+                    format!("Possibly it may occur an infinite reactive loop because `{}` is updated in an async callback.", var),
                     Span::new(abs as u32, abs as u32 + 1),
                 );
             }
@@ -838,7 +972,7 @@ fn analyze_block(
                             if pos_var == av {
                                 let abs = base + pos_offset;
                                 ctx.diagnostic(
-                                    "Possibly it may occur an infinite reactive loop.",
+                                    format!("Possibly it may occur an infinite reactive loop because `{}` is updated here.", pos_var),
                                     Span::new(abs as u32, abs as u32 + 1),
                                 );
                             }
@@ -880,7 +1014,7 @@ fn analyze_block(
                         // Report at assignment site
                         let abs = base + pos_offset;
                         ctx.diagnostic(
-                            "Possibly it may occur an infinite reactive loop.",
+                            format!("Possibly it may occur an infinite reactive loop because `{}` is updated here.", pos_var),
                             Span::new(abs as u32, abs as u32 + 1),
                         );
                     }
@@ -925,7 +1059,7 @@ fn analyze_block(
                                 let indent = line.len() - t.len();
                                 let abs = base + block_start + line_offsets[idx] + indent + assign_pos;
                                 ctx.diagnostic(
-                                    "Possibly it may occur an infinite reactive loop.",
+                                    format!("Possibly it may occur an infinite reactive loop because `{}` is updated across an await boundary.", var),
                                     Span::new(abs as u32, abs as u32 + 1),
                                 );
                                 continue;
@@ -937,7 +1071,7 @@ fn analyze_block(
                                 let indent = line.len() - t.len();
                                 let abs = base + block_start + line_offsets[idx] + indent + assign_pos;
                                 ctx.diagnostic(
-                                    "Possibly it may occur an infinite reactive loop.",
+                                    format!("Possibly it may occur an infinite reactive loop because `{}` is updated across an await boundary.", var),
                                     Span::new(abs as u32, abs as u32 + 1),
                                 );
                             }
