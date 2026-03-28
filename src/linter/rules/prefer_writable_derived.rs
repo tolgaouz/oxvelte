@@ -5,28 +5,64 @@ use crate::linter::{LintContext, Rule};
 
 /// Check if the effect body contains exactly one statement that is `varName = expr;`
 fn is_single_assignment_effect(body: &str, assign_pattern: &str) -> bool {
-    // Collect non-empty, non-comment lines
-    let stmts: Vec<&str> = body
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty() && !l.starts_with("//") && !l.starts_with("/*"))
-        .collect();
+    // Count top-level statements by finding `;` at brace/paren depth 0
+    let bytes = body.as_bytes();
+    let mut depth = 0i32;
+    let mut stmt_count = 0;
+    let mut first_stmt_start = None;
+    let mut first_stmt_end = None;
+    let mut in_str = false;
+    let mut str_ch = 0u8;
+    let mut i = 0;
+    let mut has_content = false;
 
-    // Must have exactly one logical statement
-    // A single statement may span multiple lines (e.g., `foo =\n  bar;`)
-    // Concatenate and split by `;` to count statements
-    let joined: String = stmts.join(" ");
-    let parts: Vec<&str> = joined.split(';')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    if parts.len() != 1 {
-        return false;
+    while i < bytes.len() {
+        if in_str {
+            if bytes[i] == b'\\' { i += 2; continue; }
+            if bytes[i] == str_ch { in_str = false; }
+            i += 1;
+            continue;
+        }
+        match bytes[i] {
+            b'\'' | b'"' | b'`' => { in_str = true; str_ch = bytes[i]; has_content = true; }
+            b'{' | b'(' | b'[' => { depth += 1; has_content = true; }
+            b'}' | b')' | b']' => { depth -= 1; }
+            b';' if depth == 0 => {
+                if has_content {
+                    stmt_count += 1;
+                    if stmt_count == 1 {
+                        first_stmt_end = Some(i);
+                    }
+                }
+                has_content = false;
+            }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
+                while i < bytes.len() && bytes[i] != b'\n' { i += 1; }
+                continue;
+            }
+            c if !c.is_ascii_whitespace() => {
+                if !has_content && first_stmt_start.is_none() {
+                    first_stmt_start = Some(i);
+                }
+                has_content = true;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    // Count trailing content without semicolon as a statement
+    if has_content {
+        stmt_count += 1;
+        if stmt_count == 1 {
+            first_stmt_end = Some(bytes.len());
+        }
     }
 
-    // The single statement must start with `varName =` (simple assignment)
-    let stmt = parts[0].trim();
+    if stmt_count != 1 { return false; }
+
+    // Check that the single statement starts with `varName =`
+    let start = first_stmt_start.unwrap_or(0);
+    let stmt = body[start..].trim();
     stmt.starts_with(assign_pattern)
 }
 
