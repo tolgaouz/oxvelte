@@ -85,10 +85,10 @@ impl Rule for NoReactiveReassign {
                     while let Some(pos) = content[search_from..].find(pattern.as_str()) {
                         let abs = search_from + pos;
 
-                        // Skip if this is the reactive declaration itself ($: var = ...)
+                        // Skip if this is the reactive declaration itself ($: var = ...) or a comment
                         let line_start = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
                         let line = content[line_start..].trim_start();
-                        if line.starts_with("$:") {
+                        if line.starts_with("$:") || line.starts_with("//") || line.starts_with("/*") {
                             search_from = abs + pattern.len();
                             continue;
                         }
@@ -257,7 +257,8 @@ impl Rule for NoReactiveReassign {
                     if let Some(pos) = content.find(pattern.as_str()) {
                         let line_start = content[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
                         let line = content[line_start..].trim_start();
-                        if line.starts_with("$:") { continue; }
+                        if line.starts_with("$:") || line.starts_with("const ")
+                            || line.starts_with("let ") || line.starts_with("var ") { continue; }
                         let source_pos = content_offset + pos;
                         ctx.diagnostic(
                             format!("Assignment to reactive value '{}'.", var),
