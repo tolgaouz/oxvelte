@@ -215,6 +215,28 @@ fn parse_directives(source: &str) -> Vec<Directive> {
                     directives.push(Directive::DisableNextLine { line: line_idx, rules });
                 }
             }
+
+            // <!-- eslint-disable --> / <!-- eslint-enable -->
+            // <!-- eslint-disable rule1, rule2 --> / <!-- eslint-enable rule1, rule2 -->
+            for prefix_base in &["eslint", "oxlint", "oxvelte"] {
+                let disable = format!("{}-disable", prefix_base);
+                let enable = format!("{}-enable", prefix_base);
+
+                if let Some(rest) = inner.strip_prefix(disable.as_str()) {
+                    if rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\t') {
+                        if !rest.trim_start().starts_with("next-line") && !rest.trim_start().starts_with("line") {
+                            let rules = parse_rule_list(rest.trim());
+                            directives.push(Directive::DisableBlock { line: line_idx, rules });
+                        }
+                    }
+                }
+                if let Some(rest) = inner.strip_prefix(enable.as_str()) {
+                    if rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\t') {
+                        let rules = parse_rule_list(rest.trim());
+                        directives.push(Directive::EnableBlock { line: line_idx, rules });
+                    }
+                }
+            }
             continue;
         }
 
