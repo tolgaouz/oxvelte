@@ -3,6 +3,33 @@
 
 use crate::linter::{LintContext, Rule};
 
+/// Check if the effect body contains exactly one statement that is `varName = expr;`
+fn is_single_assignment_effect(body: &str, assign_pattern: &str) -> bool {
+    // Collect non-empty, non-comment lines
+    let stmts: Vec<&str> = body
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with("//") && !l.starts_with("/*"))
+        .collect();
+
+    // Must have exactly one logical statement
+    // A single statement may span multiple lines (e.g., `foo =\n  bar;`)
+    // Concatenate and split by `;` to count statements
+    let joined: String = stmts.join(" ");
+    let parts: Vec<&str> = joined.split(';')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if parts.len() != 1 {
+        return false;
+    }
+
+    // The single statement must start with `varName =` (simple assignment)
+    let stmt = parts[0].trim();
+    stmt.starts_with(assign_pattern)
+}
+
 pub struct PreferWritableDerived;
 
 impl Rule for PreferWritableDerived {
@@ -71,30 +98,10 @@ impl Rule for PreferWritableDerived {
                         }
                         let effect_body = &body[1..body_end];
 
-                        // Check if the effect body UNCONDITIONALLY reassigns our var
-                        // at depth 1 (directly in effect body, not nested in callbacks like untrack)
-                        let has_simple_reassign = {
-                            let mut depth = 0i32;
-                            let mut found = false;
-                            for line in effect_body.lines() {
-                                for ch in line.chars() {
-                                    match ch {
-                                        '{' | '(' => depth += 1,
-                                        '}' | ')' => depth -= 1,
-                                        _ => {}
-                                    }
-                                }
-                                let t = line.trim();
-                                if depth <= 0 && t.starts_with(&effect_pattern) && !t.starts_with("if") && !t.starts_with("for") {
-                                    found = true;
-                                }
-                            }
-                            found
-                        };
-                        // Also check it's not inside a conditional
-                        let has_conditional = effect_body.contains("if ") || effect_body.contains("if(")
-                            || effect_body.contains("for ") || effect_body.contains("while ");
-                        if has_simple_reassign && !has_conditional {
+                        // Check if the effect body contains EXACTLY ONE statement:
+                        // a simple assignment `varName = expr;`
+                        let is_single_assign = is_single_assignment_effect(effect_body, &effect_pattern);
+                        if is_single_assign {
                             let source_pos = content_offset + var_pos;
                             ctx.diagnostic(
                                 "Prefer using writable $derived instead of $state and $effect",
@@ -128,27 +135,8 @@ impl Rule for PreferWritableDerived {
                         }
                         let effect_body = &body[1..body_end];
 
-                        let has_simple_reassign2 = {
-                            let mut depth = 0i32;
-                            let mut found = false;
-                            for line in effect_body.lines() {
-                                for ch in line.chars() {
-                                    match ch {
-                                        '{' | '(' => depth += 1,
-                                        '}' | ')' => depth -= 1,
-                                        _ => {}
-                                    }
-                                }
-                                let t = line.trim();
-                                if depth <= 0 && t.starts_with(&effect_pattern) && !t.starts_with("if") && !t.starts_with("for") {
-                                    found = true;
-                                }
-                            }
-                            found
-                        };
-                        let has_conditional2 = effect_body.contains("if ") || effect_body.contains("if(")
-                            || effect_body.contains("for ") || effect_body.contains("while ");
-                        if has_simple_reassign2 && !has_conditional2 {
+                        let is_single_assign2 = is_single_assignment_effect(effect_body, &effect_pattern);
+                        if is_single_assign2 {
                             let source_pos = content_offset + var_pos;
                             ctx.diagnostic(
                                 "Prefer using writable $derived instead of $state and $effect",
