@@ -126,10 +126,22 @@ impl Rule for NoImmutableReactiveStatements {
         // Check each reactive statement
         for &(offset, ref full_text) in &reactive_stmts {
             let after = full_text[2..].trim_start();
-            // Get the RHS (after assignment) or the full expression
+            // Get the RHS (after assignment) or the full expression.
+            // Only treat as assignment if the LHS is a simple identifier
+            // (not `if (...)`, `{...}`, function call, etc.)
             let rhs = if let Some(eq) = after.find('=') {
+                let lhs = after[..eq].trim();
                 let post = &after[eq + 1..];
-                if post.starts_with('=') || post.starts_with('>') { after } else { post }
+                if post.starts_with('=') || post.starts_with('>') {
+                    // == or => operator, use full expression
+                    after
+                } else if lhs.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') && !lhs.is_empty() {
+                    // Simple identifier assignment: `$: varName = expr`
+                    post
+                } else {
+                    // Not a simple assignment (e.g., `$: if (...) { ... = ... }`), use full expression
+                    after
+                }
             } else {
                 after
             };
