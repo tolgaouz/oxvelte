@@ -270,7 +270,24 @@ fn find_statement_end(content: &str, start: usize) -> usize {
                 return i + 1;
             }
             b'\n' if depth_brace == 0 && depth_paren == 0 && depth_bracket == 0 => {
-                // Statement ends at newline if all brackets are balanced
+                // Statement ends at newline if all brackets are balanced,
+                // UNLESS the current line ends with an operator or the next
+                // non-whitespace line starts with one (continuation).
+                let before_nl = content[start..i].trim_end();
+                let after_nl = content[i + 1..].trim_start();
+                let continues = before_nl.ends_with('?') || before_nl.ends_with(':')
+                    || before_nl.ends_with("||") || before_nl.ends_with("&&")
+                    || before_nl.ends_with('+') || before_nl.ends_with('-')
+                    || before_nl.ends_with(',') || before_nl.ends_with('\\')
+                    || before_nl.ends_with("??")
+                    || after_nl.starts_with('?') || after_nl.starts_with(':')
+                    || after_nl.starts_with("||") || after_nl.starts_with("&&")
+                    || after_nl.starts_with("??")
+                    || after_nl.starts_with('.') || after_nl.starts_with("?.");
+                if continues {
+                    i += 1;
+                    continue;
+                }
                 return i;
             }
             _ => {}
