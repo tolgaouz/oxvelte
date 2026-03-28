@@ -54,7 +54,26 @@ impl Rule for PreferWritableDerived {
             for (line_offset, line) in content.lines().enumerate() {
                 let trimmed = line.trim();
                 if let Some(rest) = trimmed.strip_prefix("let ") {
-                    if let Some(state_pos) = rest.find("$state(") {
+                    // Match $state( or $state<...>(
+                    let state_pos = rest.find("$state(")
+                        .or_else(|| rest.find("$state<").and_then(|p| {
+                            // Find matching > then (
+                            let after = &rest[p + 7..]; // after "$state<"
+                            let mut depth = 1i32;
+                            for (i, ch) in after.char_indices() {
+                                match ch {
+                                    '<' => depth += 1,
+                                    '>' => { depth -= 1; if depth == 0 {
+                                        let rest_after = &after[i+1..];
+                                        if rest_after.starts_with('(') { return Some(p); }
+                                        return None;
+                                    }}
+                                    _ => {}
+                                }
+                            }
+                            None
+                        }));
+                    if let Some(state_pos) = state_pos {
                         let name_part = rest[..state_pos].trim_end().trim_end_matches('=').trim();
                         if name_part.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
                             && !name_part.is_empty()
