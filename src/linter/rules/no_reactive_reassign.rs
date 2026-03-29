@@ -330,10 +330,38 @@ impl Rule for NoReactiveReassign {
             }
             } // end if check_props (conditional member assignment)
 
-            // Step 3: Check template for bind: directives on reactive vars
+            // Step 3: Check template for event handlers and bind: directives on reactive vars
             walk_template_nodes(&ctx.ast.html, &mut |node| {
                 if let TemplateNode::Element(el) = node {
                     for attr in &el.attributes {
+                        // Check event handlers for direct assignments to reactive vars
+                        if let Attribute::Directive { kind: DirectiveKind::EventHandler, span, .. } = attr {
+                            let region = &ctx.source[span.start as usize..span.end as usize];
+                            for var in &reactive_vars {
+                                let pat = format!("{} = ", var);
+                                for (pos, _) in region.match_indices(&pat) {
+                                    if pos > 0 {
+                                        let prev = region.as_bytes()[pos - 1];
+                                        if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' { continue; }
+                                    }
+                                    let after_eq = pos + pat.len();
+                                    if after_eq < region.len() && region.as_bytes()[after_eq - 1] == b'='
+                                        && after_eq < region.len() && region.as_bytes()[after_eq] == b'=' { continue; }
+                                    let before = &region[..pos];
+                                    let single_quotes = before.matches('\'').count();
+                                    let double_quotes = before.matches('"').count();
+                                    if single_quotes % 2 != 0 || double_quotes % 2 != 0 { continue; }
+
+                                    // Report at exact position of the assignment
+                                    let abs_pos = span.start as usize + pos;
+                                    ctx.diagnostic(
+                                        format!("Assignment to reactive value '{}'.", var),
+                                        oxc::span::Span::new(abs_pos as u32, (abs_pos + var.len()) as u32),
+                                    );
+                                    break;
+                                }
+                            }
+                        }
                         if let Attribute::Directive { kind: DirectiveKind::Binding, name, span, .. } = attr {
                             let region = &ctx.source[span.start as usize..span.end as usize];
                             if let Some(open) = region.find('{') {
