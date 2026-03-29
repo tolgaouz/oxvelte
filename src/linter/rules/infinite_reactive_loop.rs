@@ -941,7 +941,18 @@ fn analyze_block(
             for var in top_vars {
                 if local_names.contains(var) { continue; }
                 if !has_assign(t, var) { continue; }
-                if needs_ref_check && !block_has_var_ref(block, var) { continue; }
+                if needs_ref_check {
+                    // For timer callbacks, check if the variable is read elsewhere
+                    // in the block (outside this assignment). Simple assignments
+                    // like `page = 1` where `page` is only written don't re-trigger.
+                    // But member assignments like `obj.a = 1` DO trigger invalidation.
+                    let is_member_assign = {
+                        let dot = format!("{}.", var);
+                        let bracket = format!("{}[", var);
+                        t.contains(&dot) || t.contains(&bracket)
+                    };
+                    if !is_member_assign && !block_reads_var(block, var) { continue; }
+                }
 
                 let indent = line.len() - t.len();
                 let abs = base + block_start + line_offsets[idx] + indent;
