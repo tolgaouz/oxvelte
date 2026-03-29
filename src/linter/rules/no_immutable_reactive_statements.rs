@@ -236,7 +236,17 @@ impl Rule for NoImmutableReactiveStatements {
             if has_unknown { continue; }
 
             // All referenced declared vars are immutable -> flag
-            if !referenced.is_empty() && referenced.iter().all(|v| all_immutable.contains(v)) {
+            let should_flag = if !referenced.is_empty() {
+                referenced.iter().all(|v| all_immutable.contains(v))
+            } else if ids.is_empty() && rhs != after {
+                // Simple assignment with literal RHS (e.g., `$: x = false;`)
+                // No reactive references at all → statement is not reactive
+                let trimmed_rhs = rhs.trim().trim_end_matches(';').trim();
+                is_literal_value(trimmed_rhs)
+            } else {
+                false
+            };
+            if should_flag {
                 let source_pos = content_offset + offset;
                 let end = content_offset + offset + full_text.len();
                 ctx.diagnostic(
@@ -383,6 +393,14 @@ fn extract_decl_name(line: &str) -> Option<&str> {
         }
     }
     None
+}
+
+fn is_literal_value(s: &str) -> bool {
+    s == "true" || s == "false" || s == "null" || s == "undefined"
+        || s.parse::<f64>().is_ok()
+        || (s.starts_with('\'') && s.ends_with('\''))
+        || (s.starts_with('"') && s.ends_with('"'))
+        || (s.starts_with('`') && s.ends_with('`') && !s.contains("${"))
 }
 
 fn is_primitive_init(line: &str) -> bool {
