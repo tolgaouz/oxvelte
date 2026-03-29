@@ -68,11 +68,14 @@ impl Rule for PreferSvelteReactivity {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let script = match &ctx.ast.instance {
-            Some(s) => s,
-            None => return,
-        };
+        // Check both instance and module scripts
+        let scripts: Vec<_> = [&ctx.ast.instance, &ctx.ast.module]
+            .into_iter()
+            .flatten()
+            .collect();
+        if scripts.is_empty() { return; }
 
+        for script in &scripts {
         let content = &script.content;
         let base = script.span.start as usize;
         let source = ctx.source;
@@ -137,6 +140,7 @@ impl Rule for PreferSvelteReactivity {
                 }
             }
         }
+        } // end for script in scripts
     }
 }
 
