@@ -1,6 +1,7 @@
 //! `svelte/no-immutable-reactive-statements` — disallow reactive statements that don't reference reactive values.
 //! ⭐ Recommended
 
+use std::collections::HashMap;
 use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::{TemplateNode, Attribute, DirectiveKind};
 use std::collections::HashSet;
@@ -194,7 +195,32 @@ impl Rule for NoImmutableReactiveStatements {
                 after
             };
 
-            let ids = extract_identifiers(rhs);
+            let mut ids = extract_identifiers(rhs);
+
+            // For non-simple-assignment reactive blocks (like $: if (cond) varName = expr),
+            // remove write-ONLY identifiers (assignment targets that don't also appear as reads).
+            // The vendor only considers READ references for immutability checking.
+            if rhs == after {
+                let write_targets = extract_assignment_targets(rhs);
+                if !write_targets.is_empty() {
+                    // Count occurrences of each identifier. If it appears more times than
+                    // it's a write target, it's also read → keep it.
+                    let mut write_counts: HashMap<&str, usize> = HashMap::new();
+                    for t in &write_targets {
+                        *write_counts.entry(t).or_insert(0) += 1;
+                    }
+                    let mut id_counts: HashMap<String, usize> = HashMap::new();
+                    for id in &ids {
+                        *id_counts.entry(id.clone()).or_insert(0) += 1;
+                    }
+                    // Only remove if ALL occurrences are write-only
+                    ids.retain(|id| {
+                        let total = id_counts.get(id).copied().unwrap_or(0);
+                        let writes = write_counts.get(id.as_str()).copied().unwrap_or(0);
+                        total > writes // keep if there are more total refs than writes
+                    });
+                }
+            }
 
             // If references $store or reactive var, it's fine
             if ids.iter().any(|id| id.starts_with('$')) { continue; }
@@ -488,6 +514,50 @@ fn has_member_write(content: &str, var: &str) -> bool {
         }
     }
     false
+}
+
+/// Extract simple identifier names that are assignment targets (LHS of `=`) in the expression.
+/// Only returns identifiers that are directly assigned (not member expressions).
+fn extract_assignment_targets(expr: &str) -> HashSet<&str> {
+    let mut targets = HashSet::new();
+    let bytes = expr.as_bytes();
+    let mut i = 0;
+    let mut in_str = false;
+    let mut str_ch = 0u8;
+    let mut depth = 0i32;
+
+    while i < bytes.len() {
+        if in_str {
+            if bytes[i] == b'\\' { i += 2; continue; }
+            if bytes[i] == str_ch { in_str = false; }
+            i += 1;
+            continue;
+        }
+        match bytes[i] {
+            b'\'' | b'"' | b'`' => { in_str = true; str_ch = bytes[i]; i += 1; }
+            b'{' | b'(' | b'[' => { depth += 1; i += 1; }
+            b'}' | b')' | b']' => { depth -= 1; i += 1; }
+            b'=' if i + 1 < bytes.len() && bytes[i + 1] != b'=' && bytes[i + 1] != b'>' => {
+                // Found assignment `=` (not `==` or `=>`)
+                // Look backwards past whitespace to find an identifier
+                let mut j = i;
+                while j > 0 && bytes[j - 1].is_ascii_whitespace() { j -= 1; }
+                let end = j;
+                while j > 0 && (bytes[j - 1].is_ascii_alphanumeric() || bytes[j - 1] == b'_' || bytes[j - 1] == b'$') {
+                    j -= 1;
+                }
+                if j < end {
+                    // Check it's a simple identifier (not preceded by `.` which would make it a member expr)
+                    if j == 0 || (bytes[j - 1] != b'.' && !bytes[j - 1].is_ascii_alphanumeric() && bytes[j - 1] != b'_') {
+                        targets.insert(&expr[j..end]);
+                    }
+                }
+                i += 1;
+            }
+            _ => { i += 1; }
+        }
+    }
+    targets
 }
 
 fn extract_identifiers(expr: &str) -> Vec<String> {
