@@ -125,6 +125,19 @@ impl Rule for PreferSvelteReactivity {
 
                 let var_name = extract_var_name(line, builtin.name);
 
+                // URL and URLSearchParams are web platform globals that the vendor's
+                // ReferenceTracker only finds when browser globals are configured.
+                // Skip const declarations inside function bodies for these classes
+                // since they're typically local utility variables (not reactive state).
+                if (builtin.name == "URL" || builtin.name == "URLSearchParams")
+                    && line.trim().starts_with("const ")
+                {
+                    let depth = brace_depth_at(content, offset);
+                    if depth > 0 {
+                        continue;
+                    }
+                }
+
                 if let Some(var_name) = var_name {
                     // Check if the variable is mutated anywhere in script or template
                     if is_mutated(content, &var_name, builtin) || is_mutated(ctx.source, &var_name, builtin) {
@@ -142,6 +155,38 @@ impl Rule for PreferSvelteReactivity {
         }
         } // end for script in scripts
     }
+}
+
+/// Brace depth at a given position (skipping strings and comments).
+fn brace_depth_at(content: &str, pos: usize) -> i32 {
+    let mut depth = 0i32;
+    let bytes = content.as_bytes();
+    let mut i = 0;
+    let mut in_str = false;
+    let mut str_ch = 0u8;
+    while i < pos && i < bytes.len() {
+        if in_str {
+            if bytes[i] == b'\\' { i += 2; continue; }
+            if bytes[i] == str_ch { in_str = false; }
+            i += 1;
+            continue;
+        }
+        match bytes[i] {
+            b'\'' | b'"' | b'`' => { in_str = true; str_ch = bytes[i]; i += 1; }
+            b'{' => { depth += 1; i += 1; }
+            b'}' => { depth -= 1; i += 1; }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
+                while i < bytes.len() && bytes[i] != b'\n' { i += 1; }
+            }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
+                i += 2;
+                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') { i += 1; }
+                if i + 1 < bytes.len() { i += 2; }
+            }
+            _ => { i += 1; }
+        }
+    }
+    depth
 }
 
 /// Collect class names that are imported from packages (not built-in).
