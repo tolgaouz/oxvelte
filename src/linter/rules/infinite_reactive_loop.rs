@@ -992,6 +992,16 @@ fn analyze_block(
                             format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", av),
                             Span::new(abs as u32, abs as u32 + 1),
                         );
+                        // Also report at post-await assignment sites inside the function
+                        for (pos_var, pos_offset) in &fi.assign_positions_after_await {
+                            if pos_var == av {
+                                let abs = base + pos_offset;
+                                ctx.diagnostic(
+                                    "Possibly it may occur an infinite reactive loop.".to_string(),
+                                    Span::new(abs as u32, abs as u32 + 1),
+                                );
+                            }
+                        }
                         break;
                     }
                 }
