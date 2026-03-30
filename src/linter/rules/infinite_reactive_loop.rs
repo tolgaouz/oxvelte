@@ -185,6 +185,8 @@ struct FuncInfo {
     calls_after_await: Vec<String>,
     /// Function names called anywhere in the body
     all_calls: Vec<String>,
+    /// Byte range of the function body within the script content (start, end)
+    body_range: (usize, usize),
 }
 
 fn collect_func_info(content: &str, top_vars: &[String]) -> Vec<FuncInfo> {
@@ -269,10 +271,12 @@ fn collect_func_info(content: &str, top_vars: &[String]) -> Vec<FuncInfo> {
                     seen_await = true;
                 }
 
-                // Check assignments on this line
+                // Check assignments on this line (skip local declarations)
                 for var in top_vars {
                     if var == &name { continue; }
                     if !t.contains(var.as_str()) { continue; }
+                    // Skip if the variable appears in a local declaration
+                    if is_local_declaration(t, var) { continue; }
                     if has_assign(t, var) {
                         if !assigns.contains(var) { assigns.push(var.clone()); }
                         all_assign_positions.push((var.clone(), line_pos + indent));
@@ -297,7 +301,9 @@ fn collect_func_info(content: &str, top_vars: &[String]) -> Vec<FuncInfo> {
                 }
             }
 
-            results.push(FuncInfo { name, assigns, has_await, assigns_after_await, assign_positions_after_await, all_assign_positions, calls_after_await, all_calls });
+            let body_start = func_start_offset;
+            let body_end = if end_line < line_offsets.len() { line_offsets[end_line] + lines[end_line].len() } else { content.len() };
+            results.push(FuncInfo { name, assigns, has_await, assigns_after_await, assign_positions_after_await, all_assign_positions, calls_after_await, all_calls, body_range: (body_start, body_end) });
         }
         i += 1;
     }
@@ -400,6 +406,32 @@ fn extract_func_name(line: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Check if a line is a local variable declaration (const/let/var) for the given variable.
+fn is_local_declaration(line: &str, var: &str) -> bool {
+    for kw in &["const ", "let ", "var "] {
+        if let Some(kw_pos) = line.find(kw) {
+            let after_kw = &line[kw_pos + kw.len()..];
+            // Check destructuring: const { x, y } = or const [x, y] =
+            if after_kw.starts_with('{') || after_kw.starts_with('[') {
+                if let Some(close) = after_kw.find(|c: char| c == '}' || c == ']') {
+                    let inside = &after_kw[1..close];
+                    if inside.split(',').any(|part| part.trim() == var) {
+                        return true;
+                    }
+                }
+            } else {
+                // Simple declaration: const var = ... or const var: Type = ...
+                let name_end = after_kw.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
+                    .unwrap_or(after_kw.len());
+                if &after_kw[..name_end] == var {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 fn has_assign(line: &str, var: &str) -> bool {
@@ -992,7 +1024,7 @@ fn analyze_block(
                             format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", av),
                             Span::new(abs as u32, abs as u32 + 1),
                         );
-                        // Also report at post-await assignment sites inside the function
+                        // Report at post-await assignment sites inside the function.
                         for (pos_var, pos_offset) in &fi.assign_positions_after_await {
                             if pos_var == av {
                                 let abs = base + pos_offset;
@@ -1000,6 +1032,27 @@ fn analyze_block(
                                     "Possibly it may occur an infinite reactive loop.".to_string(),
                                     Span::new(abs as u32, abs as u32 + 1),
                                 );
+                            }
+                        }
+                        // When called after an await in the reactive block, also
+                        // report at pre-await assignment sites by scanning the
+                        // function body in the script content.
+                        if after_await {
+                            let (body_start, body_end) = fi.body_range;
+                            if body_end <= ctx.source.len().saturating_sub(base) {
+                                let body = &ctx.source[base + body_start..base + body_end];
+                                let assign_pat = format!("{} = ", av);
+                                for (pos, _) in body.match_indices(&assign_pat) {
+                                    if is_word_start(body, pos) {
+                                        let after_eq = pos + assign_pat.len();
+                                        if after_eq < body.len() && body.as_bytes()[after_eq] == b'=' { continue; }
+                                        let abs_pos = base + body_start + pos;
+                                        ctx.diagnostic(
+                                            "Possibly it may occur an infinite reactive loop.".to_string(),
+                                            Span::new(abs_pos as u32, abs_pos as u32 + 1),
+                                        );
+                                    }
+                                }
                             }
                         }
                         break;
