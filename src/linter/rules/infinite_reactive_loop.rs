@@ -306,26 +306,40 @@ fn collect_func_info(content: &str, top_vars: &[String]) -> Vec<FuncInfo> {
     // This handles chains like: backgroundResendVerification → resetTurnstile → turnstileReady = false
     // Run multiple rounds to handle deeper chains.
     for _ in 0..4 {
-        let snapshot: Vec<(String, Vec<String>, Vec<(String, usize)>)> = results.iter()
-            .map(|fi| (fi.name.clone(), fi.assigns.clone(), fi.all_assign_positions.clone()))
+        let snapshot: Vec<(String, Vec<String>, Vec<(String, usize)>, Vec<String>, Vec<(String, usize)>, bool)> = results.iter()
+            .map(|fi| (fi.name.clone(), fi.assigns.clone(), fi.all_assign_positions.clone(), fi.assigns_after_await.clone(), fi.assign_positions_after_await.clone(), fi.has_await))
             .collect();
 
         for fi in results.iter_mut() {
-            // For calls after await: inherit callee's ALL assigns (they happen after our await)
+            // For calls after await: inherit callee's assigns based on
+            // whether the callee is async:
+            // - If callee has_await: only inherit assigns_after_await
+            //   (callee's pre-await code runs synchronously in same microtask)
+            // - If callee !has_await: inherit ALL assigns
+            //   (entire callee runs in a different microtask)
             for callee_name in fi.calls_after_await.clone() {
-                if let Some((_, callee_assigns, callee_positions)) = snapshot.iter().find(|(n, _, _)| n == &callee_name) {
-                    for var in callee_assigns {
+                if let Some((_, callee_assigns, callee_positions, callee_after_await, callee_after_await_positions, callee_has_await)) = snapshot.iter().find(|(n, _, _, _, _, _)| n == &callee_name) {
+                    let (vars_to_inherit, positions_to_inherit): (&Vec<String>, &Vec<(String, usize)>) = if *callee_has_await {
+                        (callee_after_await, callee_after_await_positions)
+                    } else {
+                        (callee_assigns, callee_positions)
+                    };
+                    for var in vars_to_inherit {
                         if !fi.assigns_after_await.contains(var) {
                             fi.assigns_after_await.push(var.clone());
                         }
+                    }
+                    for var in callee_assigns {
                         if !fi.assigns.contains(var) {
                             fi.assigns.push(var.clone());
                         }
                     }
-                    for (var, pos) in callee_positions {
+                    for (var, pos) in positions_to_inherit {
                         if !fi.assign_positions_after_await.iter().any(|(v, p)| v == var && p == pos) {
                             fi.assign_positions_after_await.push((var.clone(), *pos));
                         }
+                    }
+                    for (var, pos) in callee_positions {
                         if !fi.all_assign_positions.iter().any(|(v, p)| v == var && p == pos) {
                             fi.all_assign_positions.push((var.clone(), *pos));
                         }
@@ -334,7 +348,7 @@ fn collect_func_info(content: &str, top_vars: &[String]) -> Vec<FuncInfo> {
             }
             // For all calls: inherit callee's assigns into our assigns list
             for callee_name in fi.all_calls.clone() {
-                if let Some((_, callee_assigns, callee_positions)) = snapshot.iter().find(|(n, _, _)| n == &callee_name) {
+                if let Some((_, callee_assigns, callee_positions, _, _, _)) = snapshot.iter().find(|(n, _, _, _, _, _)| n == &callee_name) {
                     for var in callee_assigns {
                         if !fi.assigns.contains(var) {
                             fi.assigns.push(var.clone());
