@@ -241,9 +241,14 @@ fn find_target_symbol(
                 }
                 return None;
             }
+            // Pass-through nodes (mirrors vendor's isPassThrough + our
+            // ancestor walking). LogicalExpression covers `x || new Set()`.
             AstKind::ParenthesizedExpression(_)
             | AstKind::ExpressionStatement(_)
-            | AstKind::CallExpression(_) => continue,
+            | AstKind::CallExpression(_)
+            | AstKind::LogicalExpression(_)
+            | AstKind::ConditionalExpression(_)
+            | AstKind::SequenceExpression(_) => continue,
             _ => return None,
         }
     }
