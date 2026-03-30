@@ -1081,7 +1081,7 @@ fn analyze_block(
                 // ESLint reports one call-site diagnostic per assignment location.
                 for (pos_var, pos_offset) in &fi.assign_positions_after_await {
                     if block_has_var_ref(block, pos_var) {
-                        // Report at call site
+                        // Report at call site in the reactive block
                         let indent = line.len() - t.len();
                         let call_col = t.find(&call_pat).unwrap_or(0);
                         let abs = base + block_start + line_offsets[idx] + indent + call_col;
@@ -1095,6 +1095,31 @@ fn analyze_block(
                             format!("Possibly it may occur an infinite reactive loop because `{}` is updated here.", pos_var),
                             Span::new(abs as u32, abs as u32 + 1),
                         );
+                        // Report at intermediate call sites within the function body.
+                        // When the assignment was propagated from a callee, report
+                        // at the callee's call site inside this function's body.
+                        let (body_start, body_end) = fi.body_range;
+                        if body_end <= ctx.source.len().saturating_sub(base) {
+                            let body = &ctx.source[base + body_start..base + body_end];
+                            for callee_name in &fi.calls_after_await {
+                                // Check if this callee assigns the flagged variable
+                                let callee_fi = func_info.iter().find(|cf| cf.name == *callee_name);
+                                if let Some(cf) = callee_fi {
+                                    if cf.assigns.contains(pos_var) {
+                                        let callee_call = format!("{}(", callee_name);
+                                        if let Some(cpos) = body.find(&callee_call) {
+                                            if is_word_start(body, cpos) {
+                                                let abs_pos = base + body_start + cpos;
+                                                ctx.diagnostic(
+                                                    format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", pos_var),
+                                                    Span::new(abs_pos as u32, abs_pos as u32 + 1),
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
