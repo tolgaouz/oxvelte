@@ -1,19 +1,20 @@
 //! `svelte/prefer-svelte-reactivity` — prefer Svelte reactive classes over mutable
 //! built-in JS classes (Date, Map, Set, URL, URLSearchParams).
 //! ⭐ Recommended
+//!
+//! Uses `oxc_semantic` for scope-based analysis. For each `new BuiltinClass()`,
+//! resolves the assigned variable symbol, then checks if the resulting value is
+//! mutated before being overwritten by another assignment.
 
 use crate::linter::{LintContext, Rule};
 use oxc::span::Span;
 
 pub struct PreferSvelteReactivity;
 
-/// Built-in class info: (class_name, svelte_alternative, mutating_methods, mutating_properties)
 struct BuiltinClass {
     name: &'static str,
     svelte_name: &'static str,
-    /// Method names that mutate the instance (called as `var.method(...)`)
     mutating_methods: &'static [&'static str],
-    /// Property names that can be assigned to (as `var.prop = ...`)
     mutating_props: &'static [&'static str],
 }
 
@@ -68,213 +69,246 @@ impl Rule for PreferSvelteReactivity {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        // Check both instance and module scripts
-        let scripts: Vec<_> = [&ctx.ast.instance, &ctx.ast.module]
-            .into_iter()
-            .flatten()
-            .collect();
-        if scripts.is_empty() { return; }
+        for script in [&ctx.ast.instance, &ctx.ast.module].into_iter().flatten() {
+            let content = &script.content;
+            if content.trim().is_empty() { continue; }
 
-        for script in &scripts {
-        let content = &script.content;
-        let base = script.span.start as usize;
-        let source = ctx.source;
-        let tag_text = &source[base..script.span.end as usize];
-        let content_offset = tag_text.find('>').map(|p| base + p + 1).unwrap_or(base);
+            let tag_text = &ctx.source[script.span.start as usize..script.span.end as usize];
+            let gt = tag_text.find('>').unwrap_or(0);
+            let content_offset = script.span.start as usize + gt + 1;
 
-        // Collect imported/aliased names that shadow built-in classes
+            let is_ts = script.lang.as_deref() == Some("ts")
+                || script.lang.as_deref() == Some("typescript");
+
+            self.check_script(ctx, content, content_offset, is_ts);
+        }
+    }
+}
+
+impl PreferSvelteReactivity {
+    fn check_script(
+        &self,
+        ctx: &mut LintContext,
+        content: &str,
+        content_offset: usize,
+        is_ts: bool,
+    ) {
+        use oxc::allocator::Allocator;
+        use oxc::ast::ast::{AssignmentTarget, Expression};
+        use oxc::ast::AstKind;
+        use oxc::parser::Parser;
+        use oxc::semantic::{SemanticBuilder, SymbolId};
+        use oxc::span::{GetSpan, SourceType};
+
+        let alloc = Allocator::default();
+        let source_type = if is_ts { SourceType::ts() } else { SourceType::mjs() };
+        let parse_result = Parser::new(&alloc, content, source_type).parse();
+        if !parse_result.errors.is_empty() { return; }
+
+        let semantic_ret = SemanticBuilder::new().build(&parse_result.program);
+        let semantic = semantic_ret.semantic;
+        let scoping = semantic.scoping();
+        let nodes = semantic.nodes();
+
+        // Collect shadowed class names (imported from packages)
         let shadowed = collect_shadowed_classes(content);
 
-        // Find `new ClassName(...)` patterns and check for mutations
-        for builtin in BUILTIN_CLASSES {
-            // Skip if this class name is imported from a package (shadowed)
-            if shadowed.contains(&builtin.name.to_string()) {
-                continue;
-            }
+        // For each NewExpression of a built-in class, check if the value is mutated.
+        for ast_node in nodes.iter() {
+            let AstKind::NewExpression(new_expr) = ast_node.kind() else { continue };
+            let Expression::Identifier(callee) = &new_expr.callee else { continue };
+            let class_name = callee.name.as_str();
 
-            let new_pat = format!("new {}(", builtin.name);
-            let new_pat_generic = format!("new {}<", builtin.name);
-            // Collect all offsets where `new ClassName(` or `new ClassName<...>(` appears
-            let offsets: Vec<usize> = content.match_indices(&new_pat)
-                .map(|(off, _)| off)
-                .chain(
-                    content.match_indices(&new_pat_generic)
-                        .filter_map(|(off, _)| {
-                            // Find matching > then (
-                            let rest = &content[off + new_pat_generic.len()..];
-                            let mut depth = 1i32;
-                            for (i, ch) in rest.char_indices() {
-                                match ch {
-                                    '<' => depth += 1,
-                                    '>' => { depth -= 1; if depth == 0 {
-                                        let after = &rest[i+1..];
-                                        if after.starts_with('(') { return Some(off); }
-                                        return None;
-                                    }}
-                                    _ => {}
-                                }
-                            }
-                            None
-                        })
-                )
-                .collect();
-            for offset in offsets {
-                // Get the variable name this is assigned to
-                let line_start = content[..offset].rfind('\n').map(|p| p + 1).unwrap_or(0);
-                let line = &content[line_start..content[offset..].find('\n').map(|p| offset + p).unwrap_or(content.len())];
+            let Some(builtin) = BUILTIN_CLASSES.iter().find(|b| b.name == class_name) else { continue };
+            if shadowed.contains(&class_name.to_string()) { continue; }
 
-                let var_name = extract_var_name(line, builtin.name);
+            // Check callee is unresolved (global built-in, not locally imported)
+            if scoping.has_binding(callee.reference_id()) { continue; }
 
-                // URL and URLSearchParams are web platform globals that the vendor's
-                // ReferenceTracker only finds when browser globals are configured.
-                // Skip const declarations inside function bodies for these classes
-                // since they're typically local utility variables (not reactive state).
-                if (builtin.name == "URL" || builtin.name == "URLSearchParams")
-                    && line.trim().starts_with("const ")
-                {
-                    let depth = brace_depth_at(content, offset);
-                    if depth > 0 {
-                        continue;
-                    }
-                }
-
-                if let Some(var_name) = var_name {
-                    // Check if the variable is mutated anywhere in script or template
-                    if is_mutated(content, &var_name, builtin) || is_mutated(ctx.source, &var_name, builtin) {
-                        let new_keyword_pos = content_offset + offset;
-                        ctx.diagnostic(
-                            format!(
-                                "Found a mutable instance of the built-in {} class. Use {} instead.",
-                                builtin.name, builtin.svelte_name
-                            ),
-                            Span::new(new_keyword_pos as u32, (new_keyword_pos + new_pat.len()) as u32),
-                        );
-                    }
+            // URL/URLSearchParams: not in ECMAScript globals. Skip when not at
+            // root scope (the vendor only finds these with browser globals, and
+            // even then only at module scope level in practice).
+            if class_name == "URL" || class_name == "URLSearchParams" {
+                if ast_node.scope_id() != scoping.root_scope_id() {
+                    continue;
                 }
             }
-        }
-        } // end for script in scripts
-    }
-}
 
-/// Brace depth at a given position (skipping strings and comments).
-fn brace_depth_at(content: &str, pos: usize) -> i32 {
-    let mut depth = 0i32;
-    let bytes = content.as_bytes();
-    let mut i = 0;
-    let mut in_str = false;
-    let mut str_ch = 0u8;
-    while i < pos && i < bytes.len() {
-        if in_str {
-            if bytes[i] == b'\\' { i += 2; continue; }
-            if bytes[i] == str_ch { in_str = false; }
-            i += 1;
-            continue;
-        }
-        match bytes[i] {
-            b'\'' | b'"' | b'`' => { in_str = true; str_ch = bytes[i]; i += 1; }
-            b'{' => { depth += 1; i += 1; }
-            b'}' => { depth -= 1; i += 1; }
-            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
-                while i < bytes.len() && bytes[i] != b'\n' { i += 1; }
-            }
-            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
-                i += 2;
-                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') { i += 1; }
-                if i + 1 < bytes.len() { i += 2; }
-            }
-            _ => { i += 1; }
-        }
-    }
-    depth
-}
+            // Skip if new Class() is inside a $state() call — $state already
+            // provides reactivity, so SvelteMap/SvelteSet isn't needed.
+            let new_node_id = callee.node_id.get();
+            let new_node_id = nodes.parent_id(new_node_id); // up to NewExpression
+            if is_inside_state_call(nodes, new_node_id) { continue; }
 
-/// Collect class names that are imported from packages (not built-in).
-/// e.g., `import { Set } from "package"` shadows the built-in Set.
-/// Also `import { SvelteDate as Date }` shadows Date.
-fn collect_shadowed_classes(content: &str) -> Vec<String> {
-    let mut shadowed = Vec::new();
-    for line in content.lines() {
-        let t = line.trim();
-        if !t.starts_with("import ") { continue; }
+            // Walk up ancestors to find the assigned variable's SymbolId.
+            // Only flag declarations (VariableDeclarator), not reassignments
+            // (AssignmentExpression). The vendor's iteratePropertyReferences
+            // doesn't flag reassignment instances.
+            let symbol_id = find_declared_symbol(nodes, new_node_id);
+            let Some(symbol_id) = symbol_id else { continue };
 
-        if let (Some(bs), Some(be)) = (t.find('{'), t.find('}')) {
-            for imp in t[bs+1..be].split(',') {
-                let imp = imp.trim();
-                let local_name = if let Some(as_pos) = imp.find(" as ") {
-                    imp[as_pos + 4..].trim()
-                } else {
-                    imp
-                };
+            // Check if any reference to this symbol is a mutating usage.
+            // For declarations, the vendor checks ALL references to the variable.
+            let is_mut = is_symbol_mutated(scoping, nodes, symbol_id, builtin);
 
-                // Check if this shadows a built-in class name
-                for builtin in BUILTIN_CLASSES {
-                    if local_name == builtin.name {
-                        shadowed.push(builtin.name.to_string());
-                    }
-                }
+            // For root-scope variables, also check template for mutations
+            let is_template_mut = if !is_mut
+                && scoping.symbol_scope_id(symbol_id) == scoping.root_scope_id()
+            {
+                let var_name = scoping.symbol_name(symbol_id);
+                is_mutated_in_template(ctx.source, content, var_name, builtin)
+            } else {
+                false
+            };
+
+            if is_mut || is_template_mut {
+                let abs = content_offset + new_expr.span.start as usize;
+                let end = content_offset + new_expr.span.end as usize;
+                ctx.diagnostic(
+                    format!(
+                        "Found a mutable instance of the built-in {} class. Use {} instead.",
+                        builtin.name, builtin.svelte_name
+                    ),
+                    Span::new(abs as u32, end as u32),
+                );
             }
         }
     }
-    shadowed
 }
 
-/// Extract variable name from a line like `const variable = new ClassName(...)`.
-/// Handles TypeScript annotations like `let x: Set<number> = new Set()`.
-fn extract_var_name(line: &str, class_name: &str) -> Option<String> {
-    let t = line.trim();
-    // Pattern: `const/let/var NAME[: Type] = new ClassName(` or `new ClassName<...>(`
-    for kw in &["const ", "let ", "var "] {
-        if let Some(rest) = t.strip_prefix(kw) {
-            if let Some(eq_pos) = rest.find(" = ") {
-                let name_part = rest[..eq_pos].trim();
-                // Strip TypeScript type annotation: `name: Type` -> `name`
-                let name = if let Some(colon_pos) = name_part.find(':') {
-                    name_part[..colon_pos].trim()
-                } else {
-                    name_part
-                };
-                let after_eq = rest[eq_pos + 3..].trim();
-                let new_pat = format!("new {}(", class_name);
-                let new_pat_generic = format!("new {}<", class_name);
-                if after_eq.starts_with(&new_pat) || after_eq.starts_with(&new_pat_generic) {
-                    return Some(name.to_string());
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Check if a NewExpression is inside a `$state(...)` call.
+fn is_inside_state_call(
+    nodes: &oxc::semantic::AstNodes,
+    new_expr_id: oxc::semantic::NodeId,
+) -> bool {
+    use oxc::ast::ast::Expression;
+    use oxc::ast::AstKind;
+
+    for ancestor_id in nodes.ancestor_ids(new_expr_id) {
+        match nodes.kind(ancestor_id) {
+            AstKind::CallExpression(call) => {
+                if let Expression::Identifier(ident) = &call.callee {
+                    if ident.name.as_str() == "$state" {
+                        return true;
+                    }
                 }
+                return false;
             }
+            AstKind::ParenthesizedExpression(_) => continue,
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Walk up ancestors from a NewExpression to find the SymbolId of the
+/// variable if it's in a DECLARATION (VariableDeclarator). The vendor
+/// does not flag reassignment instances (AssignmentExpression).
+fn find_declared_symbol(
+    nodes: &oxc::semantic::AstNodes,
+    node_id: oxc::semantic::NodeId,
+) -> Option<oxc::semantic::SymbolId> {
+    use oxc::ast::ast::BindingPattern;
+    use oxc::ast::AstKind;
+
+    for ancestor_id in nodes.ancestor_ids(node_id) {
+        match nodes.kind(ancestor_id) {
+            AstKind::VariableDeclarator(decl) => {
+                if let BindingPattern::BindingIdentifier(ident) = &decl.id {
+                    return ident.symbol_id.get();
+                }
+                return None;
+            }
+            AstKind::AssignmentExpression(_) => return None,
+            AstKind::ParenthesizedExpression(_)
+            | AstKind::ExpressionStatement(_)
+            | AstKind::CallExpression(_) => continue,
+            _ => return None,
         }
     }
     None
 }
 
-/// Check if a variable is mutated using any of the built-in class's mutating methods or properties.
-fn is_mutated(content: &str, var_name: &str, builtin: &BuiltinClass) -> bool {
-    // Check mutating method calls: `var.method(`
+/// Check if any read reference to the symbol is a mutating usage.
+fn is_symbol_mutated(
+    scoping: &oxc::semantic::Scoping,
+    nodes: &oxc::semantic::AstNodes,
+    symbol_id: oxc::semantic::SymbolId,
+    builtin: &BuiltinClass,
+) -> bool {
+    use oxc::ast::AstKind;
+    use oxc::span::GetSpan;
+
+    for reference in scoping.get_resolved_references(symbol_id) {
+        if !reference.is_read() { continue; }
+
+        let parent_id = nodes.parent_id(reference.node_id());
+        if let AstKind::StaticMemberExpression(member) = nodes.kind(parent_id) {
+            let prop = member.property.name.as_str();
+
+            if builtin.mutating_methods.contains(&prop) {
+                let gp = nodes.parent_id(parent_id);
+                if matches!(nodes.kind(gp), AstKind::CallExpression(_)) {
+                    return true;
+                }
+            }
+
+            if builtin.mutating_props.contains(&prop) {
+                let gp = nodes.parent_id(parent_id);
+                if let AstKind::AssignmentExpression(assign) = nodes.kind(gp) {
+                    if member.span.start == assign.left.span().start {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Check if a variable is mutated in the template (outside script blocks).
+fn is_mutated_in_template(
+    source: &str, script_content: &str, var_name: &str, builtin: &BuiltinClass,
+) -> bool {
     for method in builtin.mutating_methods {
         let pat = format!("{}.{}(", var_name, method);
-        if content.contains(&pat) {
+        if source.contains(&pat) && !script_content.contains(&pat) {
             return true;
         }
     }
-
-    // Check mutating property assignments: `var.prop = ` (not `var.prop ==`)
     for prop in builtin.mutating_props {
         let pat = format!("{}.{} =", var_name, prop);
-        if let Some(pos) = content.find(&pat) {
-            // Make sure it's `= ` not `==`
-            let after = &content[pos + pat.len()..];
-            if !after.starts_with('=') {
-                return true;
-            }
-        }
-        // Also check `var.prop=` (no space before =)
-        let pat2 = format!("{}.{}=", var_name, prop);
-        if let Some(pos) = content.find(&pat2) {
-            let after = &content[pos + pat2.len()..];
-            if !after.starts_with('=') {
+        if let Some(pos) = source.find(&pat) {
+            let after = &source[pos + pat.len()..];
+            if !after.starts_with('=') && !script_content.contains(&pat) {
                 return true;
             }
         }
     }
-
     false
+}
+
+/// Collect class names that are imported from packages (shadowing built-ins).
+fn collect_shadowed_classes(content: &str) -> Vec<String> {
+    let mut shadowed = Vec::new();
+    for line in content.lines() {
+        let t = line.trim();
+        if !t.starts_with("import ") { continue; }
+        if let (Some(bs), Some(be)) = (t.find('{'), t.find('}')) {
+            for imp in t[bs+1..be].split(',') {
+                let imp = imp.trim();
+                let local = if let Some(ap) = imp.find(" as ") {
+                    imp[ap + 4..].trim()
+                } else { imp };
+                for b in BUILTIN_CLASSES {
+                    if local == b.name { shadowed.push(b.name.to_string()); }
+                }
+            }
+        }
+    }
+    shadowed
 }
