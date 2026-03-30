@@ -113,6 +113,13 @@ impl PreferSvelteReactivity {
         // Collect shadowed class names (imported from packages)
         let shadowed = collect_shadowed_classes(content);
 
+        // The vendor's ReferenceTracker has a side-effect: due to
+        // variableStack and lazy generator evaluation, only the FIRST
+        // `new Set()` (in source order) per mutable variable is flagged.
+        // We replicate this by tracking which symbols have already been
+        // reported.
+        let mut flagged_symbols = std::collections::HashSet::<SymbolId>::new();
+
         // For each NewExpression of a built-in class, check if the value is mutated.
         for ast_node in nodes.iter() {
             let AstKind::NewExpression(new_expr) = ast_node.kind() else { continue };
@@ -141,14 +148,16 @@ impl PreferSvelteReactivity {
             if is_inside_state_call(nodes, new_node_id) { continue; }
 
             // Walk up ancestors to find the assigned variable's SymbolId.
-            // Only flag declarations (VariableDeclarator), not reassignments
-            // (AssignmentExpression). The vendor's iteratePropertyReferences
-            // doesn't flag reassignment instances.
-            let symbol_id = find_declared_symbol(nodes, new_node_id);
+            // Handles both declarations (let x = new Set()) and reassignments
+            // (x = new Set()).
+            let symbol_id = find_target_symbol(nodes, scoping, new_node_id);
             let Some(symbol_id) = symbol_id else { continue };
 
+            // Only flag the first instance per mutable variable (matches
+            // vendor ReferenceTracker variableStack behavior).
+            if flagged_symbols.contains(&symbol_id) { continue; }
+
             // Check if any reference to this symbol is a mutating usage.
-            // For declarations, the vendor checks ALL references to the variable.
             let is_mut = is_symbol_mutated(scoping, nodes, symbol_id, builtin);
 
             // For root-scope variables, also check template for mutations
@@ -162,6 +171,7 @@ impl PreferSvelteReactivity {
             };
 
             if is_mut || is_template_mut {
+                flagged_symbols.insert(symbol_id);
                 let abs = content_offset + new_expr.span.start as usize;
                 let end = content_offset + new_expr.span.end as usize;
                 ctx.diagnostic(
@@ -206,13 +216,14 @@ fn is_inside_state_call(
 }
 
 /// Walk up ancestors from a NewExpression to find the SymbolId of the
-/// variable if it's in a DECLARATION (VariableDeclarator). The vendor
-/// does not flag reassignment instances (AssignmentExpression).
-fn find_declared_symbol(
+/// assigned variable. Handles both declarations (`let x = new Set()`)
+/// and reassignments (`x = new Set()`).
+fn find_target_symbol(
     nodes: &oxc::semantic::AstNodes,
+    scoping: &oxc::semantic::Scoping,
     node_id: oxc::semantic::NodeId,
 ) -> Option<oxc::semantic::SymbolId> {
-    use oxc::ast::ast::BindingPattern;
+    use oxc::ast::ast::{AssignmentTarget, BindingPattern};
     use oxc::ast::AstKind;
 
     for ancestor_id in nodes.ancestor_ids(node_id) {
@@ -223,7 +234,13 @@ fn find_declared_symbol(
                 }
                 return None;
             }
-            AstKind::AssignmentExpression(_) => return None,
+            AstKind::AssignmentExpression(assign) => {
+                if let AssignmentTarget::AssignmentTargetIdentifier(ident) = &assign.left {
+                    let ref_id = ident.reference_id.get()?;
+                    return scoping.get_reference(ref_id).symbol_id();
+                }
+                return None;
+            }
             AstKind::ParenthesizedExpression(_)
             | AstKind::ExpressionStatement(_)
             | AstKind::CallExpression(_) => continue,
