@@ -90,9 +90,10 @@ fn check_expression(expr: &str, span: oxc::span::Span, ctx: &mut LintContext<'_>
                 }
             }
         }
-        // Don't flag strings containing { or } — they can't be
-        // used as raw text in Svelte templates.
-        if inner.contains('{') || inner.contains('}') {
+        // Don't flag strings containing `{` — they can't be used as raw
+        // text in Svelte templates (would start an expression block).
+        // Note: `}` alone is fine; the vendor only skips `{`.
+        if inner.contains('{') {
             return;
         }
         // Don't flag backtick strings with newlines
