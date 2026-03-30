@@ -330,12 +330,26 @@ impl Rule for NoReactiveReassign {
             }
             } // end if check_props (conditional member assignment)
 
-            // Step 3: Check template for event handlers and bind: directives on reactive vars
+            // Step 3: Check template for event handlers, expression props, and bind: directives
             walk_template_nodes(&ctx.ast.html, &mut |node| {
                 if let TemplateNode::Element(el) = node {
                     for attr in &el.attributes {
-                        // Check event handlers for direct assignments to reactive vars
-                        if let Attribute::Directive { kind: DirectiveKind::EventHandler, span, .. } = attr {
+                        // Collect spans of expression regions to check for assignments.
+                        // This covers event handlers (on:click), expression attributes
+                        // (prop={() => { ... }}), etc.
+                        let expr_span = match attr {
+                            Attribute::Directive { kind: DirectiveKind::EventHandler, span, .. } => Some(*span),
+                            Attribute::NormalAttribute { span, value, .. } => {
+                                // Only check attributes with expression values
+                                match value {
+                                    crate::ast::AttributeValue::Expression(_) => Some(*span),
+                                    crate::ast::AttributeValue::Concat(_) => Some(*span),
+                                    _ => None,
+                                }
+                            }
+                            _ => None,
+                        };
+                        if let Some(span) = expr_span {
                             let region = &ctx.source[span.start as usize..span.end as usize];
                             for var in &reactive_vars {
                                 let pat = format!("{} = ", var);
@@ -359,6 +373,60 @@ impl Rule for NoReactiveReassign {
                                         oxc::span::Span::new(abs_pos as u32, (abs_pos + var.len()) as u32),
                                     );
                                     break;
+                                }
+                            }
+                            // Check event handlers for property assignments to reactive
+                            // vars and their store subscriptions ($varName).
+                            // E.g.: $gallery.items[idx] = value
+                            if check_props {
+                                for var in &reactive_vars {
+                                    // Check both var.prop and $var.prop patterns
+                                    for prefix in &[var.clone(), format!("${}", var)] {
+                                        for pat_start in &[format!("{}.", prefix), format!("{}[", prefix)] {
+                                            for (pos, _) in region.match_indices(pat_start.as_str()) {
+                                                // Word boundary check
+                                                if pos > 0 {
+                                                    let prev = region.as_bytes()[pos - 1];
+                                                    if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' { continue; }
+                                                }
+                                                // String context check
+                                                let before = &region[..pos];
+                                                let single_quotes = before.matches('\'').count();
+                                                let double_quotes = before.matches('"').count();
+                                                if single_quotes % 2 != 0 || double_quotes % 2 != 0 { continue; }
+
+                                                // Follow member chain to find = assignment
+                                                let after = &region[pos + pat_start.len()..];
+                                                let mut rest = if pat_start.ends_with('[') {
+                                                    after.find(']').map(|p| &after[p+1..]).unwrap_or("")
+                                                } else {
+                                                    let end = after.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(after.len());
+                                                    &after[end..]
+                                                };
+                                                loop {
+                                                    if rest.starts_with('.') || rest.starts_with("?.") {
+                                                        let skip = if rest.starts_with("?.") { 2 } else { 1 };
+                                                        let r = &rest[skip..];
+                                                        let end = r.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(r.len());
+                                                        rest = &r[end..];
+                                                    } else if rest.starts_with('[') {
+                                                        rest = rest[1..].find(']').map(|p| &rest[p+2..]).unwrap_or("");
+                                                    } else {
+                                                        break;
+                                                    }
+                                                }
+                                                let rest = rest.trim_start();
+                                                if rest.starts_with('=') && !rest.starts_with("==") {
+                                                    let abs_pos = span.start as usize + pos;
+                                                    ctx.diagnostic(
+                                                        format!("Assignment to property of reactive value '{}'.", prefix),
+                                                        oxc::span::Span::new(abs_pos as u32, (abs_pos + pat_start.len()) as u32),
+                                                    );
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
