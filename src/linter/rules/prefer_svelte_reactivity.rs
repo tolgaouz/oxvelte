@@ -421,15 +421,15 @@ fn is_mutated_in_template(
 ) -> bool {
     for method in builtin.mutating_methods {
         let pat = format!("{}.{}(", var_name, method);
-        if source.contains(&pat) && !script_content.contains(&pat) {
+        if find_word_boundary(source, &pat) && !find_word_boundary(script_content, &pat) {
             return true;
         }
     }
     for prop in builtin.mutating_props {
         let pat = format!("{}.{} =", var_name, prop);
-        if let Some(pos) = source.find(&pat) {
+        if let Some(pos) = find_word_boundary_pos(source, &pat) {
             let after = &source[pos + pat.len()..];
-            if !after.starts_with('=') && !script_content.contains(&pat) {
+            if !after.starts_with('=') && !find_word_boundary(script_content, &pat) {
                 return true;
             }
         }
