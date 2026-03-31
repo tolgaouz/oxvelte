@@ -1408,7 +1408,7 @@ fn serialize_attribute_modern(attr: &Attribute, source: &str) -> Value {
                 "expression": expression_to_estree(source, expr_str.trim(), expr_start)
             })
         }
-        Attribute::Directive { kind, name, modifiers, span } => {
+        Attribute::Directive { kind, name, modifiers, span, .. } => {
             let type_name = match kind {
                 DirectiveKind::EventHandler => "OnDirective",
                 DirectiveKind::Binding => "BindDirective",
@@ -3671,7 +3671,7 @@ fn serialize_attribute_legacy(attr: &Attribute, source: &str) -> Value {
                 "expression": expression_to_estree(source, expr_str.trim(), expr_start)
             })
         }
-        Attribute::Directive { kind, name, modifiers, span } => {
+        Attribute::Directive { kind, name, modifiers, span, .. } => {
             let type_name = match kind {
                 DirectiveKind::EventHandler => "EventHandler",
                 DirectiveKind::Binding => "Binding",
