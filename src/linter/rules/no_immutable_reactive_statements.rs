@@ -427,53 +427,68 @@ fn is_primitive_init(line: &str) -> bool {
 }
 
 /// Extract import names from multi-line import statements in the full content.
+/// Extract import names from multi-line import statements in the full content.
 fn extract_multiline_imports<'a>(content: &'a str, immutable_names: &mut HashSet<&'a str>) {
-    let mut i = 0;
-    let bytes = content.as_bytes();
-    while i < bytes.len() {
-        // Find "import" at a line start (with optional whitespace)
-        if i > 0 && bytes[i - 1] != b'\n' { i += 1; continue; }
-        let line_start = i;
-        while i < bytes.len() && bytes[i].is_ascii_whitespace() && bytes[i] != b'\n' { i += 1; }
-        if !bytes[i].is_ascii_alphabetic() { i = line_start + 1; continue; }
-        if i + 6 < bytes.len() && bytes[i] == b'i' && bytes[i+1] == b'm' && bytes[i+2] == b'p'
-            && bytes[i+3] == b'o' && bytes[i+4] == b'r' && bytes[i+5] == b't' {
-            // Find the end of the import statement (the line with "from")
-            let import_start = i;
-            // Scan forward until we find "from " on a line
-            let mut end = i;
-            while end < bytes.len() {
-                if bytes[end] == b'\n' {
-                    let next_line = &content[end + 1..];
-                    let trimmed = next_line.trim_start();
-                    if trimmed.starts_with("from ") || trimmed.starts_with("} from ") {
-                        // Find end of this line
-                        let nl = next_line.find('\n').unwrap_or(next_line.len());
-                        end = end + 1 + nl;
-                        break;
-                    }
-                    // Also check if current accumulated text has "from"
-                    if content[import_start..end].contains(" from ") {
-                        break;
-                    }
-                }
-                end += 1;
-            }
-            let full_import = &content[import_start..end];
-            // Extract names from the full import using the existing function
-            // First, collapse to single line
-            let collapsed: String = full_import.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
-            for name in extract_import_names(&collapsed) {
-                // Find the name in the original content for correct lifetime
-                if let Some(pos) = content[import_start..end].find(name) {
-                    let actual = &content[import_start + pos..import_start + pos + name.len()];
-                    immutable_names.insert(actual);
-                }
-            }
-            i = end;
-        } else {
-            i = line_start + 1;
+    // Find multi-line imports: `import { ... } from '...'` or `import ... from '...'`
+    // where the import spans multiple lines (has { on one line, } from on another)
+    // Search for "import " at line starts (with possible leading whitespace)
+    let mut search = 0;
+    while search < content.len() {
+        // Find next line containing "import "
+        let rest = &content[search..];
+        let import_pos = rest.find("import ").or_else(|| rest.find("import\t"));
+        let Some(import_pos) = import_pos else { break };
+        let abs = search + import_pos;
+        // Verify it's at the start of a line (only whitespace before it)
+        let line_start = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
+        let before_import = content[line_start..abs].trim();
+        if !before_import.is_empty() && before_import != "export" {
+            search = abs + 7;
+            continue;
         }
+        // Find the end of this import (the line with ` from ` followed by quote)
+        let rest = &content[abs..];
+        // Only process if this looks like a multi-line import (has { without } on same line)
+        let first_nl = rest.find('\n').unwrap_or(rest.len());
+        let first_line = &rest[..first_nl];
+        if first_line.contains('{') && !first_line.contains('}') {
+            // Multi-line: find closing } from
+            // Limit search to 20 lines
+            let mut end = abs + first_nl;
+            let mut found = false;
+            for _ in 0..20 {
+                if end >= content.len() { break; }
+                let line_end = content[end + 1..].find('\n')
+                    .map(|p| end + 1 + p)
+                    .unwrap_or(content.len());
+                let line = content[end + 1..line_end].trim();
+                if line.starts_with("} from ") || line.contains("} from '") || line.contains("} from \"") {
+                    end = line_end;
+                    found = true;
+                    break;
+                }
+                // If we hit a non-import line, stop
+                if !line.starts_with("//") && !line.is_empty() && !line.ends_with(',')
+                    && !line.starts_with('}')
+                    && line.contains('=') {
+                    break;
+                }
+                end = line_end;
+            }
+            if found {
+                let full_import = &content[abs..end];
+                let collapsed: String = full_import.chars()
+                    .map(|c| if c == '\n' { ' ' } else { c })
+                    .collect();
+                for name in extract_import_names(&collapsed) {
+                    if let Some(pos) = content[abs..end].find(name) {
+                        let actual = &content[abs + pos..abs + pos + name.len()];
+                        immutable_names.insert(actual);
+                    }
+                }
+            }
+        }
+        search = abs + 7; // skip "import "
     }
 }
 
