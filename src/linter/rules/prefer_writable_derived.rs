@@ -60,10 +60,13 @@ fn is_single_assignment_effect(body: &str, assign_pattern: &str) -> bool {
 
     if stmt_count != 1 { return false; }
 
-    // Check that the single statement starts with `varName =`
+    // Check that the single statement starts with `varName =` (not `varName ==`)
     let start = first_stmt_start.unwrap_or(0);
     let stmt = body[start..].trim();
-    stmt.starts_with(assign_pattern)
+    if !stmt.starts_with(assign_pattern) { return false; }
+    let after = &stmt[assign_pattern.len()..];
+    // Must not be `==` (comparison) or `=>` (arrow)
+    !after.starts_with('=') && !after.starts_with('>')
 }
 
 pub struct PreferWritableDerived;
