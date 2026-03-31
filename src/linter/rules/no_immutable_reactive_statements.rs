@@ -63,6 +63,10 @@ impl Rule for NoImmutableReactiveStatements {
             }
         }
 
+        // Also extract imports from multi-line import statements
+        // (the line-by-line approach above misses these)
+        extract_multiline_imports(content, &mut immutable_names);
+
         // Collect reactive statements with their FULL text (multiline support)
         let reactive_stmts = collect_reactive_stmts(content);
 
@@ -419,6 +423,57 @@ fn is_primitive_init(line: &str) -> bool {
             || init == "true" || init == "false" || init == "null" || init == "undefined"
     } else {
         false
+    }
+}
+
+/// Extract import names from multi-line import statements in the full content.
+fn extract_multiline_imports<'a>(content: &'a str, immutable_names: &mut HashSet<&'a str>) {
+    let mut i = 0;
+    let bytes = content.as_bytes();
+    while i < bytes.len() {
+        // Find "import" at a line start (with optional whitespace)
+        if i > 0 && bytes[i - 1] != b'\n' { i += 1; continue; }
+        let line_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() && bytes[i] != b'\n' { i += 1; }
+        if !bytes[i].is_ascii_alphabetic() { i = line_start + 1; continue; }
+        if i + 6 < bytes.len() && bytes[i] == b'i' && bytes[i+1] == b'm' && bytes[i+2] == b'p'
+            && bytes[i+3] == b'o' && bytes[i+4] == b'r' && bytes[i+5] == b't' {
+            // Find the end of the import statement (the line with "from")
+            let import_start = i;
+            // Scan forward until we find "from " on a line
+            let mut end = i;
+            while end < bytes.len() {
+                if bytes[end] == b'\n' {
+                    let next_line = &content[end + 1..];
+                    let trimmed = next_line.trim_start();
+                    if trimmed.starts_with("from ") || trimmed.starts_with("} from ") {
+                        // Find end of this line
+                        let nl = next_line.find('\n').unwrap_or(next_line.len());
+                        end = end + 1 + nl;
+                        break;
+                    }
+                    // Also check if current accumulated text has "from"
+                    if content[import_start..end].contains(" from ") {
+                        break;
+                    }
+                }
+                end += 1;
+            }
+            let full_import = &content[import_start..end];
+            // Extract names from the full import using the existing function
+            // First, collapse to single line
+            let collapsed: String = full_import.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
+            for name in extract_import_names(&collapsed) {
+                // Find the name in the original content for correct lifetime
+                if let Some(pos) = content[import_start..end].find(name) {
+                    let actual = &content[import_start + pos..import_start + pos + name.len()];
+                    immutable_names.insert(actual);
+                }
+            }
+            i = end;
+        } else {
+            i = line_start + 1;
+        }
     }
 }
 
