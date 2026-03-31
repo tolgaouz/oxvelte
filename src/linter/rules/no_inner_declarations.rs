@@ -150,6 +150,12 @@ fn check_inner_declarations(content: &str, content_offset: usize, ctx: &mut Lint
             continue;
         }
 
+        // Skip non-ASCII bytes (multi-byte UTF-8 characters can't be JS keywords)
+        if !bytes[i].is_ascii() {
+            i += 1;
+            continue;
+        }
+
         let rest = &content[i..];
 
         // Detect control flow keywords that create blocks
