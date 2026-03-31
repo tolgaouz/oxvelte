@@ -779,7 +779,9 @@ fn extract_identifiers(expr: &str) -> Vec<String> {
                 | "Map" | "Set" | "RegExp" | "Symbol" | "BigInt" | "Infinity" | "NaN"
                 | "void" | "delete" | "instanceof" | "in" | "of" | "switch" | "case"
                 | "break" | "continue" | "throw" | "try" | "catch" | "finally"
-                | "for" | "while" | "do" | "async" | "await" | "yield") {
+                | "for" | "while" | "do" | "async" | "await" | "yield"
+                | "satisfies" | "as" | "super" | "with" | "debugger"
+                | "default" | "export" | "from") {
                 // Skip object literal property names: `{ key: value }`
                 // An identifier followed by `:` where the `:` is not part of `::` or `? :`
                 let rest_after = &expr[i..];
