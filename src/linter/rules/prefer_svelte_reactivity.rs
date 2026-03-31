@@ -174,11 +174,51 @@ impl PreferSvelteReactivity {
                 continue;
             }
 
+            // Check for chained method calls: `new Date().setHours(...)`.
+            // The parent of NewExpression is MemberExpression, then CallExpression.
+            if is_directly_mutated(nodes, new_node_id, builtin) {
+                let abs = content_offset + new_expr.span.start as usize;
+                let end = content_offset + new_expr.span.end as usize;
+                ctx.diagnostic(
+                    format!(
+                        "Found a mutable instance of the built-in {} class. Use {} instead.",
+                        builtin.name, builtin.svelte_name
+                    ),
+                    Span::new(abs as u32, end as u32),
+                );
+                continue;
+            }
+
             // Walk up ancestors to find the assigned variable's SymbolId.
             // Handles both declarations (let x = new Set()) and reassignments
             // (x = new Set()).
-            let symbol_id = find_target_symbol(nodes, scoping, new_node_id);
-            let Some(symbol_id) = symbol_id else { continue };
+            let (symbol_id, var_name_fallback) = find_target_symbol_or_name(nodes, scoping, new_node_id);
+            let symbol_id = match symbol_id {
+                Some(sid) => sid,
+                None => {
+                    // No symbol — e.g. implicit $: reactive declaration.
+                    // Fall back to name-based mutation check.
+                    // Skip $-prefixed store subscriptions — the Set/Map inside
+                    // a writable store is not directly mutable.
+                    if let Some(var_name) = &var_name_fallback {
+                        if var_name.starts_with('$') { continue; }
+                        let is_mut_by_name = is_mutated_by_name(content, var_name, builtin);
+                        let is_template_mut = is_mutated_in_template(ctx.source, content, var_name, builtin);
+                        if is_mut_by_name || is_template_mut {
+                            let abs = content_offset + new_expr.span.start as usize;
+                            let end = content_offset + new_expr.span.end as usize;
+                            ctx.diagnostic(
+                                format!(
+                                    "Found a mutable instance of the built-in {} class. Use {} instead.",
+                                    builtin.name, builtin.svelte_name
+                                ),
+                                Span::new(abs as u32, end as u32),
+                            );
+                        }
+                    }
+                    continue;
+                }
+            };
 
             // Only flag the first instance per mutable variable (matches
             // vendor ReferenceTracker variableStack behavior).
@@ -233,6 +273,40 @@ fn is_inside_export(
     false
 }
 
+/// Check if a NewExpression has a direct chained mutating method call,
+/// e.g. `new Date().setHours(...)` or `new Set([1]).add(2)`.
+fn is_directly_mutated(
+    nodes: &oxc::semantic::AstNodes,
+    new_expr_id: oxc::semantic::NodeId,
+    builtin: &BuiltinClass,
+) -> bool {
+    use oxc::ast::AstKind;
+
+    // Parent should be a MemberExpression (accessing the method)
+    let parent_id = nodes.parent_id(new_expr_id);
+    let method_name = match nodes.kind(parent_id) {
+        AstKind::StaticMemberExpression(member) => Some(member.property.name.as_str()),
+        _ => None,
+    };
+    if let Some(name) = method_name {
+        if builtin.mutating_methods.contains(&name) {
+            // Grandparent should be CallExpression (calling the method)
+            let grandparent_id = nodes.parent_id(parent_id);
+            if matches!(nodes.kind(grandparent_id), AstKind::CallExpression(_)) {
+                return true;
+            }
+        }
+        // For URL: check property assignment `new URL(...).pathname = ...`
+        if builtin.mutating_props.contains(&name) {
+            let grandparent_id = nodes.parent_id(parent_id);
+            if matches!(nodes.kind(grandparent_id), AstKind::AssignmentExpression(_)) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Check if a NewExpression is inside a `$state(...)` call.
 fn is_inside_state_call(
     nodes: &oxc::semantic::AstNodes,
@@ -261,11 +335,14 @@ fn is_inside_state_call(
 /// Walk up ancestors from a NewExpression to find the SymbolId of the
 /// assigned variable. Handles both declarations (`let x = new Set()`)
 /// and reassignments (`x = new Set()`).
-fn find_target_symbol(
+/// Returns (Option<SymbolId>, Option<variable_name>) — if the symbol
+/// cannot be resolved (e.g. implicit `$:` declarations), the variable
+/// name is returned as a fallback.
+fn find_target_symbol_or_name(
     nodes: &oxc::semantic::AstNodes,
     scoping: &oxc::semantic::Scoping,
     node_id: oxc::semantic::NodeId,
-) -> Option<oxc::semantic::SymbolId> {
+) -> (Option<oxc::semantic::SymbolId>, Option<String>) {
     use oxc::ast::ast::{AssignmentTarget, BindingPattern};
     use oxc::ast::AstKind;
 
@@ -273,29 +350,32 @@ fn find_target_symbol(
         match nodes.kind(ancestor_id) {
             AstKind::VariableDeclarator(decl) => {
                 if let BindingPattern::BindingIdentifier(ident) = &decl.id {
-                    return ident.symbol_id.get();
+                    let name = ident.name.to_string();
+                    return (ident.symbol_id.get(), Some(name));
                 }
-                return None;
+                return (None, None);
             }
             AstKind::AssignmentExpression(assign) => {
                 if let AssignmentTarget::AssignmentTargetIdentifier(ident) = &assign.left {
-                    let ref_id = ident.reference_id.get()?;
-                    return scoping.get_reference(ref_id).symbol_id();
+                    let name = ident.name.to_string();
+                    let ref_id = ident.reference_id.get();
+                    let sym = ref_id.and_then(|r| scoping.get_reference(r).symbol_id());
+                    return (sym, Some(name));
                 }
-                return None;
+                return (None, None);
             }
-            // Pass-through nodes (mirrors vendor's isPassThrough + our
-            // ancestor walking). LogicalExpression covers `x || new Set()`.
+            // Pass-through nodes
             AstKind::ParenthesizedExpression(_)
             | AstKind::ExpressionStatement(_)
+            | AstKind::LabeledStatement(_)
             | AstKind::CallExpression(_)
             | AstKind::LogicalExpression(_)
             | AstKind::ConditionalExpression(_)
             | AstKind::SequenceExpression(_) => continue,
-            _ => return None,
+            _ => return (None, None),
         }
     }
-    None
+    (None, None)
 }
 
 /// Check if any read reference to the symbol is a mutating usage.
@@ -355,6 +435,49 @@ fn is_mutated_in_template(
         }
     }
     false
+}
+
+/// Check if a variable is mutated by name within the script content.
+/// Used as a fallback when no SymbolId is available (e.g. implicit `$:` declarations).
+fn is_mutated_by_name(content: &str, var_name: &str, builtin: &BuiltinClass) -> bool {
+    for method in builtin.mutating_methods {
+        let pat = format!("{}.{}(", var_name, method);
+        if find_word_boundary(content, &pat) {
+            return true;
+        }
+    }
+    for prop in builtin.mutating_props {
+        let pat = format!("{}.{} =", var_name, prop);
+        if let Some(pos) = find_word_boundary_pos(content, &pat) {
+            let after = &content[pos + pat.len()..];
+            if !after.starts_with('=') {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Find a pattern in content, ensuring it starts at a word boundary
+/// (the character before the match is not alphanumeric, _, or $).
+fn find_word_boundary(content: &str, pat: &str) -> bool {
+    find_word_boundary_pos(content, pat).is_some()
+}
+
+fn find_word_boundary_pos(content: &str, pat: &str) -> Option<usize> {
+    let mut start = 0;
+    while let Some(pos) = content[start..].find(pat) {
+        let abs_pos = start + pos;
+        if abs_pos == 0 {
+            return Some(abs_pos);
+        }
+        let prev = content.as_bytes()[abs_pos - 1];
+        if !prev.is_ascii_alphanumeric() && prev != b'_' && prev != b'$' {
+            return Some(abs_pos);
+        }
+        start = abs_pos + 1;
+    }
+    None
 }
 
 /// Collect class names that are imported from packages (shadowing built-ins).
