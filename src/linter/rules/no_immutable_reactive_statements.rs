@@ -468,6 +468,29 @@ fn has_reassignment(content: &str, var: &str) -> bool {
             return true;
         }
     }
+
+    // Also check destructuring assignments: `[var] = expr` or `{ x: var } = expr`
+    let destructure_patterns = [
+        format!("[{}]", var),    // [var] = ...
+        format!(", {}]", var),   // [a, var] = ...
+        format!("[{},", var),    // [var, b] = ...
+        format!(": {} }}", var), // { x: var } = ...
+        format!(": {}}}", var),  // {x:var} = ...
+    ];
+    for pat in &destructure_patterns {
+        for (pos, _) in content.match_indices(pat.as_str()) {
+            // Check that after the pattern (skipping whitespace), there's `=` (not `==`)
+            let after_pat = pos + pat.len();
+            let rest = content[after_pat..].trim_start();
+            if rest.starts_with('=') && !rest.starts_with("==") && !rest.starts_with("=>") {
+                let line_start = content[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
+                let line = content[line_start..].trim_start();
+                if !line.starts_with("let ") && !line.starts_with("var ") && !line.starts_with("const ") && !line.starts_with("$:") {
+                    return true;
+                }
+            }
+        }
+    }
     false
 }
 
