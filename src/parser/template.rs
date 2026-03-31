@@ -753,11 +753,12 @@ impl<'a> TemplateParser<'a> {
                 if self.looking_at("=") {
                     self.eat("=")?;
                     self.skip_whitespace();
-                    self.parse_attribute_value()?;
+                    let val = self.parse_attribute_value()?;
                     attributes.push(Attribute::Directive {
                         kind: directive.0,
                         name: directive.1.to_string(),
                         modifiers: directive.2.iter().map(|s| s.to_string()).collect(),
+                        value: val,
                         span: Span::new(attr_start, self.pos as u32),
                     });
                 } else {
@@ -766,6 +767,7 @@ impl<'a> TemplateParser<'a> {
                         kind: directive.0,
                         name: directive.1.to_string(),
                         modifiers: directive.2.iter().map(|s| s.to_string()).collect(),
+                        value: AttributeValue::True,
                         span: Span::new(attr_start, name_end as u32),
                     });
                 }

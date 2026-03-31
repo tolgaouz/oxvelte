@@ -55,7 +55,7 @@ pub struct Element {
 pub enum Attribute {
     NormalAttribute { name: String, value: AttributeValue, span: Span },
     Spread { span: Span },
-    Directive { kind: DirectiveKind, name: String, modifiers: Vec<String>, span: Span },
+    Directive { kind: DirectiveKind, name: String, modifiers: Vec<String>, value: AttributeValue, span: Span },
 }
 
 #[derive(Debug, Clone, Serialize)]
