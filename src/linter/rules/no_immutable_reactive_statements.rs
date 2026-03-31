@@ -167,9 +167,10 @@ impl Rule for NoImmutableReactiveStatements {
             }
         }
 
-        // All declared identifiers
+        // All declared identifiers (including props, which are mutable)
         let all_declared: HashSet<&str> = all_immutable.iter().copied()
             .chain(mutable_lets.iter().copied())
+            .chain(prop_names.iter().copied())
             .collect();
 
         // Check each reactive statement
@@ -231,8 +232,14 @@ impl Rule for NoImmutableReactiveStatements {
                 .map(|s| s.as_str())
                 .collect();
 
+            // Collect locally-scoped names within the reactive statement
+            // (arrow params, function params, local const/let/var declarations).
+            let local_names = collect_local_names(rhs);
+
             // Unknown vars (not declared in this scope) might be reactive
-            let has_unknown = ids.iter().any(|id| !all_declared.contains(id.as_str()));
+            let has_unknown = ids.iter().any(|id| {
+                !all_declared.contains(id.as_str()) && !local_names.contains(id.as_str())
+            });
             if has_unknown { continue; }
 
             // All referenced declared vars are immutable -> flag
@@ -578,6 +585,120 @@ fn extract_assignment_targets(expr: &str) -> HashSet<&str> {
     targets
 }
 
+/// Collect identifiers that are locally declared within an expression:
+/// arrow function parameters `(x, y) =>`, function parameters `function(x)`,
+/// local `const/let/var` declarations inside blocks.
+fn collect_local_names(expr: &str) -> HashSet<String> {
+    let mut names = HashSet::new();
+    let bytes = expr.as_bytes();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        // Skip strings
+        if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
+            let q = bytes[i];
+            i += 1;
+            while i < bytes.len() {
+                if bytes[i] == b'\\' { i += 2; continue; }
+                if bytes[i] == q { break; }
+                if q == b'`' && bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+                    i += 2;
+                    let mut d = 1;
+                    while i < bytes.len() && d > 0 {
+                        if bytes[i] == b'{' { d += 1; }
+                        if bytes[i] == b'}' { d -= 1; }
+                        if d > 0 { i += 1; }
+                    }
+                }
+                i += 1;
+            }
+            if i < bytes.len() { i += 1; }
+            continue;
+        }
+
+        // Look for arrow function: `(params) =>` or `param =>`
+        if bytes[i] == b'=' && i + 1 < bytes.len() && bytes[i + 1] == b'>' {
+            // Look backwards to find the parameters
+            let mut j = i;
+            while j > 0 && bytes[j - 1].is_ascii_whitespace() { j -= 1; }
+            if j > 0 && bytes[j - 1] == b')' {
+                // Find matching `(`
+                let mut depth = 1;
+                let mut k = j - 2;
+                while depth > 0 {
+                    if bytes[k] == b')' { depth += 1; }
+                    if bytes[k] == b'(' { depth -= 1; }
+                    if depth > 0 { if k == 0 { break; } k -= 1; }
+                }
+                // Extract param names from (params)
+                let params = &expr[k + 1..j - 1];
+                extract_param_names(params, &mut names);
+            } else {
+                // Single param: `x =>`
+                let end = j;
+                while j > 0 && (bytes[j - 1].is_ascii_alphanumeric() || bytes[j - 1] == b'_' || bytes[j - 1] == b'$') {
+                    j -= 1;
+                }
+                if j < end {
+                    names.insert(expr[j..end].to_string());
+                }
+            }
+            i += 2;
+            continue;
+        }
+
+        // Look for `function(params)` or `function name(params)`
+        if i + 8 < bytes.len() && &expr[i..i + 8] == "function" {
+            let after = i + 8;
+            let rest = expr[after..].trim_start();
+            let offset = expr.len() - rest.len();
+            if let Some(open) = rest.find('(') {
+                if let Some(close) = rest[open..].find(')') {
+                    let params = &rest[open + 1..open + close];
+                    extract_param_names(params, &mut names);
+                    i = offset + open + close + 1;
+                    continue;
+                }
+            }
+        }
+
+        // Look for local declarations: `const x`, `let x`, `var x`
+        for kw in &["const ", "let ", "var "] {
+            if i + kw.len() <= bytes.len() && &expr[i..i + kw.len()] == *kw {
+                if i == 0 || !bytes[i - 1].is_ascii_alphanumeric() {
+                    let rest = expr[i + kw.len()..].trim_start();
+                    let rest_offset = expr.len() - rest.len();
+                    let end = rest.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
+                        .unwrap_or(rest.len());
+                    if end > 0 {
+                        names.insert(rest[..end].to_string());
+                    }
+                    i = rest_offset + end;
+                    break;
+                }
+            }
+        }
+
+        i += 1;
+    }
+    names
+}
+
+fn extract_param_names(params: &str, names: &mut HashSet<String>) {
+    for param in params.split(',') {
+        let p = param.trim();
+        // Handle destructuring roughly — skip `{` and `[` patterns
+        if p.starts_with('{') || p.starts_with('[') || p.starts_with("...") {
+            continue;
+        }
+        // Handle `param: Type` and `param = default`
+        let name = p.split(|c: char| c == ':' || c == '=').next().unwrap_or("").trim();
+        if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+            names.insert(name.to_string());
+        }
+    }
+}
+
 fn extract_identifiers(expr: &str) -> Vec<String> {
     let mut ids = Vec::new();
     let bytes = expr.as_bytes();
@@ -615,8 +736,9 @@ fn extract_identifiers(expr: &str) -> Vec<String> {
             continue;
         }
         if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' || bytes[i] == b'$' {
-            // Skip member access (identifiers after `.`)
-            if i > 0 && bytes[i - 1] == b'.' {
+            // Skip member access (identifiers after `.`) but NOT spread `...x`
+            if i > 0 && bytes[i - 1] == b'.'
+                && !(i >= 3 && bytes[i - 2] == b'.' && bytes[i - 3] == b'.') {
                 while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') {
                     i += 1;
                 }
@@ -631,8 +753,29 @@ fn extract_identifiers(expr: &str) -> Vec<String> {
                 | "if" | "else" | "return" | "const" | "let" | "var" | "function"
                 | "class" | "this" | "console" | "Math" | "JSON" | "Object" | "Array"
                 | "String" | "Number" | "Boolean" | "Date" | "Error" | "Promise"
-                | "Map" | "Set" | "RegExp" | "Symbol" | "BigInt" | "Infinity" | "NaN") {
-                ids.push(id.to_string());
+                | "Map" | "Set" | "RegExp" | "Symbol" | "BigInt" | "Infinity" | "NaN"
+                | "void" | "delete" | "instanceof" | "in" | "of" | "switch" | "case"
+                | "break" | "continue" | "throw" | "try" | "catch" | "finally"
+                | "for" | "while" | "do" | "async" | "await" | "yield") {
+                // Skip object literal property names: `{ key: value }`
+                // An identifier followed by `:` where the `:` is not part of `::` or `? :`
+                let rest_after = &expr[i..];
+                let next_non_ws = rest_after.trim_start();
+                if next_non_ws.starts_with(':') && !next_non_ws.starts_with("::") {
+                    // Check if we're inside an object literal (not a ternary `:`)
+                    // Heuristic: if preceded by `{` or `,` at the same brace depth, it's a property name
+                    // Simple check: if the identifier is NOT the only thing before `:` in a ternary
+                    // context, skip it. This is imperfect but catches most cases.
+                    // Only skip if this isn't at top level or after `?`
+                    let before = expr[..start].trim_end();
+                    if before.ends_with('{') || before.ends_with(',') || before.ends_with('\n') {
+                        // Object property name — skip
+                    } else {
+                        ids.push(id.to_string());
+                    }
+                } else {
+                    ids.push(id.to_string());
+                }
             }
             continue;
         }
