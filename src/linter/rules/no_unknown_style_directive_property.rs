@@ -81,6 +81,7 @@ const KNOWN_CSS_PROPERTIES: &[&str] = &[
     "text-justify", "text-orientation", "text-overflow", "text-rendering",
     "text-anchor",
     "text-shadow", "text-transform", "text-underline-offset", "text-underline-position",
+    "text-wrap", "text-wrap-mode", "text-wrap-style",
     "top", "touch-action", "transform", "transform-origin", "transform-style",
     "transition", "transition-delay", "transition-duration", "transition-property",
     "transition-timing-function", "translate",

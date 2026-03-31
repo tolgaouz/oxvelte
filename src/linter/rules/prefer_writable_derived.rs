@@ -111,6 +111,12 @@ impl Rule for PreferWritableDerived {
                         }));
                     if let Some(state_pos) = state_pos {
                         let name_part = rest[..state_pos].trim_end().trim_end_matches('=').trim();
+                        // Strip type annotation: `varName: Type` → `varName`
+                        let name_part = if let Some(colon) = name_part.find(':') {
+                            name_part[..colon].trim()
+                        } else {
+                            name_part
+                        };
                         if name_part.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
                             && !name_part.is_empty()
                         {
