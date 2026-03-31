@@ -93,10 +93,11 @@ impl Rule for NoReactiveReassign {
                             continue;
                         }
 
-                        // Skip if preceded by alphanumeric (not a word boundary)
+                        // Skip if preceded by alphanumeric, underscore, or dot
+                        // (not a word boundary, or a member access like obj.name = ...)
                         if abs > 0 {
                             let prev = content.as_bytes()[abs - 1];
-                            if prev.is_ascii_alphanumeric() || prev == b'_' {
+                            if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'.' {
                                 search_from = abs + pattern.len();
                                 continue;
                             }
