@@ -37,17 +37,19 @@ pub struct LintContext<'a> {
     pub config: RuleConfig,
     /// Path to the file being linted (for cross-file resolution)
     pub file_path: Option<String>,
+    /// True when linting a `.svelte.js` or `.svelte.ts` module (not a `.svelte` component).
+    pub is_svelte_module: bool,
     diagnostics: Vec<LintDiagnostic>,
     current_rule: &'static str,
 }
 
 impl<'a> LintContext<'a> {
     pub fn new(ast: &'a SvelteAst, source: &'a str) -> Self {
-        Self { ast, source, config: RuleConfig::default(), file_path: None, diagnostics: Vec::new(), current_rule: "" }
+        Self { ast, source, config: RuleConfig::default(), file_path: None, is_svelte_module: false, diagnostics: Vec::new(), current_rule: "" }
     }
 
     pub fn with_config(ast: &'a SvelteAst, source: &'a str, config: RuleConfig) -> Self {
-        Self { ast, source, config, file_path: None, diagnostics: Vec::new(), current_rule: "" }
+        Self { ast, source, config, file_path: None, is_svelte_module: false, diagnostics: Vec::new(), current_rule: "" }
     }
 
     pub fn diagnostic(&mut self, message: impl Into<String>, span: Span) {
@@ -73,6 +75,8 @@ pub trait Rule: Send + Sync {
     fn is_fixable(&self) -> bool { false }
     /// Whether this rule can apply to plain .js/.ts files (not just .svelte).
     fn applies_to_scripts(&self) -> bool { false }
+    /// Whether this rule can apply to .svelte.js/.svelte.ts modules.
+    fn applies_to_svelte_scripts(&self) -> bool { false }
     fn run(&self, ctx: &mut LintContext);
 }
 
@@ -120,6 +124,30 @@ impl Linter {
         let mut ctx = LintContext::new(&ast, source);
         for rule in &self.rules {
             if !rule.applies_to_scripts() { continue; }
+            ctx.set_rule(rule.name());
+            rule.run(&mut ctx);
+        }
+        filter_suppressed(ctx.into_diagnostics(), source)
+    }
+
+    /// Lint a `.svelte.js` or `.svelte.ts` module. Runs rules marked with
+    /// `applies_to_scripts` or `applies_to_svelte_scripts`.
+    pub fn lint_svelte_script(&self, source: &str, is_ts: bool) -> Vec<LintDiagnostic> {
+        let ast = SvelteAst {
+            html: Fragment { nodes: vec![], span: oxc::span::Span::new(0, 0) },
+            instance: Some(Script {
+                content: source.to_string(),
+                module: false,
+                lang: if is_ts { Some("ts".to_string()) } else { None },
+                span: oxc::span::Span::new(0, source.len() as u32),
+            }),
+            module: None,
+            css: None,
+        };
+        let mut ctx = LintContext::new(&ast, source);
+        ctx.is_svelte_module = true;
+        for rule in &self.rules {
+            if !rule.applies_to_scripts() && !rule.applies_to_svelte_scripts() { continue; }
             ctx.set_rule(rule.name());
             rule.run(&mut ctx);
         }

@@ -68,19 +68,29 @@ impl Rule for PreferSvelteReactivity {
         true
     }
 
+    fn applies_to_svelte_scripts(&self) -> bool {
+        true
+    }
+
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         for script in [&ctx.ast.instance, &ctx.ast.module].into_iter().flatten() {
             let content = &script.content;
             if content.trim().is_empty() { continue; }
 
-            let tag_text = &ctx.source[script.span.start as usize..script.span.end as usize];
-            let gt = tag_text.find('>').unwrap_or(0);
-            let content_offset = script.span.start as usize + gt + 1;
+            // For .svelte.js/.svelte.ts modules (synthetic AST), content_offset is 0
+            // since there's no <script> tag wrapper.
+            let content_offset = if ctx.is_svelte_module {
+                0
+            } else {
+                let tag_text = &ctx.source[script.span.start as usize..script.span.end as usize];
+                let gt = tag_text.find('>').unwrap_or(0);
+                script.span.start as usize + gt + 1
+            };
 
             let is_ts = script.lang.as_deref() == Some("ts")
                 || script.lang.as_deref() == Some("typescript");
 
-            self.check_script(ctx, content, content_offset, is_ts);
+            self.check_script(ctx, content, content_offset, is_ts, ctx.is_svelte_module);
         }
     }
 }
@@ -92,6 +102,7 @@ impl PreferSvelteReactivity {
         content: &str,
         content_offset: usize,
         is_ts: bool,
+        is_svelte_module: bool,
     ) {
         use oxc::allocator::Allocator;
         use oxc::ast::ast::{AssignmentTarget, Expression};
@@ -147,6 +158,22 @@ impl PreferSvelteReactivity {
             let new_node_id = nodes.parent_id(new_node_id); // up to NewExpression
             if is_inside_state_call(nodes, new_node_id) { continue; }
 
+            // In .svelte.[js|ts] modules, exported `new Set()`/`new Map()` etc.
+            // are always flagged regardless of mutation (the vendor checks
+            // ExportNamedDeclaration/ExportDefaultDeclaration).
+            if is_svelte_module && is_inside_export(nodes, new_node_id) {
+                let abs = content_offset + new_expr.span.start as usize;
+                let end = content_offset + new_expr.span.end as usize;
+                ctx.diagnostic(
+                    format!(
+                        "Found a mutable instance of the built-in {} class. Use {} instead.",
+                        builtin.name, builtin.svelte_name
+                    ),
+                    Span::new(abs as u32, end as u32),
+                );
+                continue;
+            }
+
             // Walk up ancestors to find the assigned variable's SymbolId.
             // Handles both declarations (let x = new Set()) and reassignments
             // (x = new Set()).
@@ -189,6 +216,22 @@ impl PreferSvelteReactivity {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Check if a NewExpression is inside an export declaration.
+fn is_inside_export(
+    nodes: &oxc::semantic::AstNodes,
+    node_id: oxc::semantic::NodeId,
+) -> bool {
+    use oxc::ast::AstKind;
+    for ancestor_id in nodes.ancestor_ids(node_id) {
+        match nodes.kind(ancestor_id) {
+            AstKind::ExportNamedDeclaration(_) | AstKind::ExportDefaultDeclaration(_) => return true,
+            AstKind::FunctionBody(_) | AstKind::ArrowFunctionExpression(_) => return false,
+            _ => continue,
+        }
+    }
+    false
+}
 
 /// Check if a NewExpression is inside a `$state(...)` call.
 fn is_inside_state_call(

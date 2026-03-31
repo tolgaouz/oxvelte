@@ -88,7 +88,9 @@ fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool) -> ExitCode {
 
     let mut file_results: Vec<FileResult> = files.par_iter().filter_map(|path| {
         let source = std::fs::read_to_string(path).ok()?;
+        let path_str = path.to_string_lossy();
         let is_svelte = path.extension().is_some_and(|e| e == "svelte");
+        let is_svelte_module = path_str.ends_with(".svelte.js") || path_str.ends_with(".svelte.ts");
         let diags = if is_svelte {
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let result = parser::parse(&source);
@@ -101,6 +103,9 @@ fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool) -> ExitCode {
                     return None;
                 }
             }
+        } else if is_svelte_module {
+            let is_ts = path_str.ends_with(".ts");
+            lint.lint_svelte_script(&source, is_ts)
         } else {
             lint.lint_script(&source)
         };
