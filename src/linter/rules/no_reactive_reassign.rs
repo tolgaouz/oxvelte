@@ -102,6 +102,31 @@ impl Rule for NoReactiveReassign {
                             }
                         }
 
+                        // Skip if inside brackets: `obj[reactiveVar] = ...`
+                        // (computed property access, not assignment to reactiveVar)
+                        if abs > 0 {
+                            // Look backwards to check if this is inside [...] = context
+                            let before = &content[..abs];
+                            let last_bracket_open = before.rfind('[');
+                            let last_bracket_close = before.rfind(']');
+                            if let Some(bo) = last_bracket_open {
+                                // If the last `[` is after the last `]`, we're inside brackets
+                                let inside = match last_bracket_close {
+                                    Some(bc) => bo > bc,
+                                    None => true,
+                                };
+                                if inside {
+                                    // Check that the `]` is right after our var name + whitespace
+                                    let after_var = abs + var.len();
+                                    let rest = content[after_var..].trim_start();
+                                    if rest.starts_with(']') {
+                                        search_from = abs + pattern.len();
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+
                         // Skip == (comparison, not assignment)
                         if pattern.ends_with(" =") || pattern.ends_with('=') {
                             let after_eq = abs + pattern.len();
@@ -259,6 +284,38 @@ impl Rule for NoReactiveReassign {
                         let line = content[line_start..].trim_start();
                         if line.starts_with("$:") || line.starts_with("const ")
                             || line.starts_with("let ") || line.starts_with("var ") { continue; }
+
+                        // For `reactiveVar] =` patterns, verify this is actually a
+                        // destructuring `[reactiveVar] =`, not computed property
+                        // access `obj[reactiveVar] = value`.
+                        if pattern.ends_with("] =") && !pattern.starts_with("...") {
+                            // Find the matching `[` before the var name
+                            let before = &content[..pos];
+                            if let Some(bracket_pos) = before.rfind('[') {
+                                let between = content[bracket_pos + 1..pos].trim();
+                                // In true destructuring, nothing (or whitespace) is between `[` and the var
+                                // In computed access, the `[` is preceded by an identifier/expression
+                                if between.is_empty() {
+                                    // Check if char before `[` indicates destructuring
+                                    let before_bracket = content[..bracket_pos].trim_end();
+                                    if !(before_bracket.ends_with('=')
+                                        || before_bracket.ends_with(',')
+                                        || before_bracket.ends_with(';')
+                                        || before_bracket.ends_with('{')
+                                        || before_bracket.ends_with('(')
+                                        || before_bracket.is_empty()
+                                        || before_bracket.ends_with('\n'))
+                                    {
+                                        // Preceded by an expression — this is computed property access
+                                        continue;
+                                    }
+                                } else {
+                                    // Something between `[` and var — likely `[other, reactiveVar]`
+                                    // which is destructuring — let it through
+                                }
+                            }
+                        }
+
                         let source_pos = content_offset + pos;
                         ctx.diagnostic(
                             format!("Assignment to reactive value '{}'.", var),
