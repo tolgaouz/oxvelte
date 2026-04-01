@@ -70,6 +70,9 @@ impl Rule for NoImmutableReactiveStatements {
         // Collect reactive statements with their FULL text (multiline support)
         let reactive_stmts = collect_reactive_stmts(content);
 
+        let is_ts = script.lang.as_deref() == Some("ts")
+            || script.lang.as_deref() == Some("typescript");
+
         // Find mutable let vars (reassigned or bound in template)
         let mut mutable_lets: HashSet<&str> = HashSet::new();
         for &var in &let_names {
@@ -159,6 +162,11 @@ impl Rule for NoImmutableReactiveStatements {
             .chain(let_names.iter().filter(|n| !mutable_lets.contains(*n)).copied())
             .collect();
 
+        // AST-based check: parse script to identify which $: statements
+        // truly have all-immutable references (handles TS types properly).
+        // Uses the text-based all_immutable set for name-based verification.
+        let ast_immutable_stmts = check_immutability_ast(content, is_ts, &all_immutable);
+
         // Collect $: declared var names (they are reactive)
         let mut reactive_decl_names: HashSet<&str> = HashSet::new();
         for (_, full_text) in &reactive_stmts {
@@ -244,10 +252,18 @@ impl Rule for NoImmutableReactiveStatements {
             let has_unknown = ids.iter().any(|id| {
                 !all_declared.contains(id.as_str()) && !local_names.contains(id.as_str())
             });
-            if has_unknown { continue; }
 
             // All referenced declared vars are immutable -> flag
-            let should_flag = if !referenced.is_empty() {
+            let should_flag = if has_unknown {
+                // Text-based analysis has unknowns — fall back to AST check.
+                // The unknowns might be TS type annotations that the AST handles properly.
+                // Match by finding which line this offset is on
+                let line_num = content[..offset].matches('\n').count();
+                ast_immutable_stmts.iter().any(|&s| {
+                    let ast_line = content[..s as usize].matches('\n').count();
+                    ast_line == line_num
+                })
+            } else if !referenced.is_empty() {
                 referenced.iter().all(|v| all_immutable.contains(v))
             } else if ids.is_empty() && rhs != after {
                 // Simple assignment with literal RHS (e.g., `$: x = false;`)
@@ -878,4 +894,142 @@ fn extract_identifiers(expr: &str) -> Vec<String> {
         i += 1;
     }
     ids
+}
+
+/// AST-based immutability check for reactive statements.
+/// Parses script content with oxc and returns the set of `$:` statement byte
+/// offsets (within content) where ALL value-level references are immutable.
+/// This properly handles TypeScript type annotations (excluded by the AST parser)
+/// and function parameters (treated as mutable, matching vendor behavior).
+fn check_immutability_ast(content: &str, is_ts: bool, text_immutable: &HashSet<&str>) -> HashSet<u32> {
+    use oxc::allocator::Allocator;
+    use oxc::ast::AstKind;
+    use oxc::parser::Parser;
+    use oxc::semantic::SemanticBuilder;
+    use oxc::span::{GetSpan, SourceType};
+
+    let mut result = HashSet::new();
+
+    let alloc = Allocator::default();
+    let source_type = if is_ts { SourceType::ts() } else { SourceType::mjs() };
+    let parse_result = Parser::new(&alloc, content, source_type).parse();
+    if parse_result.panicked { return result; }
+
+    let semantic_ret = SemanticBuilder::new().build(&parse_result.program);
+    let semantic = semantic_ret.semantic;
+    let scoping = semantic.scoping();
+    let nodes = semantic.nodes();
+    let root_scope = scoping.root_scope_id();
+
+    // Find all LabeledStatement with label "$"
+    for node in nodes.iter() {
+        let AstKind::LabeledStatement(labeled) = node.kind() else { continue };
+        if labeled.label.name.as_str() != "$" { continue; }
+
+        let stmt_start = labeled.span.start;
+        let stmt_end = labeled.span.end;
+
+        // Determine if this is a simple assignment: `$: var = expr`
+        let is_simple_assign = matches!(
+            &labeled.body,
+            oxc::ast::ast::Statement::ExpressionStatement(es)
+            if matches!(&es.expression, oxc::ast::ast::Expression::AssignmentExpression(_))
+        );
+
+        // Collect all value-level identifier references within this statement
+        let mut has_any_ref = false;
+        let mut all_refs_immutable = true;
+        let mut has_store_ref = false;
+
+        for desc in nodes.iter() {
+            let AstKind::IdentifierReference(ident) = desc.kind() else { continue };
+            let sp = ident.span;
+            if sp.start < stmt_start || sp.end > stmt_end { continue; }
+
+            let name = ident.name.as_str();
+
+            // Skip store references ($varName) — they're reactive
+            if name.starts_with('$') {
+                has_store_ref = true;
+                continue;
+            }
+
+            // Skip member property access (after `.`)
+            let parent_id = nodes.parent_id(desc.id());
+            if let AstKind::StaticMemberExpression(member) = nodes.kind(parent_id) {
+                if member.property.span == ident.span { continue; }
+            }
+
+            // For simple assignments, skip the LHS variable (it's the reactive decl itself)
+            if is_simple_assign {
+                if let AstKind::AssignmentExpression(assign) = nodes.kind(parent_id) {
+                    if assign.left.span().start == ident.span.start { continue; }
+                }
+            }
+
+            // Resolve the reference
+            let symbol = ident.reference_id.get().and_then(|r| scoping.get_reference(r).symbol_id());
+
+            match symbol {
+                Some(sym) => {
+                    has_any_ref = true;
+                    let scope = scoping.symbol_scope_id(sym);
+                    if scope != root_scope {
+                        // Local variable (function param, arrow param, local const/let)
+                        // Skip — these are not reactive references, they're scoped
+                        // to the inner function/block and don't affect reactivity
+                    } else {
+                        // Root-scope variable — check immutability using the
+                        // text-based all_immutable set (accounts for member writes,
+                        // each-source exclusions, template bindings, etc.)
+                        let sym_name = scoping.symbol_name(sym);
+                        if !text_immutable.contains(sym_name) {
+                            all_refs_immutable = false;
+                        }
+                    }
+                }
+                None => {
+                    // Unresolved reference — could be global or implicit
+                    // Treat as unknown/potentially mutable
+                    all_refs_immutable = false;
+                }
+            }
+        }
+
+        // If store reference, it's reactive — don't flag
+        if has_store_ref { continue; }
+
+        // If all references are immutable root-scope vars, flag it
+        if has_any_ref && all_refs_immutable {
+            result.insert(stmt_start);
+        }
+    }
+
+    result
+}
+
+/// Check if a root-scope symbol is immutable.
+fn is_symbol_immutable(
+    scoping: &oxc::semantic::Scoping,
+    symbol_id: oxc::semantic::SymbolId,
+) -> bool {
+    use oxc::semantic::SymbolFlags;
+    let flags = scoping.symbol_flags(symbol_id);
+
+    // Imports are always immutable
+    if flags.contains(SymbolFlags::Import) { return true; }
+
+    // Functions and classes are immutable
+    if flags.contains(SymbolFlags::Function) || flags.contains(SymbolFlags::Class) { return true; }
+
+    // Const variables are immutable (unless they have mutable members, but we
+    // handle that in the text-based pass)
+    if flags.contains(SymbolFlags::ConstVariable) { return true; }
+
+    // Check if the variable has any write references
+    let has_write = scoping.get_resolved_references(symbol_id)
+        .any(|r| r.is_write());
+
+    // If no writes, it's effectively immutable
+    !has_write
 }
