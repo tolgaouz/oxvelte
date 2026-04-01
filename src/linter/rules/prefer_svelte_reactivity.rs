@@ -274,7 +274,8 @@ fn is_inside_export(
 }
 
 /// Check if a NewExpression has a direct chained mutating method call,
-/// e.g. `new Date().setHours(...)` or `new Set([1]).add(2)`.
+/// e.g. `new Date().setHours(...)`, `new Set([1]).add(2)`, or
+/// `(expr ?? new Set()).add(value)`.
 fn is_directly_mutated(
     nodes: &oxc::semantic::AstNodes,
     new_expr_id: oxc::semantic::NodeId,
@@ -282,8 +283,24 @@ fn is_directly_mutated(
 ) -> bool {
     use oxc::ast::AstKind;
 
-    // Parent should be a MemberExpression (accessing the method)
-    let parent_id = nodes.parent_id(new_expr_id);
+    // Walk up through transparent wrapper nodes (LogicalExpression,
+    // ParenthesizedExpression, ConditionalExpression) to find the
+    // effective parent — e.g. `(expr ?? new Set()).add(value)`.
+    let mut current = new_expr_id;
+    loop {
+        let parent_id = nodes.parent_id(current);
+        match nodes.kind(parent_id) {
+            AstKind::ParenthesizedExpression(_)
+            | AstKind::LogicalExpression(_)
+            | AstKind::ConditionalExpression(_) => {
+                current = parent_id;
+                continue;
+            }
+            _ => break,
+        }
+    }
+
+    let parent_id = nodes.parent_id(current);
     let method_name = match nodes.kind(parent_id) {
         AstKind::StaticMemberExpression(member) => Some(member.property.name.as_str()),
         _ => None,
