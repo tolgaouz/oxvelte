@@ -408,6 +408,7 @@ fn extract_decl_name(line: &str) -> Option<&str> {
 
 fn is_literal_value(s: &str) -> bool {
     s == "true" || s == "false" || s == "null" || s == "undefined"
+        || s == "{}" || s == "[]"
         || s.parse::<f64>().is_ok()
         || (s.starts_with('\'') && s.ends_with('\''))
         || (s.starts_with('"') && s.ends_with('"'))
