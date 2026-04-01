@@ -380,8 +380,7 @@ fn extract_func_name(line: &str) -> Option<String> {
         if let Some(eq) = rest.find(" = ") {
             let name = &rest[..eq];
             let after = rest[eq+3..].trim();
-            if after.contains("=>") || after.starts_with("function")
-                || after.starts_with("async") || after.starts_with("(") {
+            if is_direct_function_expr(after) {
                 return Some(name.to_string());
             }
         }
@@ -399,13 +398,47 @@ fn extract_func_name(line: &str) -> Option<String> {
         if let Some(eq) = rest.find(" = ") {
             let name = &rest[..eq];
             let after = rest[eq+3..].trim();
-            if after.contains("=>") || after.starts_with("function")
-                || after.starts_with("async") || after.starts_with("(") {
+            if is_direct_function_expr(after) {
                 return Some(name.to_string());
             }
         }
     }
     None
+}
+
+/// Check if `after` (the text after `= `) is a direct function/arrow expression,
+/// NOT a call expression that happens to contain an arrow (e.g. `debounce(() => ...)`).
+fn is_direct_function_expr(after: &str) -> bool {
+    if after.starts_with("function") || after.starts_with("async") {
+        return true;
+    }
+    if after.starts_with('(') {
+        // Scan for the matching `)` at depth 0, then check if `=>` follows
+        let mut depth = 0i32;
+        for (i, ch) in after.char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let rest = after[i + 1..].trim_start();
+                        return rest.starts_with("=>");
+                    }
+                }
+                _ => {}
+            }
+        }
+        return false;
+    }
+    // Single-param arrow without parens: `x => ...`
+    let ident_end = after.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(after.len());
+    if ident_end > 0 {
+        let rest = after[ident_end..].trim_start();
+        if rest.starts_with("=>") {
+            return true;
+        }
+    }
+    false
 }
 
 /// Check if a line is a local variable declaration (const/let/var) for the given variable.
@@ -633,8 +666,33 @@ fn find_stmt_end(content: &str, dollar: usize) -> usize {
                 if pdepth <= 0 && bdepth <= 0 && has_c {
                     let rest = &content[abs + 1..];
                     let nt = rest.trim_start_matches(|c: char| c == ' ' || c == '\t');
-                    if nt.starts_with(';') || nt.starts_with('\n') || nt.is_empty() {
-                        return abs + 1 + (rest.len() - nt.len()) + if nt.starts_with(';') { 1 } else { 0 };
+                    if nt.starts_with(';') {
+                        return abs + 1 + (rest.len() - nt.len()) + 1;
+                    }
+                    if nt.starts_with('\n') || nt.is_empty() {
+                        // Check if the next non-whitespace token is a continuation
+                        // (method chain, ternary, logical operator, etc.)
+                        let after_ws = nt.trim_start();
+                        let is_continuation = after_ws.starts_with('.')
+                            || after_ws.starts_with('?')
+                            || after_ws.starts_with(':')
+                            || after_ws.starts_with('+')
+                            || after_ws.starts_with('-')
+                            || after_ws.starts_with('*')
+                            || after_ws.starts_with('/')
+                            || after_ws.starts_with('%')
+                            || after_ws.starts_with('&')
+                            || after_ws.starts_with('|')
+                            || after_ws.starts_with('^')
+                            || after_ws.starts_with('<')
+                            || after_ws.starts_with('>')
+                            || after_ws.starts_with('=')
+                            || after_ws.starts_with('!')
+                            || after_ws.starts_with(',')
+                            || after_ws.starts_with('(');
+                        if !is_continuation {
+                            return abs + 1 + (rest.len() - nt.len());
+                        }
                     }
                 }
             }
