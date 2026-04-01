@@ -650,7 +650,8 @@ fn has_reassignment(content: &str, var: &str) -> bool {
         for (pos, _) in content.match_indices(&search) {
             if pos > 0 {
                 let prev = content.as_bytes()[pos - 1];
-                if prev.is_ascii_alphanumeric() || prev == b'_' { continue; }
+                // Skip word boundaries that indicate attribute context (e.g., bind:value=)
+                if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b':' { continue; }
             }
             let line_start = content[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
             let line = content[line_start..].trim_start();
