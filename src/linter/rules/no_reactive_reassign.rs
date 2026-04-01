@@ -210,8 +210,8 @@ impl Rule for NoReactiveReassign {
                                 }
                             }
                         }
-                        // Reached a function scope that doesn't shadow — stop
-                        return false;
+                        // This function scope doesn't shadow the variable,
+                        // but an outer function scope might — keep walking up.
                     }
 
                     // Not a function brace (if/for/while block) — keep walking up
