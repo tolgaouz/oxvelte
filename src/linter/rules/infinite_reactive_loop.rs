@@ -941,6 +941,7 @@ fn has_await_on_prev_line(block: &str, line_start_pos: usize) -> bool {
 
 /// Find byte ranges of .then() and .catch() callback bodies in the block.
 /// Returns Vec<(body_start, body_end)> where body is the content of the callback.
+/// Handles both block bodies `(x) => { ... }` and expression bodies `(x) => expr`.
 fn find_then_catch_regions(block: &str) -> Vec<(usize, usize)> {
     let mut regions = Vec::new();
     let bytes = block.as_bytes();
@@ -952,12 +953,11 @@ fn find_then_catch_regions(block: &str) -> Vec<(usize, usize)> {
             let abs = search + pos;
             let after = abs + pattern.len();
 
-            // Find the callback body: skip to the `{` of the arrow/function body
-            // Track parens to find the callback argument
             let mut i = after;
             let mut paren_depth = 1i32;
             let mut body_start = None;
             let mut body_end = None;
+            let mut found_arrow = false;
 
             while i < bytes.len() && paren_depth > 0 {
                 match bytes[i] {
@@ -976,6 +976,20 @@ fn find_then_catch_regions(block: &str) -> Vec<(usize, usize)> {
                         if paren_depth == 0 && body_start.is_some() && body_end.is_none() {
                             body_end = Some(i);
                         }
+                    }
+                    b'=' if !found_arrow && i + 1 < bytes.len() && bytes[i + 1] == b'>' => {
+                        found_arrow = true;
+                        i += 2;
+                        // Skip whitespace after =>
+                        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\n' || bytes[i] == b'\r') {
+                            i += 1;
+                        }
+                        if i < bytes.len() && bytes[i] != b'{' {
+                            // Expression body (no block): region from here to end of .then()
+                            body_start = Some(i);
+                        }
+                        // For block body, let the `{` handler below set body_start
+                        continue;
                     }
                     b'{' if body_start.is_none() && paren_depth >= 1 => {
                         body_start = Some(i);
@@ -1052,11 +1066,16 @@ fn analyze_block(
 
         let line_byte_start = line_offsets[idx];
 
-        // Determine if this line is in an async context
+        // Determine if this line is in an async context (line-level checks)
         let in_callback = is_in_async_callback(block, line_byte_start, &all_triggers);
         let after_await = has_await_on_prev_line(block, line_byte_start);
         let in_then_catch = async_callback_regions.iter()
             .any(|&(start, end)| line_byte_start >= start && line_byte_start < end);
+        // Also check if any position within this line falls inside a then/catch region
+        // (handles single-line patterns like `$: foo().then((x) => (var = x))`)
+        let line_end = line_byte_start + line.len();
+        let line_overlaps_then_catch = async_callback_regions.iter()
+            .any(|&(start, end)| start < line_end && end > line_byte_start);
         let in_async_ctx = in_callback || after_await || in_then_catch;
 
         if in_async_ctx {
@@ -1201,6 +1220,30 @@ fn analyze_block(
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // Check for assignments within .then()/.catch() regions on this line
+        // (handles single-line patterns like `$: foo().then((x) => (var = x))`)
+        if !in_async_ctx && line_overlaps_then_catch {
+            for var in top_vars {
+                if local_names.contains(var) { continue; }
+                if !has_assign(t, var) { continue; }
+                // Find the assignment position within the line and check if it's
+                // inside a then/catch region
+                if let Some(assign_pos) = find_assign_pos(t, var) {
+                    let indent = line.len() - t.len();
+                    let abs_pos_in_block = line_byte_start + indent + assign_pos;
+                    let in_region = async_callback_regions.iter()
+                        .any(|&(start, end)| abs_pos_in_block >= start && abs_pos_in_block < end);
+                    if in_region {
+                        let abs = base + block_start + abs_pos_in_block;
+                        ctx.diagnostic(
+                            "Possibly it may occur an infinite reactive loop.".to_string(),
+                            Span::new(abs as u32, abs as u32 + 1),
+                        );
                     }
                 }
             }
