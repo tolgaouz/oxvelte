@@ -563,6 +563,8 @@ fn extract_import_names(line: &str) -> Vec<&str> {
             if let Some(close) = import_part.find('}') {
                 for part in import_part[open+1..close].split(',') {
                     let part = part.trim();
+                    // Strip `type ` prefix from inline type imports (e.g., `type Foo`)
+                    let part = part.strip_prefix("type ").unwrap_or(part);
                     let name = if let Some(as_pos) = part.find(" as ") {
                         part[as_pos + 4..].trim()
                     } else { part };
