@@ -36,21 +36,45 @@ impl Rule for NoReactiveReassign {
             let mut reactive_vars = HashSet::new();
             let mut declared_vars = HashSet::new();
 
+            // Track brace depth so only top-level declarations are collected.
+            // Declarations inside functions/blocks (depth > 0) shadow reactive
+            // vars but should not prevent us from tracking the reactive var.
+            let mut brace_depth: i32 = 0;
+
             for line in content.lines() {
                 let trimmed = line.trim();
-                // Collect let/var/const declarations (including export let/var/const)
-                let decl_trimmed = trimmed.strip_prefix("export ").unwrap_or(trimmed);
-                for kw in &["let ", "var ", "const "] {
-                    if decl_trimmed.starts_with(kw) {
-                        let rest = &decl_trimmed[kw.len()..];
-                        let name_end = rest.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
-                            .unwrap_or(rest.len());
-                        if name_end > 0 {
-                            declared_vars.insert(rest[..name_end].to_string());
+
+                // Update brace depth (approximate — doesn't handle braces in
+                // strings/comments, but is good enough for declaration scanning).
+                for ch in trimmed.chars() {
+                    match ch {
+                        '{' => brace_depth += 1,
+                        '}' => brace_depth -= 1,
+                        _ => {}
+                    }
+                }
+
+                // Only collect declarations at top level (depth 0, or depth 1
+                // if the brace was opened on this same line for $: statements).
+                let at_top_level = brace_depth == 0
+                    || (brace_depth == 1 && trimmed.contains('{') && !trimmed.contains('}'));
+
+                if at_top_level {
+                    // Collect let/var/const declarations (including export let/var/const)
+                    let decl_trimmed = trimmed.strip_prefix("export ").unwrap_or(trimmed);
+                    for kw in &["let ", "var ", "const "] {
+                        if decl_trimmed.starts_with(kw) {
+                            let rest = &decl_trimmed[kw.len()..];
+                            let name_end = rest.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
+                                .unwrap_or(rest.len());
+                            if name_end > 0 {
+                                declared_vars.insert(rest[..name_end].to_string());
+                            }
                         }
                     }
                 }
-                // Collect reactive declarations
+
+                // Collect reactive declarations (always at top level since $: is only valid there)
                 if trimmed.starts_with("$:") {
                     let after = trimmed[2..].trim_start();
                     if let Some(eq_pos) = after.find('=') {
@@ -69,6 +93,131 @@ impl Rule for NoReactiveReassign {
             reactive_vars.retain(|v| !declared_vars.contains(v));
 
             if reactive_vars.is_empty() { return; }
+
+            /// Check if `pos` is inside a function scope that shadows `var_name`
+            /// (the variable appears as a parameter or local declaration in the
+            /// enclosing function).
+            fn is_shadowed_in_scope(content: &str, pos: usize, var_name: &str) -> bool {
+                // Walk backwards from pos, tracking brace depth, to find each
+                // enclosing `{`. For each one that belongs to a function, check
+                // if var_name is a parameter or local declaration.
+                let before = &content[..pos];
+                let mut search_end = before.len();
+
+                loop {
+                    let mut depth: i32 = 0;
+                    let mut func_start = None;
+                    for (i, ch) in before[..search_end].char_indices().rev() {
+                        match ch {
+                            '}' => depth += 1,
+                            '{' => {
+                                if depth == 0 {
+                                    func_start = Some(i);
+                                    break;
+                                }
+                                depth -= 1;
+                            }
+                            _ => {}
+                        }
+                    }
+                    let Some(brace_pos) = func_start else { return false };
+
+                    // Check if this brace belongs to a function/arrow/method
+                    // (not an if/for/while/switch/else/catch block)
+                    let before_brace = content[..brace_pos].trim_end();
+                    let is_control_flow = if before_brace.ends_with(')') {
+                        // Find the matching `(` for the closing `)` by counting parens
+                        let matching_paren = {
+                            let mut depth = 0i32;
+                            let mut result = None;
+                            for (i, ch) in before_brace.char_indices().rev() {
+                                match ch {
+                                    ')' => depth += 1,
+                                    '(' => {
+                                        depth -= 1;
+                                        if depth == 0 {
+                                            result = Some(i);
+                                            break;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            result
+                        };
+                        if let Some(paren_start) = matching_paren {
+                            let before_paren = before_brace[..paren_start].trim_end();
+                            before_paren.ends_with("if")
+                                || before_paren.ends_with("for")
+                                || before_paren.ends_with("while")
+                                || before_paren.ends_with("switch")
+                                || before_paren.ends_with("catch")
+                        } else {
+                            false
+                        }
+                    } else {
+                        before_brace.ends_with("else")
+                            || before_brace.ends_with("try")
+                            || before_brace.ends_with("finally")
+                    };
+                    let has_paren = before_brace.contains('(');
+                    let is_function_scope = !is_control_flow && (
+                        before_brace.ends_with(')')
+                        || before_brace.ends_with("=>")
+                        || (has_paren && before_brace.rfind(')').is_some_and(|p| {
+                            let after_paren = before_brace[p + 1..].trim();
+                            after_paren.is_empty() || after_paren.starts_with(':')
+                        }))
+                    );
+
+                    if is_function_scope {
+                        // Check parameters — find matching `(` for the last `)`
+                        if let Some(paren_end) = before_brace.rfind(')') {
+                            let matching = {
+                                let mut d = 0i32;
+                                let mut r = None;
+                                for (i, ch) in content[..=paren_end].char_indices().rev() {
+                                    match ch {
+                                        ')' => d += 1,
+                                        '(' => { d -= 1; if d == 0 { r = Some(i); break; } }
+                                        _ => {}
+                                    }
+                                }
+                                r
+                            };
+                            if let Some(paren_start) = matching {
+                                let params = &content[paren_start + 1..paren_end];
+                                for param in params.split(',') {
+                                    let param = param.trim();
+                                    let param_name = param.split(|c: char| c == ':' || c == '=' || c == '?' || c == ' ')
+                                        .next().unwrap_or("").trim();
+                                    if param_name == var_name { return true; }
+                                }
+                            }
+                        }
+                        // Check local declarations between function start and pos
+                        let scope_content = &content[brace_pos..pos];
+                        for line in scope_content.lines() {
+                            let t = line.trim();
+                            for kw in &["const ", "let ", "var "] {
+                                if t.starts_with(kw) {
+                                    let rest = &t[kw.len()..];
+                                    let name_end = rest.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
+                                        .unwrap_or(rest.len());
+                                    if name_end > 0 && &rest[..name_end] == var_name {
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                        // Reached a function scope that doesn't shadow — stop
+                        return false;
+                    }
+
+                    // Not a function brace (if/for/while block) — keep walking up
+                    search_end = brace_pos;
+                }
+            }
 
             // Step 2: Look for reassignments of reactive vars inside function bodies
             // Find function/handler bodies and check for reactiveVar = or reactiveVar++/--
@@ -93,10 +242,13 @@ impl Rule for NoReactiveReassign {
                     while let Some(pos) = content[search_from..].find(pattern.as_str()) {
                         let abs = search_from + pos;
 
-                        // Skip if this is the reactive declaration itself ($: var = ...) or a comment
+                        // Skip if this is the reactive declaration itself ($: var = ...),
+                        // a new variable declaration (const/let/var), or a comment
                         let line_start = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
                         let line = content[line_start..].trim_start();
-                        if line.starts_with("$:") || line.starts_with("//") || line.starts_with("/*") {
+                        if line.starts_with("$:") || line.starts_with("//") || line.starts_with("/*")
+                            || line.starts_with("const ") || line.starts_with("let ") || line.starts_with("var ")
+                        {
                             search_from = abs + pattern.len();
                             continue;
                         }
@@ -145,6 +297,13 @@ impl Rule for NoReactiveReassign {
                             }
                         }
 
+                        // Skip if the variable is shadowed by a local declaration
+                        // or function parameter in the enclosing scope
+                        if is_shadowed_in_scope(content, abs, var) {
+                            search_from = abs + pattern.len();
+                            continue;
+                        }
+
                         let source_pos = content_offset + abs;
                         ctx.diagnostic(
                             format!("Assignment to reactive value '{}'.", var),
@@ -182,6 +341,11 @@ impl Rule for NoReactiveReassign {
                             search_from = abs + pattern.len();
                             continue;
                         }
+                        // Skip if shadowed by local declaration
+                        if is_shadowed_in_scope(content, abs, var) {
+                            search_from = abs + pattern.len();
+                            continue;
+                        }
                         let source_pos = content_offset + abs;
                         ctx.diagnostic(
                             format!("Assignment to reactive value '{}'.", var),
@@ -209,7 +373,7 @@ impl Rule for NoReactiveReassign {
                         if after_prop.starts_with(suffix) {
                             let line_start = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
                             let line = content[line_start..].trim_start();
-                            if !line.starts_with("$:") {
+                            if !line.starts_with("$:") && !is_shadowed_in_scope(content, abs, var) {
                                 let source_pos = content_offset + abs;
                                 let end_pos = source_pos + var.len() + 1 + prop_end + suffix.len();
                                 ctx.diagnostic(
@@ -231,6 +395,7 @@ impl Rule for NoReactiveReassign {
                         let line_start = content[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
                         let line = content[line_start..].trim_start();
                         if line.starts_with("$:") { continue; }
+                        if is_shadowed_in_scope(content, pos, var) { continue; }
 
                         let after = &content[pos + pattern_base.len()..];
                         // Consume initial member access, then follow chained .prop and [idx]
