@@ -632,7 +632,11 @@ fn extract_multiline_imports<'a>(content: &'a str, immutable_names: &mut HashSet
 fn extract_import_names(line: &str) -> Vec<&str> {
     let mut names = Vec::new();
     if let Some(from_pos) = line.find(" from ") {
-        let import_part = &line[7..from_pos].trim();
+        let mut import_part = line[7..from_pos].trim();
+        // Skip `type` keyword in `import type { ... }` (TypeScript type-only import)
+        if import_part.starts_with("type ") && import_part[5..].trim_start().starts_with('{') {
+            import_part = import_part[5..].trim_start();
+        }
         // Default import
         if !import_part.starts_with('{') && !import_part.starts_with('*') {
             let end = import_part.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
