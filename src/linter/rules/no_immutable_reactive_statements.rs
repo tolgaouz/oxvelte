@@ -269,25 +269,32 @@ impl Rule for NoImmutableReactiveStatements {
             });
 
             // All referenced declared vars are immutable -> flag
-            let should_flag = if has_unknown {
-                // Text-based analysis has unknowns — fall back to AST check.
-                // The unknowns might be TS type annotations that the AST handles properly.
-                // Match by finding which line this offset is on
+            let text_flag = if has_unknown {
+                false // defer to AST
+            } else if !referenced.is_empty() {
+                referenced.iter().all(|v| all_immutable.contains(v))
+            } else if ids.is_empty() && rhs != after {
+                // Simple assignment with no reactive identifiers in RHS
+                // (e.g., `$: x = false`, `$: x = [...Array(12).keys()]`,
+                // `$: x = { key: 'literal' }`). All identifiers were either
+                // globals or object property names → not reactive.
+                true
+            } else {
+                false
+            };
+
+            // Also check via AST (handles TS types, write-only refs, etc.)
+            let ast_flag = if has_unknown || !text_flag {
                 let line_num = content[..offset].matches('\n').count();
                 ast_immutable_stmts.iter().any(|&s| {
                     let ast_line = content[..s as usize].matches('\n').count();
                     ast_line == line_num
                 })
-            } else if !referenced.is_empty() {
-                referenced.iter().all(|v| all_immutable.contains(v))
-            } else if ids.is_empty() && rhs != after {
-                // Simple assignment with literal RHS (e.g., `$: x = false;`)
-                // No reactive references at all → statement is not reactive
-                let trimmed_rhs = rhs.trim().trim_end_matches(';').trim();
-                is_literal_value(trimmed_rhs)
             } else {
                 false
             };
+
+            let should_flag = text_flag || ast_flag;
             if should_flag {
                 let source_pos = content_offset + offset;
                 let end = content_offset + offset + full_text.len();
@@ -348,6 +355,13 @@ fn find_statement_end(content: &str, start: usize) -> usize {
 
     while i < bytes.len() {
         match bytes[i] {
+            // Skip // line comments (treat as transparent — don't end statement)
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
+                // Skip to end of line AND past the newline
+                while i < bytes.len() && bytes[i] != b'\n' { i += 1; }
+                if i < bytes.len() { i += 1; } // skip the \n itself
+                continue;
+            }
             b'\'' | b'"' => {
                 let q = bytes[i];
                 i += 1;
@@ -380,12 +394,17 @@ fn find_statement_end(content: &str, start: usize) -> usize {
             b'}' => {
                 depth_brace -= 1;
                 if depth_brace < 0 { return i; }
-                // After closing a top-level block, the statement is done
+                // After closing a top-level block, check if it continues
+                // with member access (e.g., `{ ... }[key]` or `{ ... }.prop`)
                 if depth_brace == 0 && depth_paren == 0 && depth_bracket == 0 {
-                    i += 1;
-                    // Skip trailing whitespace/semicolons on same line
-                    while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') { i += 1; }
-                    return i;
+                    let mut j = i + 1;
+                    while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') { j += 1; }
+                    if j < bytes.len() && (bytes[j] == b'[' || bytes[j] == b'.' || bytes[j] == b'(') {
+                        // Continues as member access or call — don't end
+                        i += 1;
+                        continue;
+                    }
+                    return j; // end after trailing whitespace
                 }
             }
             b'(' => depth_paren += 1,
@@ -401,11 +420,15 @@ fn find_statement_end(content: &str, start: usize) -> usize {
                 // non-whitespace line starts with one (continuation).
                 let before_nl = content[start..i].trim_end();
                 let after_nl = content[i + 1..].trim_start();
+                // `=` at end of line (but not `==` or `===`) indicates continuation
+                let ends_with_assign = before_nl.ends_with('=')
+                    && !before_nl.ends_with("==");
                 let continues = before_nl.ends_with('?') || before_nl.ends_with(':')
                     || before_nl.ends_with("||") || before_nl.ends_with("&&")
                     || before_nl.ends_with('+') || before_nl.ends_with('-')
                     || before_nl.ends_with(',') || before_nl.ends_with('\\')
                     || before_nl.ends_with("??")
+                    || ends_with_assign
                     || after_nl.starts_with('?') || after_nl.starts_with(':')
                     || after_nl.starts_with("||") || after_nl.starts_with("&&")
                     || after_nl.starts_with("??")
@@ -773,7 +796,7 @@ fn collect_local_names(expr: &str) -> HashSet<String> {
         }
 
         // Look for `function(params)` or `function name(params)`
-        if i + 8 < bytes.len() && &expr[i..i + 8] == "function" {
+        if i + 8 < bytes.len() && expr.is_char_boundary(i) && expr.is_char_boundary(i + 8) && &expr[i..i + 8] == "function" {
             let after = i + 8;
             let rest = expr[after..].trim_start();
             let offset = expr.len() - rest.len();
@@ -789,7 +812,7 @@ fn collect_local_names(expr: &str) -> HashSet<String> {
 
         // Look for local declarations: `const x`, `let x`, `var x`
         for kw in &["const ", "let ", "var "] {
-            if i + kw.len() <= bytes.len() && &expr[i..i + kw.len()] == *kw {
+            if i + kw.len() <= bytes.len() && expr.is_char_boundary(i) && expr.is_char_boundary(i + kw.len()) && &expr[i..i + kw.len()] == *kw {
                 if i == 0 || !bytes[i - 1].is_ascii_alphanumeric() {
                     let rest = expr[i + kw.len()..].trim_start();
                     let rest_offset = expr.len() - rest.len();
@@ -829,6 +852,19 @@ fn extract_identifiers(expr: &str) -> Vec<String> {
     let bytes = expr.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
+        // Skip // line comments
+        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+            // Skip to end of line
+            while i < bytes.len() && bytes[i] != b'\n' { i += 1; }
+            continue;
+        }
+        // Skip /* block comments */
+        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') { i += 1; }
+            if i + 1 < bytes.len() { i += 2; }
+            continue;
+        }
         if bytes[i] == b'\'' || bytes[i] == b'"' {
             let q = bytes[i]; i += 1;
             while i < bytes.len() && bytes[i] != q {
@@ -979,6 +1015,14 @@ fn check_immutability_ast(content: &str, is_ts: bool, text_immutable: &HashSet<&
             if is_simple_assign {
                 if let AstKind::AssignmentExpression(assign) = nodes.kind(parent_id) {
                     if assign.left.span().start == ident.span.start { continue; }
+                }
+            }
+
+            // Skip write-only references (e.g., `writeVar = expr` in a callback)
+            if let Some(ref_id) = ident.reference_id.get() {
+                let reference = scoping.get_reference(ref_id);
+                if reference.is_write() && !reference.is_read() {
+                    continue;
                 }
             }
 
