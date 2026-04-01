@@ -69,9 +69,17 @@ fn is_arrow_function(rhs: &str) -> bool {
             b')' => {
                 depth -= 1;
                 if depth == 0 {
-                    // Check if followed by `=>`
+                    // Check if followed by `=>` (possibly with a TS return type annotation)
                     let rest = rhs[i + 1..].trim_start();
-                    return rest.starts_with("=>");
+                    if rest.starts_with("=>") { return true; }
+                    // Handle TS return type: `): ReturnType =>` or `): ReturnType | undefined =>`
+                    if rest.starts_with(':') {
+                        // Skip the type annotation to find `=>`
+                        if let Some(arrow) = rest.find("=>") {
+                            return true;
+                        }
+                    }
+                    return false;
                 }
             }
             b'\'' | b'"' | b'`' => {
