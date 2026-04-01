@@ -72,6 +72,13 @@ fn is_numeric_literal(rhs: &str) -> bool {
     // Consume digits, dots, underscores, hex prefix, exponent — then expect `;", newline, or end
     let end = rhs.find(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '_' && c != '-' && c != '+')
         .unwrap_or(rhs.len());
-    let after = rhs[end..].trim_start();
-    after.is_empty() || after.starts_with(';') || after.starts_with('\n')
+    if end == rhs.len() { return true; }
+    let next = rhs.as_bytes()[end];
+    // Accept semicolon, newline, or whitespace followed by newline/end
+    if next == b';' || next == b'\n' || next == b'\r' { return true; }
+    if next == b' ' || next == b'\t' {
+        let rest = rhs[end..].trim_start();
+        return rest.is_empty() || rest.starts_with(';') || rest.starts_with('\n');
+    }
+    false
 }
