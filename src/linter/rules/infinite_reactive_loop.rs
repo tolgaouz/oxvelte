@@ -1083,7 +1083,9 @@ fn analyze_block(
 
     for (idx, line) in lines.iter().enumerate() {
         let t = line.trim();
-        if t.is_empty() || t.starts_with("//") || t.starts_with("$:") { continue; }
+        if t.is_empty() || t.starts_with("//") { continue; }
+        // Skip the $: declaration line unless it contains a .then()/.catch() callback
+        if t.starts_with("$:") && !t.contains(".then(") && !t.contains(".catch(") { continue; }
 
         let line_byte_start = line_offsets[idx];
 
