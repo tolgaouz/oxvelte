@@ -32,7 +32,7 @@ impl Rule for NoReactiveFunctions {
                     let var_part = &after[..eq_pos].trim();
                     // Make sure it looks like a variable name (not ==, !=, etc.)
                     if !var_part.is_empty()
-                        && var_part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                        && var_part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '$')
                         && after.as_bytes().get(eq_pos + 1) != Some(&b'=')
                     {
                         let rhs = after[eq_pos + 1..].trim_start();
