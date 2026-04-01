@@ -504,6 +504,18 @@ fn has_assign_with_patterns_inline(line: &str, var: &str) -> bool {
             return true;
         }
     }
+    // Also check for assignment at end of line: `var =` (newline after =)
+    // This handles multi-line assignments where the value is on the next line
+    if let Some(pos) = find_var_op(line, var, " =") {
+        let after = pos + var.len() + 2;
+        // Make sure it's not == or =>
+        if after >= line.len() || {
+            let b = line.as_bytes()[after];
+            b != b'=' && b != b'>'
+        } {
+            return true;
+        }
+    }
     // Check property/index access
     has_member_assign(line, var, &ops)
 }
