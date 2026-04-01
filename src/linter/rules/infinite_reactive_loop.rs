@@ -649,9 +649,9 @@ fn find_stmt_end(content: &str, dollar: usize) -> usize {
             '{' => { bdepth += 1; has_c = true; }
             '}' => {
                 bdepth -= 1;
-                // If we close the outermost brace, check if followed by `else`
-                // (if-else blocks continue past the first })
-                if bdepth <= 0 && has_c {
+                // If we close the outermost brace AND we're not inside parens,
+                // check if followed by `else` (if-else blocks continue past the first })
+                if bdepth <= 0 && pdepth <= 0 && has_c {
                     let rest = content[abs + 1..].trim_start();
                     if rest.starts_with("else") {
                         // Continue past the else block
