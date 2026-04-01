@@ -38,7 +38,8 @@ impl Rule for NoReactiveFunctions {
                         let rhs = after[eq_pos + 1..].trim_start();
                         if rhs.starts_with("() =>")
                             || is_arrow_function(rhs)
-                            || rhs.starts_with("function")
+                            || rhs.starts_with("function ")
+                            || rhs.starts_with("function(")
                         {
                             let source_pos = base + gt + 1 + abs;
                             ctx.diagnostic(
