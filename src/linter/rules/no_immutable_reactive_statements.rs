@@ -51,6 +51,12 @@ impl Rule for NoImmutableReactiveStatements {
                     immutable_names.insert(n);
                 } else if trimmed.starts_with("export class ") || trimmed.starts_with("class ") {
                     immutable_names.insert(n);
+                } else if trimmed.starts_with("type ") || trimmed.starts_with("export type ")
+                    || trimmed.starts_with("interface ") || trimmed.starts_with("export interface ")
+                    || trimmed.starts_with("enum ") || trimmed.starts_with("export enum ")
+                {
+                    // TypeScript type/interface/enum declarations are immutable
+                    immutable_names.insert(n);
                 } else if trimmed.starts_with("import ") {
                     for imp in extract_import_names(trimmed) {
                         immutable_names.insert(imp);
@@ -507,7 +513,9 @@ fn extract_destructured_names(pattern: &str) -> Vec<&str> {
 
 fn extract_decl_name(line: &str) -> Option<&str> {
     let prefixes = ["export const ", "const ", "export let ", "let ", "var ",
-                    "export function ", "function ", "export class ", "class "];
+                    "export function ", "function ", "export class ", "class ",
+                    "export type ", "type ", "export interface ", "interface ",
+                    "export enum ", "enum "];
     for prefix in &prefixes {
         if let Some(rest) = line.strip_prefix(prefix) {
             let end = rest.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
