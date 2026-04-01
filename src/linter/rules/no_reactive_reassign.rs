@@ -319,8 +319,12 @@ impl Rule for NoReactiveReassign {
                                         continue;
                                     }
                                 } else {
-                                    // Something between `[` and var — likely `[other, reactiveVar]`
-                                    // which is destructuring — let it through
+                                    // Something between `[` and var
+                                    // If it contains `.` without `,`, it's computed access (e.g., `obj[x.prop]`)
+                                    // If it contains `,`, it's destructuring (e.g., `[a, reactiveVar]`)
+                                    if !between.contains(',') {
+                                        continue; // computed property access
+                                    }
                                 }
                             }
                         }
