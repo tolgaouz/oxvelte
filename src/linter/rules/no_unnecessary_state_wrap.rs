@@ -82,10 +82,11 @@ impl Rule for NoUnnecessaryStateWrap {
                     // Check declaration type
                     let before = content[..abs_pos].trim_end();
                     let (uses_const, uses_let) = if before.ends_with('=') {
-                        let before_eq = before[..before.len()-1].trim_end();
-                        let words: Vec<&str> = before_eq.split_whitespace().collect();
-                        let kw = words.get(words.len().wrapping_sub(2)).copied().unwrap_or("");
-                        (kw == "const", kw == "let")
+                        // Find the declaration keyword on the same line
+                        let line_start = before.rfind('\n').map(|p| p + 1).unwrap_or(0);
+                        let line = before[line_start..].trim_start();
+                        (line.starts_with("const ") || line.starts_with("export const "),
+                         line.starts_with("let ") || line.starts_with("export let "))
                     } else { (false, false) };
                     // With allowReassign, flag let vars only if NOT reassigned
                     let var_is_reassigned = if uses_let {
