@@ -56,6 +56,27 @@ fn collect_top_level_vars(content: &str) -> Vec<String> {
                 extract_declared_names(rest, &mut vars);
             }
         }
+        // Also collect variables declared via $: reactive assignment
+        // (e.g. `$: icon = expr` where there's no prior `let icon`)
+        if t.starts_with("$:") {
+            let after = t[2..].trim_start();
+            if let Some(eq_pos) = after.find('=') {
+                let name = after[..eq_pos].trim();
+                // Skip if it starts with `{` or `[` (destructuring), or contains special chars
+                if !name.is_empty()
+                    && name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+                    && !name.starts_with('{') && !name.starts_with('[')
+                {
+                    // Skip if `=` is followed by `=` (comparison) or preceded by `!` or `>` or `<`
+                    let post_eq = &after[eq_pos + 1..];
+                    if !post_eq.starts_with('=') && !post_eq.starts_with('>') {
+                        if !vars.contains(&name.to_string()) {
+                            vars.push(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
     }
     vars
 }
