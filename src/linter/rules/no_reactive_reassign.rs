@@ -449,6 +449,7 @@ impl Rule for NoReactiveReassign {
                     format!("{} }} =", var),     // { foo: reactiveVar } =
                     format!("{}}} =", var),      // {reactiveVar} = (no space)
                     format!("{}] =", var),       // [reactiveVar] =
+                    format!("{}]] =", var),      // [[reactiveVar]] = (nested)
                     format!("...{} }} =", var),  // { ...reactiveVar } =
                     format!("...{}] =", var),    // [...reactiveVar] =
                 ];
@@ -459,10 +460,10 @@ impl Rule for NoReactiveReassign {
                         if line.starts_with("$:") || line.starts_with("const ")
                             || line.starts_with("let ") || line.starts_with("var ") { continue; }
 
-                        // For `reactiveVar] =` patterns, verify this is actually a
-                        // destructuring `[reactiveVar] =`, not computed property
-                        // access `obj[reactiveVar] = value`.
-                        if pattern.ends_with("] =") && !pattern.starts_with("...") {
+                        // For `reactiveVar] =` patterns (but not `]] =` nested destructuring),
+                        // verify this is actually a destructuring `[reactiveVar] =`, not
+                        // computed property access `obj[reactiveVar] = value`.
+                        if pattern.ends_with("] =") && !pattern.ends_with("]] =") && !pattern.starts_with("...") {
                             // Find the matching `[` before the var name
                             let before = &content[..pos];
                             if let Some(bracket_pos) = before.rfind('[') {
