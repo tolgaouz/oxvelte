@@ -319,7 +319,7 @@ fn is_inside_state_call(
         match nodes.kind(ancestor_id) {
             AstKind::CallExpression(call) => {
                 if let Expression::Identifier(ident) = &call.callee {
-                    if ident.name.as_str() == "$state" {
+                    if matches!(ident.name.as_str(), "$state" | "$derived") {
                         return true;
                     }
                 }
