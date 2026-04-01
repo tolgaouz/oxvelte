@@ -79,6 +79,14 @@ impl Rule for NoReactiveReassign {
                     format!("{}=", var),
                     format!("{}++", var),
                     format!("{}--", var),
+                    format!("{} +=", var),
+                    format!("{} -=", var),
+                    format!("{} *=", var),
+                    format!("{} /=", var),
+                    format!("{} %=", var),
+                    format!("{} &&=", var),
+                    format!("{} ||=", var),
+                    format!("{} ??=", var),
                 ];
                 for pattern in &patterns {
                     let mut search_from = 0;
@@ -410,27 +418,40 @@ impl Rule for NoReactiveReassign {
                         if let Some(span) = expr_span {
                             let region = &ctx.source[span.start as usize..span.end as usize];
                             for var in &reactive_vars {
-                                let pat = format!("{} = ", var);
-                                for (pos, _) in region.match_indices(&pat) {
-                                    if pos > 0 {
-                                        let prev = region.as_bytes()[pos - 1];
-                                        if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' || prev == b'.' { continue; }
-                                    }
-                                    let after_eq = pos + pat.len();
-                                    if after_eq < region.len() && region.as_bytes()[after_eq - 1] == b'='
-                                        && after_eq < region.len() && region.as_bytes()[after_eq] == b'=' { continue; }
-                                    let before = &region[..pos];
-                                    let single_quotes = before.matches('\'').count();
-                                    let double_quotes = before.matches('"').count();
-                                    if single_quotes % 2 != 0 || double_quotes % 2 != 0 { continue; }
+                                // Check simple and compound assignments
+                                let pats = [
+                                    format!("{} = ", var),
+                                    format!("{} += ", var),
+                                    format!("{} -= ", var),
+                                    format!("{} *= ", var),
+                                    format!("{} /= ", var),
+                                    format!("{} %= ", var),
+                                    format!("{}++", var),
+                                    format!("{}--", var),
+                                ];
+                                'next_var: for pat in &pats {
+                                    for (pos, _) in region.match_indices(pat.as_str()) {
+                                        if pos > 0 {
+                                            let prev = region.as_bytes()[pos - 1];
+                                            if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' || prev == b'.' { continue; }
+                                        }
+                                        // Skip == (comparison)
+                                        if pat.ends_with("= ") {
+                                            let eq_pos = pos + pat.len() - 1;
+                                            if eq_pos < region.len() && region.as_bytes()[eq_pos] == b'=' { continue; }
+                                        }
+                                        let before = &region[..pos];
+                                        let single_quotes = before.matches('\'').count();
+                                        let double_quotes = before.matches('"').count();
+                                        if single_quotes % 2 != 0 || double_quotes % 2 != 0 { continue; }
 
-                                    // Report at exact position of the assignment
-                                    let abs_pos = span.start as usize + pos;
-                                    ctx.diagnostic(
-                                        format!("Assignment to reactive value '{}'.", var),
-                                        oxc::span::Span::new(abs_pos as u32, (abs_pos + var.len()) as u32),
-                                    );
-                                    break;
+                                        let abs_pos = span.start as usize + pos;
+                                        ctx.diagnostic(
+                                            format!("Assignment to reactive value '{}'.", var),
+                                            oxc::span::Span::new(abs_pos as u32, (abs_pos + var.len()) as u32),
+                                        );
+                                        break 'next_var;
+                                    }
                                 }
                             }
                             // Check event handlers for property assignments to reactive
