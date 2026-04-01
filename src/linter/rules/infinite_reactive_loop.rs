@@ -1121,6 +1121,19 @@ fn analyze_block(
                 let start = i;
                 while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') { i += 1; }
                 let ident = &block[start..i];
+                // Skip object property names (identifier followed by `:` without `?`)
+                // e.g., `{ label: value }` — `label` is a key, not a reference
+                let after_ident = block[i..].trim_start();
+                if after_ident.starts_with(':') && !after_ident.starts_with("::") {
+                    // Check if this is likely an object property name rather than a
+                    // ternary or type annotation. Property names appear after `{` or `,`
+                    // at the same brace depth.
+                    let before_start = block[..start].trim_end();
+                    if before_start.ends_with('{') || before_start.ends_with(',')
+                        || before_start.ends_with('\n') {
+                        continue;
+                    }
+                }
                 // Only track top-level variables (not JS keywords, locals, etc.)
                 if top_vars.iter().any(|v| v == ident) && !local_names.contains(&ident.to_string()) {
                     tracked.insert(ident.to_string());
