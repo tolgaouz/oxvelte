@@ -354,6 +354,69 @@ impl Rule for NoReactiveReassign {
                         search_from = abs + pattern.len();
                     }
                 }
+                // Also check chained member mutations: var.member.push(, var.member[idx].push(, etc.
+                for method in &mutating_methods {
+                    // Search for `var.` followed by member chain then `.method(`
+                    let prefix = format!("{}.", var);
+                    let mut search_from = 0;
+                    while let Some(pos) = content[search_from..].find(prefix.as_str()) {
+                        let abs = search_from + pos;
+                        if abs > 0 {
+                            let prev = content.as_bytes()[abs - 1];
+                            if prev.is_ascii_alphanumeric() || prev == b'_' {
+                                search_from = abs + prefix.len();
+                                continue;
+                            }
+                        }
+                        // Follow member chain: .prop, [idx], ?.prop
+                        let mut rest = &content[abs + prefix.len()..];
+                        let mut chain_len = prefix.len();
+                        let mut has_member = false;
+                        loop {
+                            // Consume identifier
+                            let end = rest.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(rest.len());
+                            if end == 0 { break; }
+                            rest = &rest[end..];
+                            chain_len += end;
+                            // Check if followed by .method(
+                            if rest.starts_with('.') || rest.starts_with("?.") {
+                                let skip = if rest.starts_with("?.") { 2 } else { 1 };
+                                rest = &rest[skip..];
+                                chain_len += skip;
+                                has_member = true;
+                                // Check if the next part is a mutating method
+                                if has_member {
+                                    for m in &mutating_methods {
+                                        if rest.starts_with(*m) {
+                                            let line_start = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
+                                            let line = content[line_start..].trim_start();
+                                            if !line.starts_with("$:") && !is_shadowed_in_scope(content, abs, var) {
+                                                let source_pos = content_offset + abs;
+                                                let end_pos = source_pos + chain_len + m.len() - 1;
+                                                ctx.diagnostic(
+                                                    format!("Assignment to property of reactive value '{}'.", var),
+                                                    oxc::span::Span::new(source_pos as u32, end_pos as u32),
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if rest.starts_with('[') {
+                                if let Some(close) = rest.find(']') {
+                                    rest = &rest[close + 1..];
+                                    chain_len += close + 1;
+                                    has_member = true;
+                                } else {
+                                    break;
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+                        search_from = abs + prefix.len();
+                    }
+                    break; // Only need one pass over methods for the chained check
+                }
                 // Also check member increment/decrement: var.prop++ var.prop-- and var?.prop++ var?.prop--
                 for suffix in &["++", "--"] {
                     let mut search_from = 0;
