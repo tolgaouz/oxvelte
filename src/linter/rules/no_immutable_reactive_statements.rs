@@ -989,9 +989,12 @@ fn check_immutability_ast(content: &str, is_ts: bool, text_immutable: &HashSet<&
                     }
                 }
                 None => {
-                    // Unresolved reference — could be global or implicit
-                    // Treat as unknown/potentially mutable
-                    all_refs_immutable = false;
+                    // No symbol binding — could be a JS global (Object, Array, etc.)
+                    // or a truly unknown reference. Skip known globals; treat
+                    // unknowns as potentially mutable.
+                    if !is_known_js_global(name) {
+                        all_refs_immutable = false;
+                    }
                 }
             }
         }
@@ -1032,4 +1035,23 @@ fn is_symbol_immutable(
 
     // If no writes, it's effectively immutable
     !has_write
+}
+
+/// Check if a name is a well-known JavaScript global that the vendor's
+/// scope analysis resolves (through.resolved != null). These are safe to
+/// skip in the immutability check — they don't affect reactivity.
+fn is_known_js_global(name: &str) -> bool {
+    matches!(name,
+        "Object" | "Array" | "String" | "Number" | "Boolean" | "Date" | "Error"
+        | "Promise" | "Map" | "Set" | "WeakMap" | "WeakSet" | "RegExp" | "Symbol"
+        | "BigInt" | "Math" | "JSON" | "Infinity" | "NaN" | "undefined"
+        | "parseInt" | "parseFloat" | "isNaN" | "isFinite"
+        | "encodeURI" | "encodeURIComponent" | "decodeURI" | "decodeURIComponent"
+        | "console" | "globalThis"
+        | "Proxy" | "Reflect" | "WeakRef"
+        | "ArrayBuffer" | "SharedArrayBuffer" | "DataView"
+        | "Uint8Array" | "Int8Array" | "Uint16Array" | "Int16Array"
+        | "Uint32Array" | "Int32Array" | "Float32Array" | "Float64Array"
+        | "Intl" | "Atomics"
+    )
 }
