@@ -414,7 +414,7 @@ impl Rule for NoReactiveReassign {
                                 for (pos, _) in region.match_indices(&pat) {
                                     if pos > 0 {
                                         let prev = region.as_bytes()[pos - 1];
-                                        if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' { continue; }
+                                        if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' || prev == b'.' { continue; }
                                     }
                                     let after_eq = pos + pat.len();
                                     if after_eq < region.len() && region.as_bytes()[after_eq - 1] == b'='
