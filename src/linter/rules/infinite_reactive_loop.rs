@@ -697,6 +697,29 @@ fn find_stmt_end(content: &str, dollar: usize) -> usize {
                 }
             }
             ';' if pdepth <= 0 && bdepth <= 0 && has_c => return abs + 1,
+            '\n' if pdepth <= 0 && bdepth <= 0 && has_c => {
+                // ASI-like check: if the next non-blank line starts with a
+                // statement keyword or declaration, end the statement here.
+                let rest = &content[abs + 1..];
+                let next_line = rest.trim_start();
+                if next_line.is_empty() {
+                    return abs + 1;
+                }
+                // Blank line followed by content → end statement
+                if rest.starts_with('\n') || (rest.starts_with("\r\n") && !next_line.is_empty()) {
+                    return abs + 1;
+                }
+                // Statement-starting keywords
+                let stmt_starts = ["async ", "function ", "const ", "let ", "var ",
+                    "if ", "if(", "for ", "for(", "while ", "while(", "return ",
+                    "return;", "throw ", "class ", "import ", "export ",
+                    "try ", "try{", "switch ", "switch(", "$: "];
+                for kw in &stmt_starts {
+                    if next_line.starts_with(kw) {
+                        return abs + 1;
+                    }
+                }
+            }
             _ if !ch.is_whitespace() => has_c = true,
             _ => {}
         }
