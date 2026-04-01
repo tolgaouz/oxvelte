@@ -1088,6 +1088,50 @@ fn analyze_block(
     // Pre-compute .then()/.catch() callback regions in the block
     let async_callback_regions = find_then_catch_regions(block);
 
+    // Compute tracked (dependency) variables for this reactive block.
+    // Only variables that are READ inside the block can re-trigger it.
+    // This matches the vendor's getTrackedVariableNodes approach.
+    let tracked_vars: std::collections::HashSet<String> = {
+        let mut tracked = std::collections::HashSet::new();
+        let bytes = block.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            // Skip strings
+            if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
+                let q = bytes[i]; i += 1;
+                while i < bytes.len() && bytes[i] != q {
+                    if bytes[i] == b'\\' { i += 1; }
+                    i += 1;
+                }
+                if i < bytes.len() { i += 1; }
+                continue;
+            }
+            // Skip comments
+            if bytes[i] == b'/' && i + 1 < bytes.len() {
+                if bytes[i+1] == b'/' { while i < bytes.len() && bytes[i] != b'\n' { i += 1; } continue; }
+                if bytes[i+1] == b'*' { i += 2; while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i+1] == b'/') { i += 1; } i += 2; continue; }
+            }
+            if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' || bytes[i] == b'$' {
+                // Skip member access (after `.`)
+                if i > 0 && bytes[i-1] == b'.'
+                    && !(i >= 3 && bytes[i-2] == b'.' && bytes[i-3] == b'.') {
+                    while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') { i += 1; }
+                    continue;
+                }
+                let start = i;
+                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') { i += 1; }
+                let ident = &block[start..i];
+                // Only track top-level variables (not JS keywords, locals, etc.)
+                if top_vars.iter().any(|v| v == ident) && !local_names.contains(&ident.to_string()) {
+                    tracked.insert(ident.to_string());
+                }
+            } else {
+                i += 1;
+            }
+        }
+        tracked
+    };
+
     let lines: Vec<&str> = block.lines().collect();
     let mut line_offsets = Vec::new();
     let mut off = 0usize;
@@ -1118,13 +1162,13 @@ fn analyze_block(
         let in_async_ctx = in_callback || after_await || in_then_catch;
 
         if in_async_ctx {
-            // Report direct assignments to reactive vars.
-            // For callback-only context (setTimeout etc.), only flag vars referenced
-            // in the block (Svelte tracks any reference inside $: as a dependency).
-            // For after-await and .then/.catch, flag all reactive var assignments.
+            // Report direct assignments to tracked reactive vars.
+            // Only flag variables that are actual dependencies of this $: block.
             let needs_ref_check = in_callback && !after_await && !in_then_catch;
             for var in top_vars {
                 if local_names.contains(var) { continue; }
+                // Only flag variables that are tracked dependencies of this block
+                if !tracked_vars.contains(var.as_str()) { continue; }
                 if !has_assign(t, var) { continue; }
                 if needs_ref_check {
                     // For timer callbacks, check if the variable is read elsewhere
@@ -1156,7 +1200,7 @@ fn analyze_block(
                 if !t.contains(&call_pat) { continue; }
 
                 for av in &fi.assigns {
-                    if block_has_var_ref(block, av) {
+                    if tracked_vars.contains(av.as_str()) && block_has_var_ref(block, av) {
                         let indent = line.len() - t.len();
                         let call_col = t.find(&call_pat).unwrap_or(0);
                         let abs = base + block_start + line_offsets[idx] + indent + call_col;
@@ -1225,7 +1269,7 @@ fn analyze_block(
                 // Report at call site AND assignment sites inside the function.
                 // ESLint reports one call-site diagnostic per assignment location.
                 for (pos_var, pos_offset) in &fi.assign_positions_after_await {
-                    if block_has_var_ref(block, pos_var) {
+                    if tracked_vars.contains(pos_var.as_str()) && block_has_var_ref(block, pos_var) {
                         // Report at call site in the reactive block
                         let indent = line.len() - t.len();
                         let call_col = t.find(&call_pat).unwrap_or(0);
