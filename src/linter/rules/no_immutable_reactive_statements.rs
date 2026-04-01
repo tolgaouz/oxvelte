@@ -61,6 +61,19 @@ impl Rule for NoImmutableReactiveStatements {
                     immutable_names.insert(imp);
                 }
             }
+            // Detect `export { varName as alias }` — makes varName a prop (mutable)
+            if (trimmed.starts_with("export {") || trimmed.starts_with("export{"))
+                && !trimmed.contains(" from ")
+            {
+                if let (Some(open), Some(close)) = (trimmed.find('{'), trimmed.find('}')) {
+                    for part in trimmed[open+1..close].split(',') {
+                        let name = part.trim().split(" as ").next().unwrap_or("").trim();
+                        if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+                            prop_names.insert(name);
+                        }
+                    }
+                }
+            }
         }
 
         // Also extract imports from multi-line import statements
@@ -157,9 +170,11 @@ impl Rule for NoImmutableReactiveStatements {
             .copied()
             .collect();
 
-        // Add non-reassigned let vars as immutable
+        // Add non-reassigned let vars as immutable (excluding props)
         let all_immutable: HashSet<&str> = immutable.iter().copied()
-            .chain(let_names.iter().filter(|n| !mutable_lets.contains(*n)).copied())
+            .chain(let_names.iter()
+                .filter(|n| !mutable_lets.contains(*n) && !prop_names.contains(*n))
+                .copied())
             .collect();
 
         // AST-based check: parse script to identify which $: statements
