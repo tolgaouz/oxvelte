@@ -31,6 +31,21 @@ impl Rule for NoImmutableReactiveStatements {
         let mut let_names: HashSet<&str> = HashSet::new();
         let mut prop_names: HashSet<&str> = HashSet::new();
 
+        // Also scan module script for imports/consts visible in instance scope
+        if let Some(module) = &ctx.ast.module {
+            extract_multiline_imports(&module.content, &mut immutable_names);
+            for line in module.content.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("import ") {
+                    for imp in extract_import_names(trimmed) {
+                        if let Some(pos) = module.content.find(imp) {
+                            immutable_names.insert(&module.content[pos..pos + imp.len()]);
+                        }
+                    }
+                }
+            }
+        }
+
         for line in content.lines() {
             let trimmed = line.trim();
             let name = extract_decl_name(trimmed);
