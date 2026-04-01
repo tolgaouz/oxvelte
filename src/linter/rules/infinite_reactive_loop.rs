@@ -1093,6 +1093,10 @@ fn analyze_block(
     let mut off = 0usize;
     for l in &lines { line_offsets.push(off); off += l.len() + 1; }
 
+    // Track which functions have already been reported in this block
+    // (matches vendor's `processed` set — only report each function body once)
+    let mut reported_funcs: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     for (idx, line) in lines.iter().enumerate() {
         let t = line.trim();
         if t.is_empty() || t.starts_with("//") { continue; }
@@ -1147,6 +1151,7 @@ fn analyze_block(
             for fi in func_info {
                 if fi.assigns.is_empty() { continue; }
                 if local_names.contains(&fi.name) { continue; }
+                if reported_funcs.contains(&fi.name) { continue; }
                 let call_pat = format!("{}(", fi.name);
                 if !t.contains(&call_pat) { continue; }
 
@@ -1190,6 +1195,7 @@ fn analyze_block(
                                 }
                             }
                         }
+                        reported_funcs.insert(fi.name.clone());
                         break;
                     }
                 }
@@ -1202,6 +1208,10 @@ fn analyze_block(
                 if !fi.has_await { continue; }
                 if fi.assigns_after_await.is_empty() { continue; }
                 if local_names.contains(&fi.name) { continue; }
+                // Skip if this function has already been reported in this block
+                // (matches vendor's processed set — each function body is only
+                // analyzed once per reactive statement)
+                if reported_funcs.contains(&fi.name) { continue; }
                 let call_pat = format!("{}(", fi.name);
                 if !t.contains(&call_pat) { continue; }
                 // Word boundary check
@@ -1257,6 +1267,7 @@ fn analyze_block(
                         }
                     }
                 }
+                reported_funcs.insert(fi.name.clone());
             }
         }
 
