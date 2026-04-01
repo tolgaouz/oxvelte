@@ -56,9 +56,28 @@ impl Rule for NoImmutableReactiveStatements {
                         immutable_names.insert(imp);
                     }
                 }
-            } else if trimmed.starts_with("import ") {
-                for imp in extract_import_names(trimmed) {
-                    immutable_names.insert(imp);
+            } else {
+                // Handle destructuring: `const { a, b } = expr` or `const [a, b] = expr`
+                let decl_kw = if trimmed.starts_with("const ") { Some("const ") }
+                    else if trimmed.starts_with("let ") { Some("let ") }
+                    else if trimmed.starts_with("var ") { Some("var ") }
+                    else { None };
+                if let Some(kw) = decl_kw {
+                    let rest = &trimmed[kw.len()..];
+                    if rest.starts_with('{') || rest.starts_with('[') {
+                        for dn in extract_destructured_names(rest) {
+                            if kw == "const " {
+                                const_names.insert(dn);
+                            } else {
+                                let_names.insert(dn);
+                            }
+                        }
+                    }
+                }
+                if trimmed.starts_with("import ") {
+                    for imp in extract_import_names(trimmed) {
+                        immutable_names.insert(imp);
+                    }
                 }
             }
             // Detect `export { varName as alias }` — makes varName a prop (mutable)
@@ -444,6 +463,46 @@ fn find_statement_end(content: &str, start: usize) -> usize {
         i += 1;
     }
     content.len()
+}
+
+/// Extract variable names from destructuring patterns like `{ a, b: c }` or `[a, b]`.
+fn extract_destructured_names(pattern: &str) -> Vec<&str> {
+    let mut names = Vec::new();
+    // Find the closing bracket/brace, then extract identifiers
+    let (open, close) = if pattern.starts_with('{') {
+        ('{', '}')
+    } else {
+        ('[', ']')
+    };
+    if let Some(close_pos) = pattern.find(close) {
+        let inner = &pattern[1..close_pos];
+        for part in inner.split(',') {
+            let part = part.trim();
+            if part.starts_with("...") {
+                let rest = part[3..].trim();
+                let end = rest.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
+                    .unwrap_or(rest.len());
+                if end > 0 { names.push(&rest[..end]); }
+                continue;
+            }
+            // Handle `key: value` renaming — the value is the local name
+            let local = if let Some(colon) = part.find(':') {
+                part[colon + 1..].trim()
+            } else {
+                part
+            };
+            // Strip type annotations: `name: Type`
+            let local = local.split(':').next().unwrap_or(local).trim();
+            // Strip default values: `name = default`
+            let local = local.split('=').next().unwrap_or(local).trim();
+            let end = local.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
+                .unwrap_or(local.len());
+            if end > 0 && !local.is_empty() {
+                names.push(&local[..end]);
+            }
+        }
+    }
+    names
 }
 
 fn extract_decl_name(line: &str) -> Option<&str> {
