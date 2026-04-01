@@ -92,6 +92,7 @@ fn check_inner_declarations(content: &str, content_offset: usize, ctx: &mut Lint
     // Control flow blocks: if, for, while, switch, else
     // Function bodies create new scopes where inner declarations are OK.
     let mut brace_depth = 0i32;
+    let mut angle_depth = 0i32; // Track <> for TS generics (skip {} inside)
     let mut scope_stack: Vec<(i32, bool)> = Vec::new(); // (depth, is_function_body)
 
     while i < bytes.len() {
@@ -235,6 +236,53 @@ fn check_inner_declarations(content: &str, content_offset: usize, ctx: &mut Lint
 
                 // Either way, the next `{` is a function body (new scope)
                 scope_stack.push((brace_depth, true));
+                // Skip past TS return type annotations that may contain `{}`
+                // (e.g., `function foo(): Promise<{ x: number }> {`)
+                // Find the opening `(` of params, skip to matching `)`, then
+                // skip any `:` type annotation to the body `{`
+                let fn_start = i + 8; // skip "function"
+                if let Some(paren_start) = content[fn_start..].find('(') {
+                    let mut j = fn_start + paren_start + 1;
+                    let mut pd = 1i32;
+                    // Skip to matching `)`
+                    while j < bytes.len() && pd > 0 {
+                        match bytes[j] {
+                            b'(' => pd += 1,
+                            b')' => pd -= 1,
+                            b'\'' | b'"' | b'`' => {
+                                let q = bytes[j]; j += 1;
+                                while j < bytes.len() && bytes[j] != q {
+                                    if bytes[j] == b'\\' { j += 1; }
+                                    j += 1;
+                                }
+                            }
+                            _ => {}
+                        }
+                        j += 1;
+                    }
+                    // After `)`, check for `: Type` annotation
+                    let after_paren = content[j..].trim_start();
+                    if after_paren.starts_with(':') {
+                        // Skip the type annotation — find the body `{`
+                        // by tracking <> depth to ignore {} inside generics
+                        let type_start = j + (content[j..].len() - after_paren.len()) + 1;
+                        let mut tj = type_start;
+                        let mut ad = 0i32; // angle bracket depth
+                        while tj < bytes.len() {
+                            match bytes[tj] {
+                                b'<' => ad += 1,
+                                b'>' => { if ad > 0 { ad -= 1; } }
+                                b'{' if ad == 0 => {
+                                    // This is the function body `{` — skip to here
+                                    i = tj - 1; // will be incremented to tj
+                                    break;
+                                }
+                                _ => {}
+                            }
+                            tj += 1;
+                        }
+                    }
+                }
             }
         }
 
