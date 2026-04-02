@@ -147,6 +147,12 @@ impl Rule for NoImmutableReactiveStatements {
                                 if let_names.contains(var) {
                                     mutable_lets.insert(var);
                                 }
+                                // Also check member binding: bind:value={record.name}
+                                // The base variable (before `.`) is mutable
+                                let base = var.split('.').next().unwrap_or(var);
+                                if base != var && let_names.contains(base) {
+                                    mutable_lets.insert(base);
+                                }
                             }
                         }
                         if !region.contains('{') && !region.contains('=') {
