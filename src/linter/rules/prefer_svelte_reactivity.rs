@@ -92,6 +92,13 @@ impl Rule for PreferSvelteReactivity {
 
             self.check_script(ctx, content, content_offset, is_ts, ctx.is_svelte_module);
         }
+
+        // Scan template (non-script) regions for chained mutations on new built-in
+        // instances, e.g. `{@const d = new Date(x).setHours(0)}` or
+        // `{new Date().setMonth(m)}` in template expressions / event handlers.
+        if !ctx.is_svelte_module {
+            detect_chained_new_in_template(ctx);
+        }
     }
 }
 
@@ -595,4 +602,101 @@ fn collect_shadowed_classes(content: &str) -> Vec<String> {
         }
     }
     shadowed
+}
+
+/// Scan template (non-script) regions for `new ClassName(...).<mutatingMethod>(`.
+/// This catches patterns like `{@const d = new Date(x).setHours(0)}` and
+/// `{new Date().setSeconds(0, 0)}` in template expressions and event handlers.
+fn detect_chained_new_in_template(ctx: &mut LintContext) {
+    let source = ctx.source;
+
+    // Collect script byte ranges to skip
+    let mut script_ranges: Vec<(usize, usize)> = Vec::new();
+    for script in [&ctx.ast.instance, &ctx.ast.module].into_iter().flatten() {
+        script_ranges.push((script.span.start as usize, script.span.end as usize));
+    }
+
+    // Collect shadowed class names from script imports
+    let mut shadowed = Vec::new();
+    for script in [&ctx.ast.instance, &ctx.ast.module].into_iter().flatten() {
+        shadowed.extend(collect_shadowed_classes(&script.content));
+    }
+
+    for builtin in BUILTIN_CLASSES {
+        if shadowed.iter().any(|s| s == builtin.name) { continue; }
+
+        let new_pat = format!("new {}(", builtin.name);
+        let mut search = 0;
+
+        while let Some(rel) = source[search..].find(&new_pat) {
+            let abs = search + rel;
+
+            // Word boundary check
+            if abs > 0 {
+                let prev = source.as_bytes()[abs - 1];
+                if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' {
+                    search = abs + 1;
+                    continue;
+                }
+            }
+
+            // Skip if inside a script block
+            if script_ranges.iter().any(|&(s, e)| abs >= s && abs < e) {
+                search = abs + new_pat.len();
+                continue;
+            }
+
+            // Find matching `)` for the constructor call
+            let paren_start = abs + new_pat.len() - 1; // position of `(`
+            let close = match find_matching_paren(source, paren_start) {
+                Some(p) => p,
+                None => { search = abs + 1; continue; }
+            };
+
+            // Check if followed by `.mutatingMethod(`
+            let after = &source[close + 1..];
+            if after.starts_with('.') {
+                let method_start = &after[1..];
+                for method in builtin.mutating_methods {
+                    let call = format!("{}(", method);
+                    if method_start.starts_with(&call) {
+                        ctx.diagnostic(
+                            format!(
+                                "Found a mutable instance of the built-in {} class. Use {} instead.",
+                                builtin.name, builtin.svelte_name
+                            ),
+                            Span::new(abs as u32, (close + 1) as u32),
+                        );
+                        break;
+                    }
+                }
+            }
+
+            search = close + 1;
+        }
+    }
+}
+
+/// Find the matching closing paren for an opening paren at `pos`.
+fn find_matching_paren(source: &str, pos: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    if bytes.get(pos) != Some(&b'(') { return None; }
+    let mut depth = 1i32;
+    let mut i = pos + 1;
+    let mut in_str = false;
+    let mut sch = b'"';
+    while i < bytes.len() && depth > 0 {
+        if in_str {
+            if bytes[i] == sch && (i == 0 || bytes[i - 1] != b'\\') { in_str = false; }
+        } else {
+            match bytes[i] {
+                b'\'' | b'"' | b'`' => { in_str = true; sch = bytes[i]; }
+                b'(' => depth += 1,
+                b')' => { depth -= 1; if depth == 0 { return Some(i); } }
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    None
 }
