@@ -320,14 +320,16 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
                 }
 
                 // Track function calls on this line (for transitive propagation)
-                // Look for `funcName(` patterns that aren't the function itself
+                // Look for `funcName(` patterns with word boundary check
                 for other in &func_names_seen {
                     if other == &name { continue; }
                     let call_pat = format!("{}(", other);
-                    if t.contains(&call_pat) {
-                        if !all_calls.contains(other) { all_calls.push(other.clone()); }
-                        if seen_await && !calls_after_await.contains(other) {
-                            calls_after_await.push(other.clone());
+                    if let Some(cp) = t.find(&call_pat) {
+                        if is_word_start(t, cp) {
+                            if !all_calls.contains(other) { all_calls.push(other.clone()); }
+                            if seen_await && !calls_after_await.contains(other) {
+                                calls_after_await.push(other.clone());
+                            }
                         }
                     }
                 }
@@ -376,8 +378,8 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
     // This handles chains like: backgroundResendVerification → resetTurnstile → turnstileReady = false
     // Run multiple rounds to handle deeper chains.
     for _ in 0..4 {
-        let snapshot: Vec<(String, Vec<String>, Vec<(String, usize)>, Vec<String>, Vec<(String, usize)>, bool)> = results.iter()
-            .map(|fi| (fi.name.clone(), fi.assigns.clone(), fi.all_assign_positions.clone(), fi.assigns_after_await.clone(), fi.assign_positions_after_await.clone(), fi.has_await))
+        let snapshot: Vec<(String, Vec<String>, Vec<(String, usize)>, Vec<String>, Vec<(String, usize)>, bool, bool)> = results.iter()
+            .map(|fi| (fi.name.clone(), fi.assigns.clone(), fi.all_assign_positions.clone(), fi.assigns_after_await.clone(), fi.assign_positions_after_await.clone(), fi.has_await, fi.has_then_catch_assigns))
             .collect();
 
         for fi in results.iter_mut() {
@@ -388,7 +390,7 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
             // - If callee !has_await: inherit ALL assigns
             //   (entire callee runs in a different microtask)
             for callee_name in fi.calls_after_await.clone() {
-                if let Some((_, callee_assigns, callee_positions, callee_after_await, callee_after_await_positions, callee_has_await)) = snapshot.iter().find(|(n, _, _, _, _, _)| n == &callee_name) {
+                if let Some((_, callee_assigns, callee_positions, callee_after_await, callee_after_await_positions, callee_has_await, _)) = snapshot.iter().find(|(n, _, _, _, _, _, _)| n == &callee_name) {
                     let (vars_to_inherit, positions_to_inherit): (&Vec<String>, &Vec<(String, usize)>) = if *callee_has_await {
                         (callee_after_await, callee_after_await_positions)
                     } else {
@@ -421,9 +423,12 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
                     }
                 }
             }
-            // For all calls: inherit callee's assigns into our assigns list
+            // For all calls: inherit callee's assigns into our assigns list.
+            // Also inherit callee's async assigns — if callee B has assigns_after_await,
+            // those will eventually execute in a different microtask when A calls B.
+            // This handles chains like: update() → updateMenu() → async callback → await → value = ...
             for callee_name in fi.all_calls.clone() {
-                if let Some((_, callee_assigns, callee_positions, _, _, _)) = snapshot.iter().find(|(n, _, _, _, _, _)| n == &callee_name) {
+                if let Some((_, callee_assigns, callee_positions, callee_after_await, callee_after_await_positions, callee_has_await, callee_has_then_catch)) = snapshot.iter().find(|(n, _, _, _, _, _, _)| n == &callee_name) {
                     for var in callee_assigns {
                         if !fi.assigns.contains(var) {
                             fi.assigns.push(var.clone());
@@ -432,6 +437,29 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
                     for (var, pos) in callee_positions {
                         if !fi.all_assign_positions.iter().any(|(v, p)| v == var && p == pos) {
                             fi.all_assign_positions.push((var.clone(), *pos));
+                        }
+                    }
+                    // Propagate callee's async assigns upward:
+                    // If callee has assigns_after_await, calling it will eventually
+                    // trigger those async assignments in a different microtask.
+                    if !callee_after_await.is_empty() {
+                        for var in callee_after_await {
+                            if !fi.assigns_after_await.contains(var) {
+                                fi.assigns_after_await.push(var.clone());
+                            }
+                        }
+                        for (var, pos) in callee_after_await_positions {
+                            let (bs, be) = fi.body_range;
+                            if *pos >= bs && *pos < be { continue; }
+                            if !fi.assign_positions_after_await.iter().any(|(v, p)| v == var && p == pos) {
+                                fi.assign_positions_after_await.push((var.clone(), *pos));
+                            }
+                        }
+                        if *callee_has_await {
+                            fi.has_await = true;
+                        }
+                        if *callee_has_then_catch {
+                            fi.has_then_catch_assigns = true;
                         }
                     }
                 }
@@ -643,7 +671,8 @@ fn has_member_assign(line: &str, var: &str, ops: &[&str]) -> bool {
 fn is_word_start(text: &str, pos: usize) -> bool {
     if pos == 0 { return true; }
     let b = text.as_bytes()[pos - 1];
-    !(b.is_ascii_alphanumeric() || b == b'_' || b == b'$')
+    // `.` means this is a member access (e.g. `item.value`), not standalone
+    !(b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b == b'.')
 }
 
 /// Check if an assignment at `assign_pos` is after an await at `await_pos` on the same line,
@@ -1147,6 +1176,79 @@ fn find_then_catch_regions(block: &str) -> Vec<(usize, usize)> {
     regions
 }
 
+/// Recursively report at intermediate function call sites within a function body.
+/// The vendor uses recursive AST traversal to find all call sites in the chain;
+/// we emulate this by walking through the function's callees and their callees.
+fn report_intermediate_calls(
+    ctx: &mut LintContext,
+    fi: &FuncInfo,
+    func_info: &[FuncInfo],
+    pos_var: &str,
+    base: usize,
+) {
+    let (body_start, body_end) = fi.body_range;
+    if body_end > ctx.source.len().saturating_sub(base) { return; }
+    let body = &ctx.source[base + body_start..base + body_end];
+
+    // Check all callees (not just calls_after_await) for those that
+    // transitively assign the tracked variable
+    let mut reported = std::collections::HashSet::new();
+    let mut stack: Vec<&str> = Vec::new();
+    // Seed with this function's callees
+    for callee_name in fi.all_calls.iter().chain(fi.calls_after_await.iter()) {
+        if !stack.contains(&callee_name.as_str()) {
+            stack.push(callee_name.as_str());
+        }
+    }
+
+    while let Some(callee_name) = stack.pop() {
+        if reported.contains(callee_name) { continue; }
+        let callee_fi = match func_info.iter().find(|cf| cf.name == callee_name) {
+            Some(cf) => cf,
+            None => continue,
+        };
+        if !callee_fi.assigns.contains(&pos_var.to_string()) { continue; }
+
+        // Report at the call site of this callee within the parent function body
+        let callee_call = format!("{}(", callee_name);
+        if let Some(cpos) = body.find(&callee_call) {
+            if is_word_start(body, cpos) {
+                let abs_pos = base + body_start + cpos;
+                ctx.diagnostic(
+                    format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", pos_var),
+                    Span::new(abs_pos as u32, abs_pos as u32 + 1),
+                );
+            }
+        }
+        reported.insert(callee_name);
+
+        // Also recurse into the callee's body to find deeper call sites
+        let (cb_start, cb_end) = callee_fi.body_range;
+        if cb_end <= ctx.source.len().saturating_sub(base) {
+            let callee_body = &ctx.source[base + cb_start..base + cb_end];
+            for deeper_callee in callee_fi.all_calls.iter() {
+                if reported.contains(deeper_callee.as_str()) { continue; }
+                let deeper_fi = match func_info.iter().find(|cf| cf.name == *deeper_callee) {
+                    Some(cf) => cf,
+                    None => continue,
+                };
+                if !deeper_fi.assigns.contains(&pos_var.to_string()) { continue; }
+                let deeper_call = format!("{}(", deeper_callee);
+                if let Some(dpos) = callee_body.find(&deeper_call) {
+                    if is_word_start(callee_body, dpos) {
+                        let abs_pos = base + cb_start + dpos;
+                        ctx.diagnostic(
+                            format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", pos_var),
+                            Span::new(abs_pos as u32, abs_pos as u32 + 1),
+                        );
+                    }
+                }
+                reported.insert(deeper_callee.as_str());
+            }
+        }
+    }
+}
+
 fn analyze_block(
     ctx: &mut LintContext,
     block: &str,
@@ -1280,7 +1382,7 @@ fn analyze_block(
         if in_async_ctx && !is_dollar_line {
             // Report direct assignments to tracked reactive vars.
             // Only flag variables that are actual dependencies of this $: block.
-            let needs_ref_check = in_callback && !after_await && !in_then_catch;
+            let needs_ref_check = in_callback && !after_await && !in_then_catch && !line_overlaps_then_catch;
             for var in top_vars {
                 if local_names.contains(var) { continue; }
                 // Only flag variables that are tracked dependencies of this block
@@ -1404,28 +1506,9 @@ fn analyze_block(
                         // Report at intermediate call sites within the function body.
                         // When the assignment was propagated from a callee, report
                         // at the callee's call site inside this function's body.
-                        let (body_start, body_end) = fi.body_range;
-                        if body_end <= ctx.source.len().saturating_sub(base) {
-                            let body = &ctx.source[base + body_start..base + body_end];
-                            for callee_name in &fi.calls_after_await {
-                                // Check if this callee assigns the flagged variable
-                                let callee_fi = func_info.iter().find(|cf| cf.name == *callee_name);
-                                if let Some(cf) = callee_fi {
-                                    if cf.assigns.contains(pos_var) {
-                                        let callee_call = format!("{}(", callee_name);
-                                        if let Some(cpos) = body.find(&callee_call) {
-                                            if is_word_start(body, cpos) {
-                                                let abs_pos = base + body_start + cpos;
-                                                ctx.diagnostic(
-                                                    format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", pos_var),
-                                                    Span::new(abs_pos as u32, abs_pos as u32 + 1),
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        // Check both calls_after_await AND all_calls (for callees
+                        // that have async assigns themselves).
+                        report_intermediate_calls(ctx, fi, func_info, pos_var, base);
                     }
                 }
                 reported_funcs.insert(fi.name.clone());
