@@ -405,6 +405,11 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
                         }
                     }
                     for (var, pos) in positions_to_inherit {
+                        // Skip positions that fall within this function's own body range
+                        // (prevents circular propagation: A→B→C→A leaking A's positions
+                        // back into A's assign_positions_after_await)
+                        let (bs, be) = fi.body_range;
+                        if *pos >= bs && *pos < be { continue; }
                         if !fi.assign_positions_after_await.iter().any(|(v, p)| v == var && p == pos) {
                             fi.assign_positions_after_await.push((var.clone(), *pos));
                         }
