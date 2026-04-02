@@ -687,10 +687,13 @@ impl Rule for NoReactiveReassign {
                                     }
                                 }
                             }
-                            // Check event handlers for property assignments to reactive
-                            // vars and their store subscriptions ($varName).
-                            // E.g.: $gallery.items[idx] = value
+                            // Check event handlers for property assignments and mutating
+                            // method calls on reactive vars and their store subscriptions.
                             if check_props {
+                                let mutating_methods = [
+                                    "push(", "pop(", "shift(", "unshift(", "splice(",
+                                    "sort(", "reverse(", "fill(", "copyWithin(",
+                                ];
                                 for var in &reactive_vars {
                                     // Check both var.prop and $var.prop patterns
                                     for prefix in &[var.clone(), format!("${}", var)] {
@@ -707,7 +710,7 @@ impl Rule for NoReactiveReassign {
                                                 let double_quotes = before.matches('"').count();
                                                 if single_quotes % 2 != 0 || double_quotes % 2 != 0 { continue; }
 
-                                                // Follow member chain to find = assignment
+                                                // Follow member chain to find = assignment or mutating method
                                                 let after = &region[pos + pat_start.len()..];
                                                 let mut rest = if pat_start.ends_with('[') {
                                                     after.find(']').map(|p| &after[p+1..]).unwrap_or("")
@@ -719,6 +722,16 @@ impl Rule for NoReactiveReassign {
                                                     if rest.starts_with('.') || rest.starts_with("?.") {
                                                         let skip = if rest.starts_with("?.") { 2 } else { 1 };
                                                         let r = &rest[skip..];
+                                                        // Check if followed by a mutating method
+                                                        for m in &mutating_methods {
+                                                            if r.starts_with(*m) {
+                                                                let abs_pos = span.start as usize + pos;
+                                                                ctx.diagnostic(
+                                                                    format!("Assignment to property of reactive value '{}'.", prefix),
+                                                                    oxc::span::Span::new(abs_pos as u32, (abs_pos + pat_start.len()) as u32),
+                                                                );
+                                                            }
+                                                        }
                                                         let end = r.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(r.len());
                                                         rest = &r[end..];
                                                     } else if rest.starts_with('[') {
