@@ -349,11 +349,32 @@ impl Rule for NoImmutableReactiveStatements {
 
             let should_flag = text_flag || ast_flag;
             if should_flag {
-                let source_pos = content_offset + offset;
-                let end = content_offset + offset + full_text.len();
+                // Match vendor reporting: for simple assignments ($: x = expr),
+                // report at the RHS expression; for others, report at the body.
+                let after = full_text[2..].trim_start();
+                let body_offset_in_stmt = full_text.len() - after.len();
+                let (diag_start, diag_end) = if let Some(eq) = after.find('=') {
+                    let lhs = after[..eq].trim();
+                    let post = &after[eq + 1..];
+                    if !post.starts_with('=') && !post.starts_with('>')
+                        && lhs.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') && !lhs.is_empty()
+                    {
+                        // Simple assignment: report at RHS
+                        let rhs_rel = body_offset_in_stmt + eq + 1;
+                        let rhs_text = full_text[rhs_rel..].trim_start();
+                        let rhs_start = full_text.len() - rhs_text.len();
+                        (content_offset + offset + rhs_start, content_offset + offset + full_text.len())
+                    } else {
+                        // Not simple assignment: report at body
+                        (content_offset + offset + body_offset_in_stmt, content_offset + offset + full_text.len())
+                    }
+                } else {
+                    // No assignment: report at body
+                    (content_offset + offset + body_offset_in_stmt, content_offset + offset + full_text.len())
+                };
                 ctx.diagnostic(
                     "This statement is not reactive because all variables referenced in the reactive statement are immutable.",
-                    oxc::span::Span::new(source_pos as u32, end as u32),
+                    oxc::span::Span::new(diag_start as u32, diag_end as u32),
                 );
             }
             // If referenced is empty but there ARE identifiers, they're all unknown/global
