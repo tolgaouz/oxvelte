@@ -707,13 +707,23 @@ fn find_block_end(content: &str, dollar: usize) -> usize {
 fn find_matching_brace(content: &str, start: usize) -> usize {
     let mut depth = 0i32;
     let mut in_str = false;
+    let mut in_line_comment = false;
     let mut sch = '"';
+    let bytes = content.as_bytes();
     for (i, ch) in content[start..].char_indices() {
+        let abs = start + i;
+        if in_line_comment {
+            if ch == '\n' { in_line_comment = false; }
+            continue;
+        }
         if in_str {
-            if ch == sch && content.as_bytes().get(start + i - 1) != Some(&b'\\') { in_str = false; }
+            if ch == sch && abs > 0 && bytes[abs - 1] != b'\\' { in_str = false; }
             continue;
         }
         match ch {
+            '/' if abs + 1 < bytes.len() && bytes[abs + 1] == b'/' => {
+                in_line_comment = true;
+            }
             '\'' | '"' | '`' => { in_str = true; sch = ch; }
             '{' => depth += 1,
             '}' => { depth -= 1; if depth == 0 { return start + i + 1; } }
