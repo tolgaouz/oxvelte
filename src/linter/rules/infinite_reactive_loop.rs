@@ -280,8 +280,10 @@ fn collect_func_info(content: &str, top_vars: &[String]) -> Vec<FuncInfo> {
                     if seen_await || j > i {
                         for var in top_vars {
                             if var == &name { continue; }
-                            let pat = format!("{} = await ", var);
-                            if t.contains(&pat) {
+                            if !t.contains(var.as_str()) { continue; }
+                            // Use word-boundary-aware check instead of simple contains
+                            if let Some(_) = find_var_op(t, var, " = await ") {
+                                if is_local_declaration(t, var) { continue; }
                                 if !assigns_after_await.contains(var) { assigns_after_await.push(var.clone()); }
                                 assign_positions_after_await.push((var.clone(), line_pos + indent));
                                 if !assigns.contains(var) { assigns.push(var.clone()); }
@@ -1172,8 +1174,7 @@ fn analyze_block(
     for (idx, line) in lines.iter().enumerate() {
         let t = line.trim();
         if t.is_empty() || t.starts_with("//") { continue; }
-        // Skip the $: declaration line unless it contains a .then()/.catch() callback
-        if t.starts_with("$:") && !t.contains(".then(") && !t.contains(".catch(") { continue; }
+        let is_dollar_line = t.starts_with("$:");
 
         let line_byte_start = line_offsets[idx];
 
@@ -1189,7 +1190,7 @@ fn analyze_block(
             .any(|&(start, end)| start < line_end && end > line_byte_start);
         let in_async_ctx = in_callback || after_await || in_then_catch;
 
-        if in_async_ctx {
+        if in_async_ctx && !is_dollar_line {
             // Report direct assignments to tracked reactive vars.
             // Only flag variables that are actual dependencies of this $: block.
             let needs_ref_check = in_callback && !after_await && !in_then_catch;
