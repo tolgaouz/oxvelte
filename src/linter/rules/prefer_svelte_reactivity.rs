@@ -227,17 +227,41 @@ impl PreferSvelteReactivity {
             // Check if any reference to this symbol is a mutating usage.
             let is_mut = is_symbol_mutated(scoping, nodes, symbol_id, builtin);
 
-            // For root-scope variables, also check template for mutations
-            let is_template_mut = if !is_mut
-                && scoping.symbol_scope_id(symbol_id) == scoping.root_scope_id()
-            {
-                let var_name = scoping.symbol_name(symbol_id);
-                is_mutated_in_template(ctx.source, content, var_name, builtin)
+            // Check transitive flow: if the value flows to another variable
+            // (e.g., `const today = new Date(); let viewDate = today;`)
+            // and THAT variable is mutated.
+            let is_transitive_mut = if !is_mut {
+                is_transitively_mutated(scoping, nodes, symbol_id, builtin)
             } else {
                 false
             };
 
-            if is_mut || is_template_mut {
+            // For root-scope variables, also check template for mutations
+            let is_template_mut = if !is_mut && !is_transitive_mut
+                && scoping.symbol_scope_id(symbol_id) == scoping.root_scope_id()
+            {
+                let var_name = scoping.symbol_name(symbol_id);
+                let mut found = is_mutated_in_template(ctx.source, content, var_name, builtin);
+                // Also check transitive flow targets in template
+                if !found {
+                    for ref_id in scoping.get_resolved_references(symbol_id) {
+                        if !ref_id.is_read() { continue; }
+                        let (downstream_sym, _) = find_target_symbol_or_name(nodes, scoping, ref_id.node_id());
+                        if let Some(ds) = downstream_sym {
+                            let ds_name = scoping.symbol_name(ds);
+                            if is_mutated_in_template(ctx.source, content, ds_name, builtin) {
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                found
+            } else {
+                false
+            };
+
+            if is_mut || is_transitive_mut || is_template_mut {
                 flagged_symbols.insert(symbol_id);
                 let abs = content_offset + new_expr.span.start as usize;
                 let end = content_offset + new_expr.span.end as usize;
@@ -426,6 +450,61 @@ fn is_symbol_mutated(
                         return true;
                     }
                 }
+            }
+        }
+    }
+    false
+}
+
+/// Check if the value of a symbol transitively flows to another variable that
+/// is mutated. Handles patterns like:
+///   const today = new Date(); let viewDate = currentDate ?? today; viewDate.setDate(1);
+fn is_transitively_mutated(
+    scoping: &oxc::semantic::Scoping,
+    nodes: &oxc::semantic::AstNodes,
+    symbol_id: oxc::semantic::SymbolId,
+    builtin: &BuiltinClass,
+) -> bool {
+    use oxc::ast::AstKind;
+    use oxc::ast::ast::BindingPattern;
+
+    // For each READ reference to the symbol, check if it flows into another
+    // variable (via assignment or initialization), and if THAT variable is mutated.
+    for reference in scoping.get_resolved_references(symbol_id) {
+        if !reference.is_read() { continue; }
+
+        // Walk up from the reference to find if it's part of an initializer
+        // for another variable (e.g., `let viewDate = currentDate ?? today`)
+        let ref_node = reference.node_id();
+        for ancestor_id in nodes.ancestor_ids(ref_node) {
+            match nodes.kind(ancestor_id) {
+                AstKind::VariableDeclarator(decl) => {
+                    if let BindingPattern::BindingIdentifier(ident) = &decl.id {
+                        if let Some(target_sym) = ident.symbol_id.get() {
+                            if target_sym != symbol_id && is_symbol_mutated(scoping, nodes, target_sym, builtin) {
+                                return true;
+                            }
+                        }
+                    }
+                    break;
+                }
+                AstKind::AssignmentExpression(assign) => {
+                    if let oxc::ast::ast::AssignmentTarget::AssignmentTargetIdentifier(ident) = &assign.left {
+                        let ref_id = ident.reference_id.get();
+                        if let Some(target_sym) = ref_id.and_then(|r| scoping.get_reference(r).symbol_id()) {
+                            if target_sym != symbol_id && is_symbol_mutated(scoping, nodes, target_sym, builtin) {
+                                return true;
+                            }
+                        }
+                    }
+                    break;
+                }
+                // Pass through wrapper expressions
+                AstKind::ParenthesizedExpression(_)
+                | AstKind::LogicalExpression(_)
+                | AstKind::ConditionalExpression(_)
+                | AstKind::SequenceExpression(_) => continue,
+                _ => break,
             }
         }
     }
