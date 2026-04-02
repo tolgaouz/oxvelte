@@ -435,6 +435,7 @@ fn is_direct_function_expr(after: &str) -> bool {
     }
     if after.starts_with('(') {
         // Scan for the matching `)` at depth 0, then check if `=>` follows
+        // (possibly after a TypeScript return type annotation like `: void`)
         let mut depth = 0i32;
         for (i, ch) in after.char_indices() {
             match ch {
@@ -443,7 +444,15 @@ fn is_direct_function_expr(after: &str) -> bool {
                     depth -= 1;
                     if depth == 0 {
                         let rest = after[i + 1..].trim_start();
-                        return rest.starts_with("=>");
+                        // Direct arrow: `) => {`
+                        if rest.starts_with("=>") { return true; }
+                        // TypeScript return type: `): ReturnType => {`
+                        if rest.starts_with(':') {
+                            if let Some(arrow) = rest.find("=>") {
+                                return true;
+                            }
+                        }
+                        return false;
                     }
                 }
                 _ => {}
@@ -528,6 +537,12 @@ fn find_var_op(line: &str, var: &str, op: &str) -> Option<usize> {
         if is_word_start(line, abs) {
             let after = abs + var.len();
             if line[after..].starts_with(op) {
+                // Skip `typeof varName =` (TypeScript type annotation, not assignment)
+                let before = line[..abs].trim_end();
+                if before.ends_with("typeof") {
+                    start = abs + 1;
+                    continue;
+                }
                 return Some(abs);
             }
         }
