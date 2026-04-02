@@ -1084,6 +1084,20 @@ fn find_then_catch_regions(block: &str) -> Vec<(usize, usize)> {
 
             while i < bytes.len() && paren_depth > 0 {
                 match bytes[i] {
+                    // Skip line comments (avoids treating apostrophes in
+                    // comments like `// There's ...` as string delimiters)
+                    b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
+                        i += 2;
+                        while i < bytes.len() && bytes[i] != b'\n' { i += 1; }
+                        continue;
+                    }
+                    // Skip block comments
+                    b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
+                        i += 2;
+                        while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') { i += 1; }
+                        if i + 1 < bytes.len() { i += 2; }
+                        continue;
+                    }
                     b'\'' | b'"' | b'`' => {
                         let q = bytes[i];
                         i += 1;
