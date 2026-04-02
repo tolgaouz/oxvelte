@@ -338,13 +338,17 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
             let body_start = func_start_offset;
             let body_end = if end_line < line_offsets.len() { line_offsets[end_line] + lines[end_line].len() } else { content.len() };
 
-            // Detect assignments inside .then()/.catch() callbacks
+            // Detect assignments inside .then()/.catch() and timer callbacks
             // Only track explicitly-declared vars (not implicit $: vars),
             // matching vendor scope analysis which can't track implicit $: declarations.
             let func_body = &content[body_start..body_end];
             let then_catch_regions = find_then_catch_regions(func_body);
+            let timer_regions = find_timer_callback_regions(func_body);
             let mut has_then_catch_assigns = false;
-            if !then_catch_regions.is_empty() {
+            let mut all_async_regions: Vec<(usize, usize)> = Vec::new();
+            all_async_regions.extend_from_slice(&then_catch_regions);
+            all_async_regions.extend_from_slice(&timer_regions);
+            if !all_async_regions.is_empty() {
                 for j in i+1..=end_line {
                     let line = lines[j];
                     let lt = line.trim();
@@ -355,8 +359,8 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
                         if !lt.contains(var.as_str()) { continue; }
                         if is_local_declaration(lt, var) { continue; }
                         if !has_assign(lt, var) { continue; }
-                        // Check if this position is inside a .then()/.catch() region
-                        let in_region = then_catch_regions.iter()
+                        // Check if this position is inside an async callback region
+                        let in_region = all_async_regions.iter()
                             .any(|&(start, end)| lpos + indent >= start && lpos + indent < end);
                         if in_region {
                             has_then_catch_assigns = true;
@@ -1089,6 +1093,105 @@ fn has_await_on_prev_line(block: &str, line_start_pos: usize) -> bool {
     found_await_at_depth
 }
 
+/// Find byte ranges of callback bodies inside setTimeout/setInterval/queueMicrotask calls.
+/// Returns Vec<(body_start, body_end)> for each callback body found.
+fn find_timer_callback_regions(block: &str) -> Vec<(usize, usize)> {
+    let mut regions = Vec::new();
+    let bytes = block.as_bytes();
+    let timer_fns = ["setTimeout(", "setInterval(", "queueMicrotask("];
+
+    for pattern in &timer_fns {
+        let mut search = 0;
+        while let Some(pos) = block[search..].find(pattern) {
+            let abs = search + pos;
+            // Word boundary check
+            if abs > 0 {
+                let prev = bytes[abs - 1];
+                if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' {
+                    search = abs + pattern.len();
+                    continue;
+                }
+            }
+            let after = abs + pattern.len();
+            let mut i = after;
+            let mut paren_depth = 1i32;
+
+            // Find the callback body (first arrow/function argument)
+            while i < bytes.len() && paren_depth > 0 {
+                // Skip strings
+                if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
+                    let q = bytes[i]; i += 1;
+                    while i < bytes.len() {
+                        if bytes[i] == b'\\' { i += 1; }
+                        else if bytes[i] == q { break; }
+                        i += 1;
+                    }
+                    if i < bytes.len() { i += 1; }
+                    continue;
+                }
+                // Skip comments
+                if bytes[i] == b'/' && i + 1 < bytes.len() {
+                    if bytes[i + 1] == b'/' {
+                        i += 2;
+                        while i < bytes.len() && bytes[i] != b'\n' { i += 1; }
+                        continue;
+                    }
+                    if bytes[i + 1] == b'*' {
+                        i += 2;
+                        while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') { i += 1; }
+                        if i + 1 < bytes.len() { i += 2; }
+                        continue;
+                    }
+                }
+                match bytes[i] {
+                    b'(' => { paren_depth += 1; i += 1; }
+                    b')' => { paren_depth -= 1; i += 1; }
+                    b'=' if i + 1 < bytes.len() && bytes[i + 1] == b'>' && paren_depth == 1 => {
+                        i += 2;
+                        while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r') { i += 1; }
+                        if i < bytes.len() && bytes[i] == b'{' {
+                            let body_start = i;
+                            let mut bd = 1i32; i += 1;
+                            while i < bytes.len() && bd > 0 {
+                                if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
+                                    let q = bytes[i]; i += 1;
+                                    while i < bytes.len() { if bytes[i] == b'\\' { i += 1; } else if bytes[i] == q { break; } i += 1; }
+                                    if i < bytes.len() { i += 1; }
+                                    continue;
+                                }
+                                match bytes[i] { b'{' => bd += 1, b'}' => { bd -= 1; if bd == 0 { break; } } _ => {} }
+                                i += 1;
+                            }
+                            regions.push((body_start, i));
+                        }
+                        break; // only need the first callback
+                    }
+                    b'{' if paren_depth == 1 => {
+                        // function() { ... } body
+                        let body_start = i;
+                        let mut bd = 1i32; i += 1;
+                        while i < bytes.len() && bd > 0 {
+                            if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
+                                let q = bytes[i]; i += 1;
+                                while i < bytes.len() { if bytes[i] == b'\\' { i += 1; } else if bytes[i] == q { break; } i += 1; }
+                                if i < bytes.len() { i += 1; }
+                                continue;
+                            }
+                            match bytes[i] { b'{' => bd += 1, b'}' => { bd -= 1; if bd == 0 { break; } } _ => {} }
+                            i += 1;
+                        }
+                        regions.push((body_start, i));
+                        break;
+                    }
+                    _ => { i += 1; }
+                }
+            }
+            search = abs + pattern.len();
+        }
+    }
+    regions
+}
+
 /// Check if `pos` is in an "effective" then/catch async context.
 /// The vendor's AST traversal resets `isSameMicroTask=true` when leaving a nested
 /// `.then()/.catch()` callback. So positions AFTER a nested callback ends (but still
@@ -1457,25 +1560,12 @@ fn analyze_block(
 
         if in_async_ctx && !is_dollar_line {
             // Report direct assignments to tracked reactive vars.
-            // Only flag variables that are actual dependencies of this $: block.
-            let needs_ref_check = in_callback && !after_await && !in_then_catch && !line_overlaps_then_catch;
+            // The vendor flags any tracked variable assigned in an async boundary,
+            // regardless of whether it's read elsewhere in the block.
             for var in top_vars {
                 if local_names.contains(var) { continue; }
-                // Only flag variables that are tracked dependencies of this block
                 if !tracked_vars.contains(var.as_str()) { continue; }
                 if !has_assign(t, var) { continue; }
-                if needs_ref_check {
-                    // For timer callbacks, check if the variable is read elsewhere
-                    // in the block (outside this assignment). Simple assignments
-                    // like `page = 1` where `page` is only written don't re-trigger.
-                    // But member assignments like `obj.a = 1` DO trigger invalidation.
-                    let is_member_assign = {
-                        let dot = format!("{}.", var);
-                        let bracket = format!("{}[", var);
-                        t.contains(&dot) || t.contains(&bracket)
-                    };
-                    if !is_member_assign && !block_reads_var(block, var) { continue; }
-                }
 
                 let indent = line.len() - t.len();
                 let abs = base + block_start + line_offsets[idx] + indent;
@@ -1502,8 +1592,10 @@ fn analyze_block(
                             format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", av),
                             Span::new(abs as u32, abs as u32 + 1),
                         );
-                        // Report at post-await assignment sites inside the function.
-                        for (pos_var, pos_offset) in &fi.assign_positions_after_await {
+                        // When called from an async context (timer/then), ALL assignments
+                        // in the function are in a different microtask. Report at all
+                        // assignment positions, not just post-await ones.
+                        for (pos_var, pos_offset) in &fi.all_assign_positions {
                             if pos_var == av {
                                 let abs = base + pos_offset;
                                 ctx.diagnostic(
