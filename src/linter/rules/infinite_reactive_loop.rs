@@ -727,15 +727,32 @@ fn find_stmt_end(content: &str, dollar: usize) -> usize {
     let mut pdepth = 0i32;
     let mut bdepth = 0i32;
     let mut in_str = false;
+    let mut in_line_comment = false;
     let mut sch = '"';
     let mut has_c = false;
+    let bytes = content.as_bytes();
     for (i, ch) in content[dollar + 2..].char_indices() {
         let abs = dollar + 2 + i;
+        // Line comments: skip everything until newline
+        if in_line_comment {
+            if ch == '\n' {
+                in_line_comment = false;
+                // Fall through to newline handling below
+            } else {
+                continue;
+            }
+        }
         if in_str {
-            if ch == sch && content.as_bytes().get(abs - 1) != Some(&b'\\') { in_str = false; }
+            if ch == sch && abs > 0 && bytes[abs - 1] != b'\\' { in_str = false; }
             continue;
         }
         match ch {
+            // Skip // line comments (apostrophes/backticks inside comments
+            // must not trigger string mode)
+            '/' if abs + 1 < bytes.len() && bytes[abs + 1] == b'/' => {
+                in_line_comment = true;
+                continue;
+            }
             '\'' | '"' | '`' => { in_str = true; sch = ch; has_c = true; }
             '{' => { bdepth += 1; has_c = true; }
             '}' => {
