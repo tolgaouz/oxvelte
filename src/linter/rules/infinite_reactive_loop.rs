@@ -26,15 +26,16 @@ impl Rule for InfiniteReactiveLoop {
         let tag_text = &source[base..script.span.end as usize];
         let content_offset = tag_text.find('>').map(|p| base + p + 1).unwrap_or(base);
 
-        let mut top_vars = collect_top_level_vars(content);
+        let (mut top_vars, mut implicit_reactive) = collect_top_level_vars(content);
         // Also collect vars from module script (context="module")
         if let Some(module) = &ctx.ast.module {
-            let mut module_vars = collect_top_level_vars(&module.content);
+            let (mut module_vars, module_implicit) = collect_top_level_vars(&module.content);
             top_vars.append(&mut module_vars);
+            implicit_reactive.extend(module_implicit);
         }
         collect_store_refs(content, &mut top_vars);
         let aliases = collect_aliases(content);
-        let func_info = collect_func_info(content, &top_vars);
+        let func_info = collect_func_info(content, &top_vars, &implicit_reactive);
 
         let mut search_pos = 0;
         while let Some((bs, be)) = find_reactive_block(content, search_pos) {
@@ -45,8 +46,11 @@ impl Rule for InfiniteReactiveLoop {
     }
 }
 
-fn collect_top_level_vars(content: &str) -> Vec<String> {
+/// Returns (all_vars, implicit_reactive_vars).
+/// `implicit_reactive_vars` are vars only declared via `$:` (no explicit let/var/const).
+fn collect_top_level_vars(content: &str) -> (Vec<String>, std::collections::HashSet<String>) {
     let mut vars = Vec::new();
+    let mut implicit_reactive = std::collections::HashSet::new();
     for line in content.lines() {
         let t = line.trim();
         // Handle `export let` and `export var` in addition to `let` and `var`
@@ -72,13 +76,16 @@ fn collect_top_level_vars(content: &str) -> Vec<String> {
                     if !post_eq.starts_with('=') && !post_eq.starts_with('>') {
                         if !vars.contains(&name.to_string()) {
                             vars.push(name.to_string());
+                            implicit_reactive.insert(name.to_string());
                         }
                     }
                 }
             }
         }
     }
-    vars
+    // Remove from implicit set if an explicit declaration exists
+    // (the var was added before the $: line was processed)
+    (vars, implicit_reactive)
 }
 
 /// Extract variable names from a declaration's right-hand side.
@@ -208,9 +215,11 @@ struct FuncInfo {
     all_calls: Vec<String>,
     /// Byte range of the function body within the script content (start, end)
     body_range: (usize, usize),
+    /// Whether the function has assignments inside .then()/.catch() callbacks
+    has_then_catch_assigns: bool,
 }
 
-fn collect_func_info(content: &str, top_vars: &[String]) -> Vec<FuncInfo> {
+fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std::collections::HashSet<String>) -> Vec<FuncInfo> {
     let mut results = Vec::new();
     let lines: Vec<&str> = content.lines().collect();
 
@@ -326,7 +335,39 @@ fn collect_func_info(content: &str, top_vars: &[String]) -> Vec<FuncInfo> {
 
             let body_start = func_start_offset;
             let body_end = if end_line < line_offsets.len() { line_offsets[end_line] + lines[end_line].len() } else { content.len() };
-            results.push(FuncInfo { name, assigns, has_await, assigns_after_await, assign_positions_after_await, all_assign_positions, calls_after_await, all_calls, body_range: (body_start, body_end) });
+
+            // Detect assignments inside .then()/.catch() callbacks
+            // Only track explicitly-declared vars (not implicit $: vars),
+            // matching vendor scope analysis which can't track implicit $: declarations.
+            let func_body = &content[body_start..body_end];
+            let then_catch_regions = find_then_catch_regions(func_body);
+            let mut has_then_catch_assigns = false;
+            if !then_catch_regions.is_empty() {
+                for j in i+1..=end_line {
+                    let line = lines[j];
+                    let lt = line.trim();
+                    let indent = line.len() - lt.len();
+                    let lpos = line_offsets[j] - body_start; // position relative to func body
+                    for var in top_vars {
+                        if implicit_reactive.contains(var) { continue; }
+                        if !lt.contains(var.as_str()) { continue; }
+                        if is_local_declaration(lt, var) { continue; }
+                        if !has_assign(lt, var) { continue; }
+                        // Check if this position is inside a .then()/.catch() region
+                        let in_region = then_catch_regions.iter()
+                            .any(|&(start, end)| lpos + indent >= start && lpos + indent < end);
+                        if in_region {
+                            has_then_catch_assigns = true;
+                            if !assigns_after_await.contains(var) {
+                                assigns_after_await.push(var.clone());
+                            }
+                            assign_positions_after_await.push((var.clone(), line_offsets[j] + indent));
+                        }
+                    }
+                }
+            }
+
+            results.push(FuncInfo { name, assigns, has_await, assigns_after_await, assign_positions_after_await, all_assign_positions, calls_after_await, all_calls, body_range: (body_start, body_end), has_then_catch_assigns });
         }
         i += 1;
     }
@@ -1275,10 +1316,11 @@ fn analyze_block(
             }
         }
 
-        // Check for calls to async functions that assign reactive vars after await
+        // Check for calls to async functions (or functions with .then()/.catch()
+        // callbacks) that assign reactive vars in a different microtask
         if !in_async_ctx {
             for fi in func_info {
-                if !fi.has_await { continue; }
+                if !fi.has_await && !fi.has_then_catch_assigns { continue; }
                 if fi.assigns_after_await.is_empty() { continue; }
                 if local_names.contains(&fi.name) { continue; }
                 // Skip if this function has already been reported in this block
