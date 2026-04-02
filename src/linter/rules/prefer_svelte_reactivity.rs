@@ -672,7 +672,8 @@ fn detect_chained_new_in_template(ctx: &mut LintContext) {
                 }
             }
 
-            search = close + 1;
+            // Advance past "new " but not past args so nested `new Date()` are found
+            search = abs + 4;
         }
     }
 }
