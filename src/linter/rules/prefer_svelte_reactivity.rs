@@ -655,6 +655,7 @@ fn detect_chained_new_in_template(ctx: &mut LintContext) {
 
             // Check if followed by `.mutatingMethod(`
             let after = &source[close + 1..];
+            let mut found_chained = false;
             if after.starts_with('.') {
                 let method_start = &after[1..];
                 for method in builtin.mutating_methods {
@@ -667,7 +668,30 @@ fn detect_chained_new_in_template(ctx: &mut LintContext) {
                             ),
                             Span::new(abs as u32, (close + 1) as u32),
                         );
+                        found_chained = true;
                         break;
+                    }
+                }
+            }
+
+            // Also check: `varName = new Class(...)` where varName is later
+            // mutated in the same handler body.
+            // Skip URL/URLSearchParams — the vendor only flags these at root
+            // scope, and template handlers are never root scope.
+            if !found_chained && builtin.name != "URL" && builtin.name != "URLSearchParams" {
+                if let Some(var_name) = extract_assigned_var(source, abs) {
+                    // Find the enclosing handler body (brace scope)
+                    if let Some((scope_start, scope_end)) = find_enclosing_brace_scope(source, abs) {
+                        let scope_text = &source[scope_start..scope_end];
+                        if has_mutating_call_in_scope(scope_text, &var_name, builtin) {
+                            ctx.diagnostic(
+                                format!(
+                                    "Found a mutable instance of the built-in {} class. Use {} instead.",
+                                    builtin.name, builtin.svelte_name
+                                ),
+                                Span::new(abs as u32, (close + 1) as u32),
+                            );
+                        }
                     }
                 }
             }
@@ -676,6 +700,92 @@ fn detect_chained_new_in_template(ctx: &mut LintContext) {
             search = abs + 4;
         }
     }
+}
+
+/// Extract the variable name from `varName = new Class(...)` or
+/// `const/let varName = new Class(...)` by looking backwards from `new_pos`.
+fn extract_assigned_var(source: &str, new_pos: usize) -> Option<String> {
+    let before = &source[..new_pos];
+    let trimmed = before.trim_end();
+    if !trimmed.ends_with('=') { return None; }
+    let before_eq = trimmed[..trimmed.len() - 1].trim_end();
+    // Check not `==` or `=>`
+    if before_eq.ends_with('=') || before_eq.ends_with('!') || before_eq.ends_with('>') || before_eq.ends_with('<') {
+        return None;
+    }
+    // Extract identifier going backwards
+    let bytes = before_eq.as_bytes();
+    let mut end = bytes.len();
+    while end > 0 && (bytes[end - 1].is_ascii_alphanumeric() || bytes[end - 1] == b'_' || bytes[end - 1] == b'$') {
+        end -= 1;
+    }
+    let var_name = &before_eq[end..];
+    if var_name.is_empty() { return None; }
+    // Skip keywords
+    if matches!(var_name, "return" | "const" | "let" | "var" | "new" | "typeof" | "void" | "delete") {
+        return None;
+    }
+    Some(var_name.to_string())
+}
+
+/// Find the enclosing brace scope `{ ... }` around a position.
+fn find_enclosing_brace_scope(source: &str, pos: usize) -> Option<(usize, usize)> {
+    let bytes = source.as_bytes();
+    // Search backwards for opening brace
+    let mut depth = 0i32;
+    let mut i = pos;
+    let mut scope_start = None;
+    while i > 0 {
+        i -= 1;
+        match bytes[i] {
+            b'}' => depth += 1,
+            b'{' => {
+                if depth == 0 {
+                    scope_start = Some(i);
+                    break;
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    let scope_start = scope_start?;
+
+    // Search forward for closing brace
+    depth = 1;
+    let mut j = scope_start + 1;
+    while j < bytes.len() && depth > 0 {
+        match bytes[j] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 { return Some((scope_start, j + 1)); }
+            }
+            _ => {}
+        }
+        j += 1;
+    }
+    None
+}
+
+/// Check if `varName.mutatingMethod(` appears in the scope text.
+fn has_mutating_call_in_scope(scope_text: &str, var_name: &str, builtin: &BuiltinClass) -> bool {
+    for method in builtin.mutating_methods {
+        let pat = format!("{}.{}(", var_name, method);
+        if scope_text.contains(&pat) { return true; }
+    }
+    for prop in builtin.mutating_props {
+        // Check varName.prop =
+        let pat = format!("{}.{}", var_name, prop);
+        for (pos, _) in scope_text.match_indices(&pat) {
+            let after = &scope_text[pos + pat.len()..];
+            let next = after.trim_start();
+            if next.starts_with('=') && !next.starts_with("==") {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Find the matching closing paren for an opening paren at `pos`.
