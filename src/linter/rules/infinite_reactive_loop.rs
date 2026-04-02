@@ -960,10 +960,8 @@ fn is_in_async_callback(block: &str, pos: usize, all_triggers: &[String]) -> boo
                 } else {
                     // Unmatched ( - check what precedes it
                     let before_paren = before[..i].trim_end();
-                    // .then( or .catch(
-                    if before_paren.ends_with(".then") || before_paren.ends_with(".catch") {
-                        return true;
-                    }
+                    // .then()/.catch() detection is handled by find_then_catch_regions
+                    // (with nested reset logic) — don't duplicate it here.
                     // trigger functions
                     for trigger in all_triggers {
                         if before_paren.ends_with(trigger.as_str()) {
@@ -1091,12 +1089,67 @@ fn has_await_on_prev_line(block: &str, line_start_pos: usize) -> bool {
     found_await_at_depth
 }
 
+/// Check if `pos` is in an "effective" then/catch async context.
+/// The vendor's AST traversal resets `isSameMicroTask=true` when leaving a nested
+/// `.then()/.catch()` callback. So positions AFTER a nested callback ends (but still
+/// inside an outer callback) are NOT considered async. This matches the vendor behavior.
+fn is_in_effective_then_catch(regions: &[(usize, usize)], pos: usize) -> bool {
+    // Find the innermost (smallest) region containing pos
+    let innermost = regions.iter()
+        .filter(|(s, e)| pos >= *s && pos < *e)
+        .min_by_key(|(s, e)| e - s);
+
+    let innermost = match innermost {
+        Some(r) => r,
+        None => return false,
+    };
+
+    // Check if there's a strictly-nested region within the innermost that ends
+    // at or before pos. The vendor resets isSameMicroTask when leaving inner callbacks.
+    let has_inner_that_ended = regions.iter().any(|(s, e)| {
+        *s > innermost.0 && *e < innermost.1 // strictly nested
+            && *e <= pos                       // ended before or at our position
+    });
+
+    !has_inner_that_ended
+}
+
 /// Find byte ranges of .then() and .catch() callback bodies in the block.
 /// Returns Vec<(body_start, body_end)> where body is the content of the callback.
+/// Each callback in `.then(success, error)` gets its own region.
 /// Handles both block bodies `(x) => { ... }` and expression bodies `(x) => expr`.
 fn find_then_catch_regions(block: &str) -> Vec<(usize, usize)> {
     let mut regions = Vec::new();
     let bytes = block.as_bytes();
+
+    // Helper: skip a string literal starting at bytes[i], returns position after closing quote
+    let skip_string = |bytes: &[u8], start: usize| -> usize {
+        let q = bytes[start];
+        let mut j = start + 1;
+        while j < bytes.len() {
+            if bytes[j] == b'\\' { j += 1; }
+            else if bytes[j] == q { return j + 1; }
+            j += 1;
+        }
+        j
+    };
+
+    // Helper: skip a comment starting at bytes[i], returns position after comment
+    let skip_comment = |bytes: &[u8], i: usize| -> Option<usize> {
+        if i + 1 >= bytes.len() || bytes[i] != b'/' { return None; }
+        if bytes[i + 1] == b'/' {
+            let mut j = i + 2;
+            while j < bytes.len() && bytes[j] != b'\n' { j += 1; }
+            return Some(j);
+        }
+        if bytes[i + 1] == b'*' {
+            let mut j = i + 2;
+            while j + 1 < bytes.len() && !(bytes[j] == b'*' && bytes[j + 1] == b'/') { j += 1; }
+            if j + 1 < bytes.len() { return Some(j + 2); }
+            return Some(j);
+        }
+        None
+    };
 
     // Find all `.then(` and `.catch(` positions
     for pattern in &[".then(", ".catch("] {
@@ -1105,68 +1158,92 @@ fn find_then_catch_regions(block: &str) -> Vec<(usize, usize)> {
             let abs = search + pos;
             let after = abs + pattern.len();
 
+            // Scan the arguments of .then(...) / .catch(...)
+            // For each arrow/function callback found, record its body as a region.
             let mut i = after;
             let mut paren_depth = 1i32;
-            let mut body_start = None;
-            let mut body_end = None;
-            let mut found_arrow = false;
 
             while i < bytes.len() && paren_depth > 0 {
+                // Skip comments
+                if let Some(end) = skip_comment(bytes, i) { i = end; continue; }
+                // Skip strings
+                if i < bytes.len() && (bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`') {
+                    i = skip_string(bytes, i); continue;
+                }
+
                 match bytes[i] {
-                    // Skip line comments (avoids treating apostrophes in
-                    // comments like `// There's ...` as string delimiters)
-                    b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
-                        i += 2;
-                        while i < bytes.len() && bytes[i] != b'\n' { i += 1; }
-                        continue;
-                    }
-                    // Skip block comments
-                    b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
-                        i += 2;
-                        while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') { i += 1; }
-                        if i + 1 < bytes.len() { i += 2; }
-                        continue;
-                    }
-                    b'\'' | b'"' | b'`' => {
-                        let q = bytes[i];
-                        i += 1;
-                        while i < bytes.len() {
-                            if bytes[i] == b'\\' { i += 1; }
-                            else if bytes[i] == q { break; }
-                            i += 1;
-                        }
-                    }
-                    b'(' => paren_depth += 1,
+                    b'(' => { paren_depth += 1; i += 1; }
                     b')' => {
                         paren_depth -= 1;
-                        if paren_depth == 0 && body_start.is_some() && body_end.is_none() {
-                            body_end = Some(i);
+                        i += 1;
+                    }
+                    b'=' if i + 1 < bytes.len() && bytes[i + 1] == b'>' && paren_depth == 1 => {
+                        // Arrow function at top level of .then() args
+                        i += 2;
+                        // Skip whitespace
+                        while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r') { i += 1; }
+                        if i < bytes.len() && bytes[i] == b'{' {
+                            // Block body: find matching }
+                            let body_start = i;
+                            let mut brace_depth = 1i32;
+                            i += 1;
+                            while i < bytes.len() && brace_depth > 0 {
+                                if let Some(end) = skip_comment(bytes, i) { i = end; continue; }
+                                if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
+                                    i = skip_string(bytes, i); continue;
+                                }
+                                match bytes[i] {
+                                    b'{' => brace_depth += 1,
+                                    b'}' => { brace_depth -= 1; if brace_depth == 0 { break; } }
+                                    _ => {}
+                                }
+                                i += 1;
+                            }
+                            regions.push((body_start, i));
+                            if i < bytes.len() { i += 1; } // skip the }
+                        } else if i < bytes.len() {
+                            // Expression body: from here to next `,` or `)` at paren_depth 1
+                            let body_start = i;
+                            let mut pd = 0i32;
+                            while i < bytes.len() {
+                                if let Some(end) = skip_comment(bytes, i) { i = end; continue; }
+                                if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
+                                    i = skip_string(bytes, i); continue;
+                                }
+                                match bytes[i] {
+                                    b'(' => pd += 1,
+                                    b')' if pd > 0 => pd -= 1,
+                                    b')' if pd == 0 => break, // end of .then()
+                                    b',' if pd == 0 => break, // next argument
+                                    _ => {}
+                                }
+                                i += 1;
+                            }
+                            regions.push((body_start, i));
                         }
                     }
-                    b'=' if !found_arrow && i + 1 < bytes.len() && bytes[i + 1] == b'>' => {
-                        found_arrow = true;
-                        i += 2;
-                        // Skip whitespace after =>
-                        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t' || bytes[i] == b'\n' || bytes[i] == b'\r') {
+                    b'{' if paren_depth == 1 => {
+                        // function() { ... } body (not arrow)
+                        let body_start = i;
+                        let mut brace_depth = 1i32;
+                        i += 1;
+                        while i < bytes.len() && brace_depth > 0 {
+                            if let Some(end) = skip_comment(bytes, i) { i = end; continue; }
+                            if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
+                                i = skip_string(bytes, i); continue;
+                            }
+                            match bytes[i] {
+                                b'{' => brace_depth += 1,
+                                b'}' => { brace_depth -= 1; if brace_depth == 0 { break; } }
+                                _ => {}
+                            }
                             i += 1;
                         }
-                        if i < bytes.len() && bytes[i] != b'{' {
-                            // Expression body (no block): region from here to end of .then()
-                            body_start = Some(i);
-                        }
-                        // For block body, let the `{` handler below set body_start
-                        continue;
+                        regions.push((body_start, i));
+                        if i < bytes.len() { i += 1; }
                     }
-                    b'{' if body_start.is_none() && paren_depth >= 1 => {
-                        body_start = Some(i);
-                    }
-                    _ => {}
+                    _ => { i += 1; }
                 }
-                i += 1;
-            }
-
-            if let (Some(bs), Some(be)) = (body_start, body_end) {
-                regions.push((bs, be));
             }
 
             search = abs + pattern.len();
@@ -1370,8 +1447,7 @@ fn analyze_block(
         // Determine if this line is in an async context (line-level checks)
         let in_callback = is_in_async_callback(block, line_byte_start, &all_triggers);
         let after_await = has_await_on_prev_line(block, line_byte_start);
-        let in_then_catch = async_callback_regions.iter()
-            .any(|&(start, end)| line_byte_start >= start && line_byte_start < end);
+        let in_then_catch = is_in_effective_then_catch(&async_callback_regions, line_byte_start);
         // Also check if any position within this line falls inside a then/catch region
         // (handles single-line patterns like `$: foo().then((x) => (var = x))`)
         let line_end = line_byte_start + line.len();
@@ -1526,8 +1602,7 @@ fn analyze_block(
                 if let Some(assign_pos) = find_assign_pos(t, var) {
                     let indent = line.len() - t.len();
                     let abs_pos_in_block = line_byte_start + indent + assign_pos;
-                    let in_region = async_callback_regions.iter()
-                        .any(|&(start, end)| abs_pos_in_block >= start && abs_pos_in_block < end);
+                    let in_region = is_in_effective_then_catch(&async_callback_regions, abs_pos_in_block);
                     if in_region {
                         let abs = base + block_start + abs_pos_in_block;
                         ctx.diagnostic(
