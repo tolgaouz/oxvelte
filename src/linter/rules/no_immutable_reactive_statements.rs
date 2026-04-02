@@ -210,14 +210,21 @@ impl Rule for NoImmutableReactiveStatements {
             }
         }
 
-        // Rebuild immutable set excluding each-source consts
-        let immutable: HashSet<&str> = immutable_names.iter()
-            .filter(|&&n| !source.contains(&format!("each {} as", n)))
-            .copied()
-            .collect();
+        // Exclude immutable names that are used as {#each} iterables
+        // (bind: inside {#each} can mutate the array elements, making the
+        // const effectively mutable). But skip names that are shadowed by
+        // {@const} declarations in the template — those {#each} blocks
+        // reference the local variable, not the script-level one.
+        let each_iterable_names = collect_each_iterable_names(&ctx.ast.html);
+        let const_tag_names = collect_const_tag_names(&ctx.ast.html);
+        immutable_names.retain(|n| {
+            // Keep the name unless it's used as an each iterable WITHOUT
+            // being shadowed by a {@const} declaration of the same name
+            !each_iterable_names.contains(*n) || const_tag_names.contains(*n)
+        });
 
         // Add non-reassigned let vars as immutable (excluding props)
-        let all_immutable: HashSet<&str> = immutable.iter().copied()
+        let all_immutable: HashSet<&str> = immutable_names.iter().copied()
             .chain(let_names.iter()
                 .filter(|n| !mutable_lets.contains(*n) && !prop_names.contains(*n))
                 .copied())
@@ -1194,6 +1201,37 @@ fn is_symbol_immutable(
 /// Check if a name is a well-known JavaScript global that the vendor's
 /// scope analysis resolves (through.resolved != null). These are safe to
 /// skip in the immutability check — they don't affect reactivity.
+/// Collect simple identifier names used as {#each} iterables from the template AST.
+fn collect_each_iterable_names(fragment: &crate::ast::Fragment) -> HashSet<String> {
+    let mut names = HashSet::new();
+    walk_template_nodes(fragment, &mut |node| {
+        if let TemplateNode::EachBlock(each) = node {
+            let expr = each.expression.trim();
+            if expr.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') && !expr.is_empty() {
+                names.insert(expr.to_string());
+            }
+        }
+    });
+    names
+}
+
+/// Collect variable names declared by {@const} tags in the template AST.
+fn collect_const_tag_names(fragment: &crate::ast::Fragment) -> HashSet<String> {
+    let mut names = HashSet::new();
+    walk_template_nodes(fragment, &mut |node| {
+        if let TemplateNode::ConstTag(ct) = node {
+            let decl = ct.declaration.trim();
+            if let Some(eq) = decl.find('=') {
+                let lhs = decl[..eq].trim();
+                if lhs.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') && !lhs.is_empty() {
+                    names.insert(lhs.to_string());
+                }
+            }
+        }
+    });
+    names
+}
+
 fn is_known_js_global(name: &str) -> bool {
     matches!(name,
         "Object" | "Array" | "String" | "Number" | "Boolean" | "Date" | "Error"
