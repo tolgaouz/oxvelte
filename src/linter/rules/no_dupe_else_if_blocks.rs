@@ -95,8 +95,24 @@ fn check_alternate(
                     );
                 }
                 seen.push(parsed);
+                check_alternate(&block.alternate, seen, ctx);
+            } else {
+                // {:else} block — check direct {#if} children for covered conditions
+                for node in &block.consequent.nodes {
+                    if let TemplateNode::IfBlock(inner) = node {
+                        let inner_cond = inner.test.trim().to_string();
+                        if !inner_cond.is_empty() {
+                            let parsed = split_or_and(&inner_cond);
+                            if is_covered(&parsed, seen) {
+                                ctx.diagnostic(
+                                    "This branch can never execute. Its condition is a duplicate or covered by previous conditions in the `{#if}` / `{:else if}` chain.",
+                                    inner.span,
+                                );
+                            }
+                        }
+                    }
+                }
             }
-            check_alternate(&block.alternate, seen, ctx);
         }
     }
 }
