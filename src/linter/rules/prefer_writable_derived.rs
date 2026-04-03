@@ -10,7 +10,7 @@ fn is_single_assignment_effect(body: &str, assign_pattern: &str) -> bool {
     let mut depth = 0i32;
     let mut stmt_count = 0;
     let mut first_stmt_start = None;
-    let mut first_stmt_end = None;
+    let mut _first_stmt_end = None;
     let mut in_str = false;
     let mut str_ch = 0u8;
     let mut i = 0;
@@ -31,7 +31,7 @@ fn is_single_assignment_effect(body: &str, assign_pattern: &str) -> bool {
                 if has_content {
                     stmt_count += 1;
                     if stmt_count == 1 {
-                        first_stmt_end = Some(i);
+                        _first_stmt_end = Some(i);
                     }
                 }
                 has_content = false;
@@ -54,7 +54,7 @@ fn is_single_assignment_effect(body: &str, assign_pattern: &str) -> bool {
     if has_content {
         stmt_count += 1;
         if stmt_count == 1 {
-            first_stmt_end = Some(bytes.len());
+            _first_stmt_end = Some(bytes.len());
         }
     }
 
