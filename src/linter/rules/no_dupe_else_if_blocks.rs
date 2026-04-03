@@ -25,21 +25,14 @@ impl Rule for NoDupeElseIfBlocks {
     }
 }
 
-/// Split a condition string by `||` (top-level), then each OR branch by `&&`.
-/// Returns Vec<Vec<String>>: outer = OR branches, inner = AND operands.
+const MSG: &str = "This branch can never execute. Its condition is a duplicate or covered by previous conditions in the `{#if}` / `{:else if}` chain.";
+
 fn split_or_and(cond: &str) -> Vec<Vec<String>> {
-    split_top_level(cond.trim(), "||")
-        .into_iter()
-        .map(|branch| {
-            split_top_level(&branch, "&&")
-                .into_iter()
-                .map(|s| s.trim().to_string())
-                .collect()
-        })
+    split_top_level(cond.trim(), "||").into_iter()
+        .map(|branch| split_top_level(&branch, "&&").into_iter().map(|s| s.trim().to_string()).collect())
         .collect()
 }
 
-/// Split an expression at a top-level operator (||, &&), respecting parentheses.
 fn split_top_level(s: &str, op: &str) -> Vec<String> {
     let bytes = s.as_bytes();
     let op_bytes = op.as_bytes();
@@ -63,54 +56,28 @@ fn split_top_level(s: &str, op: &str) -> Vec<String> {
     parts
 }
 
-/// Check if condition `current` is a subset of (fully covered by) any previously seen condition.
-/// A condition is "covered" if every OR branch of `current` is a subset of some OR branch of some `prev`.
 fn is_covered(current: &[Vec<String>], seen: &[Vec<Vec<String>>]) -> bool {
-    // For each OR branch of `current`, check if it's a subset of some OR branch of some `prev`
-    current.iter().all(|cur_and_operands| {
-        seen.iter().any(|prev| {
-            prev.iter().any(|prev_and_operands| {
-                // cur_and_operands is a subset of prev_and_operands if
-                // every AND operand in prev is present in cur
-                prev_and_operands.iter().all(|p| cur_and_operands.contains(p))
-            })
-        })
+    current.iter().all(|cur| {
+        seen.iter().any(|prev| prev.iter().any(|prev_and| prev_and.iter().all(|p| cur.contains(p))))
     })
 }
 
-fn check_alternate(
-    alternate: &Option<Box<crate::ast::TemplateNode>>,
-    seen: &mut Vec<Vec<Vec<String>>>,
-    ctx: &mut LintContext<'_>,
-) {
-    if let Some(alt) = alternate {
-        if let TemplateNode::IfBlock(block) = alt.as_ref() {
-            let condition = block.test.trim().to_string();
-            if !condition.is_empty() {
-                let parsed = split_or_and(&condition);
-                if is_covered(&parsed, seen) {
-                    ctx.diagnostic(
-                        "This branch can never execute. Its condition is a duplicate or covered by previous conditions in the `{#if}` / `{:else if}` chain.",
-                        block.span,
-                    );
-                }
-                seen.push(parsed);
-                check_alternate(&block.alternate, seen, ctx);
-            } else {
-                // {:else} block — check direct {#if} children for covered conditions
-                for node in &block.consequent.nodes {
-                    if let TemplateNode::IfBlock(inner) = node {
-                        let inner_cond = inner.test.trim().to_string();
-                        if !inner_cond.is_empty() {
-                            let parsed = split_or_and(&inner_cond);
-                            if is_covered(&parsed, seen) {
-                                ctx.diagnostic(
-                                    "This branch can never execute. Its condition is a duplicate or covered by previous conditions in the `{#if}` / `{:else if}` chain.",
-                                    inner.span,
-                                );
-                            }
-                        }
-                    }
+fn check_alternate(alternate: &Option<Box<TemplateNode>>, seen: &mut Vec<Vec<Vec<String>>>, ctx: &mut LintContext<'_>) {
+    let Some(alt) = alternate else { return };
+    let TemplateNode::IfBlock(block) = alt.as_ref() else { return };
+    let condition = block.test.trim();
+    if !condition.is_empty() {
+        let parsed = split_or_and(condition);
+        if is_covered(&parsed, seen) { ctx.diagnostic(MSG, block.span); }
+        seen.push(parsed);
+        check_alternate(&block.alternate, seen, ctx);
+    } else {
+        for node in &block.consequent.nodes {
+            if let TemplateNode::IfBlock(inner) = node {
+                let cond = inner.test.trim();
+                if !cond.is_empty() {
+                    let parsed = split_or_and(cond);
+                    if is_covered(&parsed, seen) { ctx.diagnostic(MSG, inner.span); }
                 }
             }
         }
