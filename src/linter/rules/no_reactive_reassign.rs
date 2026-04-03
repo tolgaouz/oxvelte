@@ -7,6 +7,11 @@ use std::collections::HashSet;
 
 pub struct NoReactiveReassign;
 
+const MUTATING_METHODS: &[&str] = &[
+    "push(", "pop(", "shift(", "unshift(", "splice(",
+    "sort(", "reverse(", "fill(", "copyWithin(",
+];
+
 impl Rule for NoReactiveReassign {
     fn name(&self) -> &'static str {
         "svelte/no-reactive-reassign"
@@ -94,13 +99,19 @@ impl Rule for NoReactiveReassign {
 
             if reactive_vars.is_empty() { return; }
 
-            /// Check if `pos` is inside a function scope that shadows `var_name`
-            /// (the variable appears as a parameter or local declaration in the
-            /// enclosing function).
+            fn find_matching_paren_rev(content: &str, close_pos: usize) -> Option<usize> {
+                let mut depth = 0i32;
+                for (i, ch) in content[..=close_pos].char_indices().rev() {
+                    match ch {
+                        ')' => depth += 1,
+                        '(' => { depth -= 1; if depth == 0 { return Some(i); } }
+                        _ => {}
+                    }
+                }
+                None
+            }
+
             fn is_shadowed_in_scope(content: &str, pos: usize, var_name: &str) -> bool {
-                // Walk backwards from pos, tracking brace depth, to find each
-                // enclosing `{`. For each one that belongs to a function, check
-                // if var_name is a parameter or local declaration.
                 let before = &content[..pos];
                 let mut search_end = before.len();
 
@@ -110,111 +121,55 @@ impl Rule for NoReactiveReassign {
                     for (i, ch) in before[..search_end].char_indices().rev() {
                         match ch {
                             '}' => depth += 1,
-                            '{' => {
-                                if depth == 0 {
-                                    func_start = Some(i);
-                                    break;
-                                }
-                                depth -= 1;
-                            }
+                            '{' => { if depth == 0 { func_start = Some(i); break; } depth -= 1; }
                             _ => {}
                         }
                     }
                     let Some(brace_pos) = func_start else { return false };
 
-                    // Check if this brace belongs to a function/arrow/method
-                    // (not an if/for/while/switch/else/catch block)
                     let before_brace = content[..brace_pos].trim_end();
                     let is_control_flow = if before_brace.ends_with(')') {
-                        // Find the matching `(` for the closing `)` by counting parens
-                        let matching_paren = {
-                            let mut depth = 0i32;
-                            let mut result = None;
-                            for (i, ch) in before_brace.char_indices().rev() {
-                                match ch {
-                                    ')' => depth += 1,
-                                    '(' => {
-                                        depth -= 1;
-                                        if depth == 0 {
-                                            result = Some(i);
-                                            break;
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            result
-                        };
-                        if let Some(paren_start) = matching_paren {
-                            let before_paren = before_brace[..paren_start].trim_end();
-                            before_paren.ends_with("if")
-                                || before_paren.ends_with("for")
-                                || before_paren.ends_with("while")
-                                || before_paren.ends_with("switch")
-                                || before_paren.ends_with("catch")
-                        } else {
-                            false
-                        }
+                        if let Some(paren_start) = find_matching_paren_rev(before_brace, before_brace.len() - 1) {
+                            let bp = before_brace[..paren_start].trim_end();
+                            bp.ends_with("if") || bp.ends_with("for") || bp.ends_with("while")
+                                || bp.ends_with("switch") || bp.ends_with("catch")
+                        } else { false }
                     } else {
-                        before_brace.ends_with("else")
-                            || before_brace.ends_with("try")
+                        before_brace.ends_with("else") || before_brace.ends_with("try")
                             || before_brace.ends_with("finally")
                     };
-                    let has_paren = before_brace.contains('(');
                     let is_function_scope = !is_control_flow && (
                         before_brace.ends_with(')')
                         || before_brace.ends_with("=>")
-                        || (has_paren && before_brace.rfind(')').is_some_and(|p| {
+                        || (before_brace.contains('(') && before_brace.rfind(')').is_some_and(|p| {
                             let after_paren = before_brace[p + 1..].trim();
                             after_paren.is_empty() || after_paren.starts_with(':')
                         }))
                     );
 
                     if is_function_scope {
-                        // Check parameters — find matching `(` for the last `)`
                         if let Some(paren_end) = before_brace.rfind(')') {
-                            let matching = {
-                                let mut d = 0i32;
-                                let mut r = None;
-                                for (i, ch) in content[..=paren_end].char_indices().rev() {
-                                    match ch {
-                                        ')' => d += 1,
-                                        '(' => { d -= 1; if d == 0 { r = Some(i); break; } }
-                                        _ => {}
-                                    }
-                                }
-                                r
-                            };
-                            if let Some(paren_start) = matching {
+                            if let Some(paren_start) = find_matching_paren_rev(content, paren_end) {
                                 let params = &content[paren_start + 1..paren_end];
                                 for param in params.split(',') {
-                                    let param = param.trim();
-                                    let param_name = param.split(|c: char| c == ':' || c == '=' || c == '?' || c == ' ')
+                                    let name = param.trim().split(|c: char| c == ':' || c == '=' || c == '?' || c == ' ')
                                         .next().unwrap_or("").trim();
-                                    if param_name == var_name { return true; }
+                                    if name == var_name { return true; }
                                 }
                             }
                         }
-                        // Check local declarations between function start and pos
                         let scope_content = &content[brace_pos..pos];
                         for line in scope_content.lines() {
                             let t = line.trim();
                             for kw in &["const ", "let ", "var "] {
-                                if t.starts_with(kw) {
-                                    let rest = &t[kw.len()..];
-                                    let name_end = rest.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
+                                if let Some(rest) = t.strip_prefix(kw) {
+                                    let end = rest.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
                                         .unwrap_or(rest.len());
-                                    if name_end > 0 && &rest[..name_end] == var_name {
-                                        return true;
-                                    }
+                                    if end > 0 && &rest[..end] == var_name { return true; }
                                 }
                             }
                         }
-                        // This function scope doesn't shadow the variable,
-                        // but an outer function scope might — keep walking up.
                     }
-
-                    // Not a function brace (if/for/while block) — keep walking up
                     search_end = brace_pos;
                 }
             }
@@ -316,12 +271,9 @@ impl Rule for NoReactiveReassign {
 
             // Step 2b: Check for mutating method calls on reactive vars (only if props checking enabled)
             if check_props {
-            let mutating_methods = [
-                "push(", "pop(", "shift(", "unshift(", "splice(",
-                "sort(", "reverse(", "fill(", "copyWithin(",
-            ];
+            let mutating_methods = MUTATING_METHODS;
             for var in &reactive_vars {
-                for method in &mutating_methods {
+                for method in mutating_methods {
                     let pattern = format!("{}.{}", var, method);
                     let mut search_from = 0;
                     while let Some(pos) = content[search_from..].find(&pattern) {
@@ -355,7 +307,7 @@ impl Rule for NoReactiveReassign {
                     }
                 }
                 // Also check chained member mutations: var.member.push(, var.member[idx].push(, etc.
-                for method in &mutating_methods {
+                for method in mutating_methods {
                     // Search for `var.` followed by member chain then `.method(`
                     let prefix = format!("{}.", var);
                     let mut search_from = 0;
@@ -386,7 +338,7 @@ impl Rule for NoReactiveReassign {
                                 has_member = true;
                                 // Check if the next part is a mutating method
                                 if has_member {
-                                    for m in &mutating_methods {
+                                    for m in mutating_methods {
                                         if rest.starts_with(*m) {
                                             let line_start = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
                                             let line = content[line_start..].trim_start();
@@ -690,10 +642,7 @@ impl Rule for NoReactiveReassign {
                             // Check event handlers for property assignments and mutating
                             // method calls on reactive vars and their store subscriptions.
                             if check_props {
-                                let mutating_methods = [
-                                    "push(", "pop(", "shift(", "unshift(", "splice(",
-                                    "sort(", "reverse(", "fill(", "copyWithin(",
-                                ];
+                                let mutating_methods = MUTATING_METHODS;
                                 for var in &reactive_vars {
                                     // Check both var.prop and $var.prop patterns
                                     for prefix in &[var.clone(), format!("${}", var)] {
@@ -723,7 +672,7 @@ impl Rule for NoReactiveReassign {
                                                         let skip = if rest.starts_with("?.") { 2 } else { 1 };
                                                         let r = &rest[skip..];
                                                         // Check if followed by a mutating method
-                                                        for m in &mutating_methods {
+                                                        for m in mutating_methods {
                                                             if r.starts_with(*m) {
                                                                 let abs_pos = span.start as usize + pos;
                                                                 ctx.diagnostic(
