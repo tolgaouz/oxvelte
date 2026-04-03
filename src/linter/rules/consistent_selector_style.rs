@@ -1,69 +1,46 @@
 //! `svelte/consistent-selector-style` — enforce consistent style selector usage
 //! (e.g. prefer class selectors over element selectors).
 
-use crate::linter::{walk_template_nodes, LintContext, Rule};
+use crate::linter::{LintContext, Rule};
 use crate::ast::{TemplateNode, Attribute, AttributeValue};
 use oxc::span::Span;
 use std::collections::{HashMap, HashSet};
 
 pub struct ConsistentSelectorStyle;
 
-/// Collect class names and their usage info from the template.
-/// Returns a map of class_name -> (count of non-component uses, set_of_html_element_types)
-/// Components are excluded because they pass class as props, not as real DOM class.
-fn collect_class_usage(html: &[TemplateNode]) -> HashMap<String, (usize, HashSet<String>)> {
-    let mut usage: HashMap<String, (usize, HashSet<String>)> = HashMap::new();
+/// Collect class, id, and element usage from the template in a single walk.
+fn collect_template_info(html: &[TemplateNode]) -> (
+    HashMap<String, (usize, HashSet<String>)>,
+    HashMap<String, String>,
+    HashMap<String, usize>,
+) {
+    let mut class_usage: HashMap<String, (usize, HashSet<String>)> = HashMap::new();
+    let mut id_usage: HashMap<String, String> = HashMap::new();
+    let mut element_usage: HashMap<String, usize> = HashMap::new();
     walk_template_nodes_slice(html, &mut |node| {
         if let TemplateNode::Element(el) = node {
-            // Skip components (start with uppercase or contain '.')
+            *element_usage.entry(el.name.clone()).or_insert(0) += 1;
             let is_component = el.name.starts_with(|c: char| c.is_uppercase()) || el.name.contains('.');
-            if is_component { return; }
             for attr in &el.attributes {
                 if let Attribute::NormalAttribute { name, value, .. } = attr {
-                    if name == "class" {
+                    if name == "class" && !is_component {
                         if let AttributeValue::Static(val) = value {
                             for cls in val.split_whitespace() {
-                                let entry = usage.entry(cls.to_string()).or_insert((0, HashSet::new()));
+                                let entry = class_usage.entry(cls.to_string()).or_insert((0, HashSet::new()));
                                 entry.0 += 1;
                                 entry.1.insert(el.name.clone());
                             }
                         }
-                    }
-                }
-            }
-        }
-    });
-    usage
-}
-
-/// Collect element IDs and their element types from the template.
-fn collect_id_usage(html: &[TemplateNode]) -> HashMap<String, String> {
-    let mut ids = HashMap::new();
-    walk_template_nodes_slice(html, &mut |node| {
-        if let TemplateNode::Element(el) = node {
-            for attr in &el.attributes {
-                if let Attribute::NormalAttribute { name, value, .. } = attr {
-                    if name == "id" {
+                    } else if name == "id" {
                         if let AttributeValue::Static(val) = value {
-                            ids.insert(val.clone(), el.name.clone());
+                            id_usage.insert(val.clone(), el.name.clone());
                         }
                     }
                 }
             }
         }
     });
-    ids
-}
-
-/// Collect element tag names used in the template (with counts).
-fn collect_element_usage(html: &[TemplateNode]) -> HashMap<String, usize> {
-    let mut usage: HashMap<String, usize> = HashMap::new();
-    walk_template_nodes_slice(html, &mut |node| {
-        if let TemplateNode::Element(el) = node {
-            *usage.entry(el.name.clone()).or_insert(0) += 1;
-        }
-    });
-    usage
+    (class_usage, id_usage, element_usage)
 }
 
 /// Check if an element with a class is inside an each block or component (making class appropriate).
@@ -234,9 +211,7 @@ impl Rule for ConsistentSelectorStyle {
         let base = style.span.start as usize;
 
         // Collect template usage information for smart analysis
-        let class_usage = collect_class_usage(&ctx.ast.html.nodes);
-        let id_usage = collect_id_usage(&ctx.ast.html.nodes);
-        let element_usage = collect_element_usage(&ctx.ast.html.nodes);
+        let (class_usage, id_usage, element_usage) = collect_template_info(&ctx.ast.html.nodes);
         let html_nodes = &ctx.ast.html.nodes;
 
         const ELEMENT_SELECTORS: &[&str] = &[
@@ -367,7 +342,7 @@ impl Rule for ConsistentSelectorStyle {
                             trimmed
                         };
                         flag_selectors_in_text(ctx, sel_text, base + byte_offset + leading,
-                            &check_class_selector, &check_type_selector, &check_id_selector, ELEMENT_SELECTORS, preferred);
+                            &check_class_selector, &check_type_selector, &check_id_selector, ELEMENT_SELECTORS);
                     }
 
                     byte_offset += line.len() + 1;
@@ -382,7 +357,7 @@ impl Rule for ConsistentSelectorStyle {
                     if let Some(close_paren) = find_matching_paren(&line[inner_start..]) {
                         let inner = &line[inner_start..inner_start + close_paren];
                         flag_selectors_in_text(ctx, inner, base + byte_offset + inner_start,
-                            &check_class_selector, &check_type_selector, &check_id_selector, ELEMENT_SELECTORS, preferred);
+                            &check_class_selector, &check_type_selector, &check_id_selector, ELEMENT_SELECTORS);
                     }
                     search_pos = inner_start;
                 }
@@ -428,7 +403,7 @@ impl Rule for ConsistentSelectorStyle {
                     };
 
                     flag_selectors_in_text(ctx, sel, base + byte_offset + sel_offset_in_line,
-                        &check_class_selector, &check_type_selector, &check_id_selector, ELEMENT_SELECTORS, preferred);
+                        &check_class_selector, &check_type_selector, &check_id_selector, ELEMENT_SELECTORS);
                 }
             }
 
@@ -461,7 +436,6 @@ fn flag_selectors_in_text(
     check_type: &dyn Fn(&str) -> Option<String>,
     check_id: &dyn Fn(&str) -> Option<String>,
     element_selectors: &[&str],
-    _preferred: &str,
 ) {
     let bytes = text.as_bytes();
     let mut pos = 0usize;
