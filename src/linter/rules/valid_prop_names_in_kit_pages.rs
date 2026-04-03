@@ -100,20 +100,11 @@ impl Rule for ValidPropNamesInKitPages {
     }
 }
 
-/// Find the position of `{` in `let {` searching backward from the end of `s`.
-/// Returns the byte offset of `{` within `s`.
 fn rfind_let_brace(s: &str) -> Option<usize> {
-    let bytes = s.as_bytes();
-    let mut i = s.len();
-    while i > 0 {
-        i -= 1;
-        if bytes[i] == b'{' {
-            let before_brace = &s[..i];
-            let trimmed = before_brace.trim_end();
-            if trimmed.ends_with("let") {
-                return Some(i);
-            }
-        }
+    let mut pos = s.len();
+    while let Some(p) = s[..pos].rfind('{') {
+        if s[..p].trim_end().ends_with("let") { return Some(p); }
+        pos = p;
     }
     None
 }
