@@ -1,6 +1,6 @@
 //! `svelte/no-top-level-browser-globals` — disallow top-level access to browser globals.
 
-use crate::linter::{walk_template_nodes, LintContext, Rule};
+use crate::linter::{LintContext, Rule};
 use crate::ast::TemplateNode;
 use oxc::span::Span;
 
@@ -350,11 +350,6 @@ fn check_template_nodes(nodes: &[TemplateNode], ctx: &mut LintContext<'_>, in_br
             _ => {}
         }
     }
-}
-
-fn check_single_node(node: &TemplateNode, ctx: &mut LintContext<'_>, in_browser: bool) {
-    let nodes = [node.clone()];
-    check_template_nodes(&nodes, ctx, in_browser);
 }
 
 fn check_expr_for_globals(expr: &str, span: Span, ctx: &mut LintContext<'_>) {

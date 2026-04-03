@@ -112,11 +112,11 @@ impl PreferSvelteReactivity {
         is_svelte_module: bool,
     ) {
         use oxc::allocator::Allocator;
-        use oxc::ast::ast::{AssignmentTarget, Expression};
+        use oxc::ast::ast::Expression;
         use oxc::ast::AstKind;
         use oxc::parser::Parser;
         use oxc::semantic::{SemanticBuilder, SymbolId};
-        use oxc::span::{GetSpan, SourceType};
+        use oxc::span::SourceType;
 
         let alloc = Allocator::default();
         let source_type = if is_ts { SourceType::ts() } else { SourceType::mjs() };
