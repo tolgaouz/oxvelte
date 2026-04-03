@@ -10,90 +10,53 @@ impl Rule for NoGotoWithoutBase {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        if let Some(script) = &ctx.ast.instance {
-            let content = &script.content;
-            let imports = parse_imports(content);
+        let Some(script) = &ctx.ast.instance else { return };
+        let content = &script.content;
+        let imports = parse_imports(content);
+        let resolve = |local: &str, imported: &str, suffix: &str| {
+            if imported == "*" { format!("{}.{}", local, suffix) } else { local.to_string() }
+        };
+        let goto_names: Vec<String> = imports.iter()
+            .filter(|(_, imp, m)| (imp == "goto" || imp == "*") && m == "$app/navigation")
+            .map(|(l, imp, _)| resolve(l, imp, "goto")).collect();
+        if goto_names.is_empty() { return; }
 
-            // Find how goto is imported (direct or aliased)
-            let goto_local_names: Vec<String> = imports.iter()
-                .filter(|(_, imported, module)| {
-                    (imported == "goto" || imported == "*") && module == "$app/navigation"
-                })
-                .map(|(local, imported, _)| {
-                    if imported == "*" {
-                        format!("{}.goto", local)
-                    } else {
-                        local.clone()
-                    }
-                })
-                .collect();
+        let base_local: Option<String> = imports.iter()
+            .find(|(_, imp, m)| (imp == "base" || imp == "*") && m == "$app/paths")
+            .map(|(l, imp, _)| resolve(l, imp, "base"));
 
-            if goto_local_names.is_empty() { return; }
+        let base = script.span.start as usize;
+        let gt = ctx.source[base..script.span.end as usize].find('>').unwrap_or(0);
 
-            // Find local name for base from $app/paths
-            let base_local: Option<String> = imports.iter()
-                .find(|(_, imported, module)| {
-                    (imported == "base" || imported == "*") && module == "$app/paths"
-                })
-                .map(|(local, imported, _)| {
-                    if imported == "*" { format!("{}.base", local) } else { local.clone() }
-                });
-
-            let base = script.span.start as usize;
-            let source = ctx.source;
-            let tag_text = &source[base..script.span.end as usize];
-            let gt = tag_text.find('>').unwrap_or(0);
-
-            for goto_name in &goto_local_names {
-                let search_pattern = format!("{}(", goto_name);
-                let mut search_from = 0;
-                while let Some(pos) = content[search_from..].find(&search_pattern) {
-                    let abs = search_from + pos;
-                    // Word boundary check
-                    if abs > 0 {
-                        let prev = content.as_bytes()[abs - 1];
-                        if prev.is_ascii_alphanumeric() || prev == b'_' {
-                            search_from = abs + search_pattern.len();
-                            continue;
-                        }
-                    }
-                    let rest = &content[abs + search_pattern.len()..];
-                    let trimmed = rest.trim_start();
-
-                    // Check if the argument is a string literal (not an absolute URI)
-                    if trimmed.starts_with('\'') || trimmed.starts_with('"') || trimmed.starts_with('`') {
-                        let quote = trimmed.as_bytes()[0];
-                        let inner = &trimmed[1..];
-                        let is_absolute_uri = if let Some(end) = inner.find(quote as char) {
-                            let s = &inner[..end];
-                            s.starts_with("http://") || s.starts_with("https://")
-                                || s.starts_with("mailto:") || s.starts_with("tel:")
-                                || s.starts_with("//")
-                        } else { false };
-
-                        if !is_absolute_uri {
-                            // Check if base is used as prefix in this goto call
-                            let call_text = &content[abs..];
-                            let call_end = call_text.find(')').unwrap_or(call_text.len());
-                            let call_body = &call_text[..call_end];
-                            let uses_base = if let Some(ref base_name) = base_local {
-                                call_body.contains(&format!("`${{{}}}", base_name)) ||
-                                call_body.contains(&format!("{} +", base_name)) ||
-                                call_body.contains(&format!("{}+", base_name))
-                            } else { false };
-
-                            if !uses_base {
-                                let source_pos = base + gt + 1 + abs;
-                                ctx.diagnostic(
-                                    format!("Use `base` from `$app/paths` when calling `goto` with an absolute path."),
-                                    oxc::span::Span::new(source_pos as u32, (source_pos + search_pattern.len()) as u32),
-                                );
-                            }
-                        }
-                    }
-
-                    search_from = abs + search_pattern.len();
+        for goto_name in &goto_names {
+            let pat = format!("{}(", goto_name);
+            let mut search_from = 0;
+            while let Some(pos) = content[search_from..].find(&pat) {
+                let abs = search_from + pos;
+                if abs > 0 && { let p = content.as_bytes()[abs - 1]; p.is_ascii_alphanumeric() || p == b'_' } {
+                    search_from = abs + pat.len(); continue;
                 }
+                let trimmed = content[abs + pat.len()..].trim_start();
+                if matches!(trimmed.as_bytes().first(), Some(b'\'' | b'"' | b'`')) {
+                    let quote = trimmed.as_bytes()[0];
+                    let inner = &trimmed[1..];
+                    let is_abs_uri = inner.find(quote as char).map_or(false, |end| {
+                        let s = &inner[..end];
+                        s.starts_with("http://") || s.starts_with("https://") || s.starts_with("mailto:") || s.starts_with("tel:") || s.starts_with("//")
+                    });
+                    if !is_abs_uri {
+                        let call_body = &content[abs..abs + content[abs..].find(')').unwrap_or(content.len() - abs)];
+                        let uses_base = base_local.as_ref().map_or(false, |bn| {
+                            call_body.contains(&format!("`${{{}}}", bn)) || call_body.contains(&format!("{} +", bn)) || call_body.contains(&format!("{}+", bn))
+                        });
+                        if !uses_base {
+                            let sp = base + gt + 1 + abs;
+                            ctx.diagnostic("Use `base` from `$app/paths` when calling `goto` with an absolute path.",
+                                oxc::span::Span::new(sp as u32, (sp + pat.len()) as u32));
+                        }
+                    }
+                }
+                search_from = abs + pat.len();
             }
         }
     }
