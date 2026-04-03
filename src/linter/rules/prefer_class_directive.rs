@@ -102,39 +102,9 @@ impl Rule for PreferClassDirective {
 }
 
 /// Check if an expression is a ternary with two non-empty single-word class name branches.
-/// e.g. `c ? 'active' : 'inactive'` can be `class:active={c} class:inactive={!c}`
 fn is_dual_class_ternary(expr: &str) -> bool {
-    let trimmed = expr.trim();
-    if !trimmed.contains('?') || !trimmed.contains(':') { return false; }
-    // Find ? and : at depth 0
-    let mut depth = 0;
-    let mut q_pos = None;
-    for (i, c) in trimmed.char_indices() {
-        match c {
-            '(' | '[' | '{' => depth += 1,
-            ')' | ']' | '}' => depth -= 1,
-            '?' if depth == 0 && q_pos.is_none() => q_pos = Some(i),
-            _ => {}
-        }
-    }
-    let q_pos = match q_pos { Some(p) => p, None => return false };
-    let branches = &trimmed[q_pos + 1..];
-    // Find colon at depth 0
-    let mut depth = 0;
-    let mut c_pos = None;
-    for (i, c) in branches.char_indices() {
-        match c {
-            '(' | '[' | '{' => depth += 1,
-            ')' | ']' | '}' => depth -= 1,
-            ':' if depth == 0 => { c_pos = Some(i); break; }
-            _ => {}
-        }
-    }
-    let c_pos = match c_pos { Some(p) => p, None => return false };
-    let true_branch = branches[..c_pos].trim();
-    let false_branch = branches[c_pos + 1..].trim();
-    // Both branches must be non-empty single-word string literals (not just whitespace)
-    is_single_class_name(true_branch) && is_single_class_name(false_branch)
+    split_ternary(expr.trim())
+        .map_or(false, |(_, t, f)| is_single_class_name(t) && is_single_class_name(f))
 }
 
 fn is_single_class_name(s: &str) -> bool {
