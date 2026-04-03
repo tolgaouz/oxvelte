@@ -6,6 +6,7 @@ use crate::ast::{TemplateNode, Attribute, AttributeValue, AttributeValuePart};
 use std::collections::{HashSet, HashMap};
 
 const STORE_FACTORIES: &[&str] = &["writable", "readable", "derived"];
+const RAW_STORE_MSG: &str = "Use the $ prefix or the get function to access reactive values instead of accessing the raw store.";
 
 fn check_expr_for_raw_store(
     expr: &str, span: oxc::span::Span,
@@ -22,7 +23,7 @@ fn check_expr_for_raw_store(
                 && !expr.contains(&format!("get({})", var))
             {
                 ctx.diagnostic(
-                    "Use the $ prefix or the get function to access reactive values instead of accessing the raw store.",
+                    RAW_STORE_MSG,
                     span,
                 );
             }
@@ -170,7 +171,7 @@ impl Rule for RequireStoreReactiveAccess {
                 if pos > 0 && content.as_bytes()[pos - 1] == b'$' { continue; }
                 let src_pos = content_offset + pos;
                 ctx.diagnostic(
-                    "Use the $ prefix or the get function to access reactive values instead of accessing the raw store.",
+                    RAW_STORE_MSG,
                     oxc::span::Span::new(src_pos as u32, (src_pos + raw_interp.len()) as u32),
                 );
             }
@@ -270,7 +271,7 @@ impl Rule for RequireStoreReactiveAccess {
                     if is_const_store(var) {
                         let src_pos = content_offset + pos;
                         ctx.diagnostic(
-                            "Use the $ prefix or the get function to access reactive values instead of accessing the raw store.",
+                            RAW_STORE_MSG,
                             oxc::span::Span::new(src_pos as u32, (src_pos + var.len()) as u32),
                         );
                     }
@@ -289,7 +290,7 @@ impl Rule for RequireStoreReactiveAccess {
                     // for...in/of → flag all stores, don't skip
                     let src_pos = content_offset + pos;
                     ctx.diagnostic(
-                        "Use the $ prefix or the get function to access reactive values instead of accessing the raw store.",
+                        RAW_STORE_MSG,
                         oxc::span::Span::new(src_pos as u32, (src_pos + var.len()) as u32),
                     );
                     continue;
@@ -303,7 +304,7 @@ impl Rule for RequireStoreReactiveAccess {
                         if is_const_store(var) {
                             let src_pos = content_offset + pos;
                             ctx.diagnostic(
-                                "Use the $ prefix or the get function to access reactive values instead of accessing the raw store.",
+                                RAW_STORE_MSG,
                                 oxc::span::Span::new(src_pos as u32, (src_pos + var.len()) as u32),
                             );
                         }
@@ -313,7 +314,7 @@ impl Rule for RequireStoreReactiveAccess {
                         // switch/while → flag all
                         let src_pos = content_offset + pos;
                         ctx.diagnostic(
-                            "Use the $ prefix or the get function to access reactive values instead of accessing the raw store.",
+                            RAW_STORE_MSG,
                             oxc::span::Span::new(src_pos as u32, (src_pos + var.len()) as u32),
                         );
                         continue;
@@ -350,7 +351,7 @@ impl Rule for RequireStoreReactiveAccess {
                 // FORBIDDEN patterns: store++, --store, -store, +store, ~store, store += x, store`tag`
                 let src_pos = content_offset + pos;
                 ctx.diagnostic(
-                    "Use the $ prefix or the get function to access reactive values instead of accessing the raw store.",
+                    RAW_STORE_MSG,
                     oxc::span::Span::new(src_pos as u32, (src_pos + var.len()) as u32),
                 );
             }
@@ -417,7 +418,7 @@ impl Rule for RequireStoreReactiveAccess {
                                 // Shorthand: use:store, style:color, class:store — name IS the store
                                 if dir_name == var.as_str() && is_shorthand {
                                     ctx.diagnostic(
-                                        "Use the $ prefix or the get function to access reactive values instead of accessing the raw store.",
+                                        RAW_STORE_MSG,
                                         *span,
                                     );
                                     continue;
@@ -430,7 +431,7 @@ impl Rule for RequireStoreReactiveAccess {
                                             let expr = val[open+1..close].trim();
                                             if expr == var.as_str() && !expr.starts_with('$') {
                                                 ctx.diagnostic(
-                                                    "Use the $ prefix or the get function to access reactive values instead of accessing the raw store.",
+                                                    RAW_STORE_MSG,
                                                     *span,
                                                 );
                                             }
@@ -442,34 +443,10 @@ impl Rule for RequireStoreReactiveAccess {
                         if let Attribute::Spread { span } = attr {
                             let region = &ctx.source[span.start as usize..span.end as usize];
                             for var in &store_vars_clone {
-                                // Use word-boundary check instead of simple contains
-                                let has_raw_ref = {
-                                    let var_str = var.as_str();
-                                    let mut found = false;
-                                    for (pos, _) in region.match_indices(var_str) {
-                                        // Check word boundaries
-                                        let before_ok = pos == 0 || {
-                                            let p = region.as_bytes()[pos - 1];
-                                            !p.is_ascii_alphanumeric() && p != b'_' && p != b'$'
-                                        };
-                                        let after_ok = pos + var_str.len() >= region.len() || {
-                                            let a = region.as_bytes()[pos + var_str.len()];
-                                            !a.is_ascii_alphanumeric() && a != b'_'
-                                        };
-                                        if before_ok && after_ok {
-                                            // Check it's not preceded by $
-                                            let has_dollar = pos > 0 && region.as_bytes()[pos - 1] == b'$';
-                                            if !has_dollar {
-                                                found = true;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    found
-                                };
+                                let has_raw_ref = has_word_boundary_match(region, var);
                                 if has_raw_ref && !region.contains(&format!("${}", var)) {
                                     ctx.diagnostic(
-                                        "Use the $ prefix or the get function to access reactive values instead of accessing the raw store.",
+                                        RAW_STORE_MSG,
                                         *span,
                                     );
                                 }
@@ -481,6 +458,21 @@ impl Rule for RequireStoreReactiveAccess {
             }
         });
     }
+}
+
+fn has_word_boundary_match(text: &str, word: &str) -> bool {
+    for (pos, _) in text.match_indices(word) {
+        let before_ok = pos == 0 || {
+            let p = text.as_bytes()[pos - 1];
+            !p.is_ascii_alphanumeric() && p != b'_' && p != b'$'
+        };
+        let after_ok = pos + word.len() >= text.len() || {
+            let a = text.as_bytes()[pos + word.len()];
+            !a.is_ascii_alphanumeric() && a != b'_'
+        };
+        if before_ok && after_ok { return true; }
+    }
+    false
 }
 
 /// Check if a TypeScript type annotation text indicates a store type.
