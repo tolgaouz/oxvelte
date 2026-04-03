@@ -8,6 +8,30 @@ use oxc::span::Span;
 
 const NAV_FUNCTIONS: &[&str] = &["goto", "pushState", "replaceState"];
 
+/// Check if a string starts with an absolute URL scheme.
+fn is_absolute_url(s: &str) -> bool {
+    s.starts_with("http://") || s.starts_with("https://")
+        || s.starts_with("mailto:") || s.starts_with("tel:")
+        || s.starts_with("//")
+}
+
+/// Find the index of the closing paren at depth 0 in `s`.
+/// Returns `s.len()` if not found.
+fn find_closing_paren(s: &str) -> usize {
+    let mut depth = 0i32;
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                if depth == 0 { return i; }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    s.len()
+}
+
 pub struct NoNavigationWithoutResolve;
 
 impl Rule for NoNavigationWithoutResolve {
@@ -33,9 +57,13 @@ impl Rule for NoNavigationWithoutResolve {
             )
         };
 
+        // Parse imports once and reuse for both script and template checks
+        let imports = ctx.ast.instance.as_ref()
+            .map(|s| parse_imports(&s.content))
+            .unwrap_or_default();
+
         if let Some(script) = &ctx.ast.instance {
             let content = &script.content;
-            let imports = parse_imports(content);
 
             // Find local names for navigation functions
             let mut nav_local_names: Vec<(String, &str)> = Vec::new();
@@ -90,29 +118,12 @@ impl Rule for NoNavigationWithoutResolve {
                         let quote = trimmed.as_bytes()[0];
                         let inner = &trimmed[1..];
                         let is_empty = inner.starts_with(quote as char);
-                        let is_absolute_uri = if let Some(end) = inner.find(quote as char) {
-                            let s = &inner[..end];
-                            s.starts_with("http://") || s.starts_with("https://")
-                                || s.starts_with("mailto:") || s.starts_with("tel:")
-                                || s.starts_with("//")
-                        } else { false };
+                        let is_absolute_uri = inner.find(quote as char)
+                            .map_or(false, |end| is_absolute_url(&inner[..end]));
 
                         if !is_empty && !is_absolute_uri {
-                            // Check if resolve is used in this call (balanced paren search)
                             let call_text = &content[abs + search_pattern.len()..];
-                            let mut depth = 0i32;
-                            let mut call_end = call_text.len();
-                            for (ci, ch) in call_text.char_indices() {
-                                match ch {
-                                    '(' => depth += 1,
-                                    ')' => {
-                                        if depth == 0 { call_end = ci; break; }
-                                        depth -= 1;
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            let call_body = &call_text[..call_end];
+                            let call_body = &call_text[..find_closing_paren(call_text)];
 
                             let uses_resolve = if let Some(ref rname) = resolve_local {
                                 call_body.contains(rname)
@@ -133,20 +144,7 @@ impl Rule for NoNavigationWithoutResolve {
                         || resolve_local.as_ref().map_or(false, |r| trimmed.starts_with(r.as_str())) {
                         // resolve()/asset() at the start — check for concatenation
                         let call_text = &content[abs + search_pattern.len()..];
-                        // Find the matching close paren of the outer navigation call
-                        let mut depth = 0i32;
-                        let mut outer_end = call_text.len();
-                        for (i, ch) in call_text.char_indices() {
-                            match ch {
-                                '(' => depth += 1,
-                                ')' => {
-                                    if depth == 0 { outer_end = i; break; }
-                                    depth -= 1;
-                                }
-                                _ => {}
-                            }
-                        }
-                        let call_body = &call_text[..outer_end];
+                        let call_body = &call_text[..find_closing_paren(call_text)];
                         // Check for `+` at top level (concatenation)
                         let mut d = 0i32;
                         let has_concat = call_body.chars().any(|ch| {
@@ -186,11 +184,6 @@ impl Rule for NoNavigationWithoutResolve {
         if ignore_links { return; }
 
         // Template <a href> checking: trace variable values to check if safe
-        // Only check when the file uses SvelteKit ($app/* imports indicate SvelteKit)
-        let imports = if let Some(script) = &ctx.ast.instance {
-            parse_imports(&script.content)
-        } else { Vec::new() };
-
         // Only check <a href> if the file looks like a SvelteKit component.
         // Skip if there are non-$app imports but no $app imports (clearly not SvelteKit).
         // Still check if there are no imports at all (could be a simple SvelteKit page).
@@ -240,9 +233,7 @@ impl Rule for NoNavigationWithoutResolve {
                         // Skip absolute URLs and fragments
                         let skip = match value {
                             AttributeValue::Static(v) => {
-                                v.starts_with("http://") || v.starts_with("https://")
-                                    || v.starts_with("mailto:") || v.starts_with("tel:")
-                                    || v.starts_with("//") || v.starts_with('#') || v.is_empty()
+                                is_absolute_url(v) || v.starts_with('#') || v.is_empty()
                             }
                             _ => false,
                         };
