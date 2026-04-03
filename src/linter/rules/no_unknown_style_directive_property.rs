@@ -94,34 +94,17 @@ const KNOWN_CSS_PROPERTIES: &[&str] = &[
 ];
 
 fn is_property_ignored(prop: &str, ignore_list: &[String]) -> bool {
-    for pattern in ignore_list {
-        if pattern.starts_with('/') && pattern.ends_with('/') && pattern.len() > 2 {
-            // Regex pattern: /^foo/ → match regex against property name
-            let regex_str = &pattern[1..pattern.len() - 1];
-            // Simple regex support: ^ for start anchor, . for any char, * for repeat
-            if simple_regex_match(regex_str, prop) {
-                return true;
+    ignore_list.iter().any(|pat| {
+        if let Some(re) = pat.strip_prefix('/').and_then(|s| s.strip_suffix('/')) {
+            if let Some(p) = re.strip_prefix('^') {
+                p.strip_suffix('$').map_or_else(|| prop.starts_with(p), |exact| prop == exact)
+            } else {
+                re.strip_suffix('$').map_or_else(|| prop.contains(re), |s| prop.ends_with(s))
             }
-        } else if prop == pattern {
-            return true;
-        }
-    }
-    false
-}
-
-fn simple_regex_match(pattern: &str, text: &str) -> bool {
-    // Handle common regex patterns: ^prefix, suffix$, exact
-    if let Some(prefix) = pattern.strip_prefix('^') {
-        if let Some(inner) = prefix.strip_suffix('$') {
-            text == inner
         } else {
-            text.starts_with(prefix)
+            prop == pat
         }
-    } else if let Some(suffix) = pattern.strip_suffix('$') {
-        text.ends_with(suffix)
-    } else {
-        text.contains(pattern)
-    }
+    })
 }
 
 pub struct NoUnknownStyleDirectiveProperty;
