@@ -5,12 +5,10 @@ use crate::linter::{LintContext, Rule};
 
 /// Check if the effect body contains exactly one statement that is `varName = expr;`
 fn is_single_assignment_effect(body: &str, assign_pattern: &str) -> bool {
-    // Count top-level statements by finding `;` at brace/paren depth 0
     let bytes = body.as_bytes();
     let mut depth = 0i32;
     let mut stmt_count = 0;
     let mut first_stmt_start = None;
-    let mut _first_stmt_end = None;
     let mut in_str = false;
     let mut str_ch = 0u8;
     let mut i = 0;
@@ -28,12 +26,7 @@ fn is_single_assignment_effect(body: &str, assign_pattern: &str) -> bool {
             b'{' | b'(' | b'[' => { depth += 1; has_content = true; }
             b'}' | b')' | b']' => { depth -= 1; }
             b';' if depth == 0 => {
-                if has_content {
-                    stmt_count += 1;
-                    if stmt_count == 1 {
-                        _first_stmt_end = Some(i);
-                    }
-                }
+                if has_content { stmt_count += 1; }
                 has_content = false;
             }
             b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
@@ -41,31 +34,19 @@ fn is_single_assignment_effect(body: &str, assign_pattern: &str) -> bool {
                 continue;
             }
             c if !c.is_ascii_whitespace() => {
-                if !has_content && first_stmt_start.is_none() {
-                    first_stmt_start = Some(i);
-                }
+                if !has_content && first_stmt_start.is_none() { first_stmt_start = Some(i); }
                 has_content = true;
             }
             _ => {}
         }
         i += 1;
     }
-    // Count trailing content without semicolon as a statement
-    if has_content {
-        stmt_count += 1;
-        if stmt_count == 1 {
-            _first_stmt_end = Some(bytes.len());
-        }
-    }
-
+    if has_content { stmt_count += 1; }
     if stmt_count != 1 { return false; }
 
-    // Check that the single statement starts with `varName =` (not `varName ==`)
-    let start = first_stmt_start.unwrap_or(0);
-    let stmt = body[start..].trim();
+    let stmt = body[first_stmt_start.unwrap_or(0)..].trim();
     if !stmt.starts_with(assign_pattern) { return false; }
     let after = &stmt[assign_pattern.len()..];
-    // Must not be `==` (comparison) or `=>` (arrow)
     !after.starts_with('=') && !after.starts_with('>')
 }
 
@@ -90,7 +71,7 @@ impl Rule for PreferWritableDerived {
 
             // Find let name = $state(expr); patterns
             let mut state_vars: Vec<(String, usize)> = Vec::new(); // (name, position)
-            for (line_offset, line) in content.lines().enumerate() {
+            for line in content.lines() {
                 let trimmed = line.trim();
                 if let Some(rest) = trimmed.strip_prefix("let ") {
                     // Match $state( or $state<...>(
@@ -134,82 +115,35 @@ impl Rule for PreferWritableDerived {
 
             // For each $state var, check if there's a $effect that reassigns it
             for (var_name, var_pos) in &state_vars {
-                // Look for $effect(() => { var_name = ...; });
                 let effect_pattern = format!("{} =", var_name);
-                let has_any_effect = content.contains("$effect(") || content.contains("$effect.pre(");
-                if !has_any_effect { continue; }
+                if !content.contains("$effect(") && !content.contains("$effect.pre(") { continue; }
 
-                // Check if $effect contains reassignment of this var
-                let mut search_from = 0;
-                while let Some(effect_pos) = content[search_from..].find("$effect(") {
-                    let abs = search_from + effect_pos;
-                    let rest = &content[abs..];
-
-                    // Find the body of the effect (between { and })
-                    if let Some(body_start) = rest.find('{') {
-                        let body = &rest[body_start..];
-                        let mut depth = 0;
-                        let mut body_end = body.len();
-                        for (i, ch) in body.char_indices() {
-                            match ch {
-                                '{' => depth += 1,
-                                '}' => {
-                                    depth -= 1;
-                                    if depth == 0 { body_end = i; break; }
+                for needle in &["$effect(", "$effect.pre("] {
+                    let mut search_from = 0;
+                    while let Some(effect_pos) = content[search_from..].find(needle) {
+                        let abs = search_from + effect_pos;
+                        let rest = &content[abs..];
+                        if let Some(body_start) = rest.find('{') {
+                            let body = &rest[body_start..];
+                            let mut depth = 0;
+                            let mut body_end = body.len();
+                            for (i, ch) in body.char_indices() {
+                                match ch {
+                                    '{' => depth += 1,
+                                    '}' => { depth -= 1; if depth == 0 { body_end = i; break; } }
+                                    _ => {}
                                 }
-                                _ => {}
+                            }
+                            if is_single_assignment_effect(&body[1..body_end], &effect_pattern) {
+                                let source_pos = content_offset + var_pos;
+                                ctx.diagnostic(
+                                    "Prefer using writable $derived instead of $state and $effect",
+                                    oxc::span::Span::new(source_pos as u32, (source_pos + var_name.len() + 4) as u32),
+                                );
                             }
                         }
-                        let effect_body = &body[1..body_end];
-
-                        // Check if the effect body contains EXACTLY ONE statement:
-                        // a simple assignment `varName = expr;`
-                        let is_single_assign = is_single_assignment_effect(effect_body, &effect_pattern);
-                        if is_single_assign {
-                            let source_pos = content_offset + var_pos;
-                            ctx.diagnostic(
-                                "Prefer using writable $derived instead of $state and $effect",
-                                oxc::span::Span::new(source_pos as u32, (source_pos + var_name.len() + 4) as u32),
-                            );
-                        }
+                        search_from = abs + needle.len();
                     }
-
-                    search_from = abs + 8;
-                }
-
-                // Also check $effect.pre(
-                search_from = 0;
-                while let Some(effect_pos) = content[search_from..].find("$effect.pre(") {
-                    let abs = search_from + effect_pos;
-                    let rest = &content[abs..];
-
-                    if let Some(body_start) = rest.find('{') {
-                        let body = &rest[body_start..];
-                        let mut depth = 0;
-                        let mut body_end = body.len();
-                        for (i, ch) in body.char_indices() {
-                            match ch {
-                                '{' => depth += 1,
-                                '}' => {
-                                    depth -= 1;
-                                    if depth == 0 { body_end = i; break; }
-                                }
-                                _ => {}
-                            }
-                        }
-                        let effect_body = &body[1..body_end];
-
-                        let is_single_assign2 = is_single_assignment_effect(effect_body, &effect_pattern);
-                        if is_single_assign2 {
-                            let source_pos = content_offset + var_pos;
-                            ctx.diagnostic(
-                                "Prefer using writable $derived instead of $state and $effect",
-                                oxc::span::Span::new(source_pos as u32, (source_pos + var_name.len() + 4) as u32),
-                            );
-                        }
-                    }
-
-                    search_from = abs + 12;
                 }
             }
         }
