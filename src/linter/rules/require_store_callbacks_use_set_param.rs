@@ -13,77 +13,37 @@ impl Rule for RequireStoreCallbacksUseSetParam {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        if let Some(script) = &ctx.ast.instance {
-            let content = &script.content;
-            let base = script.span.start as usize;
+        let Some(script) = &ctx.ast.instance else { return };
+        let content = &script.content;
+        let base = script.span.start as usize;
 
-            for factory in &["readable(", "writable("] {
-                for (offset, _) in content.match_indices(factory) {
-                    // Check preceding character to avoid matching inside other identifiers
-                    if offset > 0 {
-                        let prev = content.as_bytes()[offset - 1];
-                        if prev.is_ascii_alphanumeric() || prev == b'_' {
-                            continue;
-                        }
+        for factory in &["readable(", "writable("] {
+            for (offset, _) in content.match_indices(factory) {
+                if offset > 0 && { let p = content.as_bytes()[offset - 1]; p.is_ascii_alphanumeric() || p == b'_' } { continue; }
+                let rest = &content[offset..];
+                let (mut depth, mut found_comma, mut cb_start) = (0i32, false, 0);
+                for (i, ch) in rest.char_indices() {
+                    match ch {
+                        '(' | '[' | '{' => depth += 1,
+                        ')' | ']' | '}' => { depth -= 1; if depth == 0 { break; } }
+                        ',' if depth == 1 && !found_comma => { found_comma = true; cb_start = i + 1; }
+                        _ => {}
                     }
+                }
+                if !found_comma { continue; }
+                let cb = rest[cb_start..].trim_start();
 
-                    let rest = &content[offset..];
+                let has_set_param = |params: &str| params.split(',').any(|p| p.trim() == "set");
+                let has_set = if cb.starts_with("function") {
+                    cb.find('(').and_then(|ps| cb[ps..].find(')').map(|pe| has_set_param(&cb[ps+1..ps+pe]))).unwrap_or(false)
+                } else if let Some(ap) = cb.find("=>") {
+                    let b = cb[..ap].trim();
+                    if b.starts_with('(') && b.ends_with(')') { has_set_param(&b[1..b.len()-1]) } else { b == "set" }
+                } else { continue; };
 
-                    // Find the callback: either an arrow function or function keyword
-                    // Look for the second argument (after first comma at depth 0)
-                    let mut depth = 0;
-                    let mut found_comma = false;
-                    let mut callback_start = 0;
-                    for (i, ch) in rest.char_indices() {
-                        match ch {
-                            '(' | '[' | '{' => depth += 1,
-                            ')' | ']' | '}' => {
-                                depth -= 1;
-                                if depth == 0 { break; }
-                            }
-                            ',' if depth == 1 && !found_comma => {
-                                found_comma = true;
-                                callback_start = i + 1;
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    if !found_comma { continue; }
-
-                    let callback = rest[callback_start..].trim_start();
-
-                    // Check if callback uses `set` parameter
-                    let has_set = if callback.starts_with("function") {
-                        // function (set) { ... } or function () { ... }
-                        if let Some(paren_start) = callback.find('(') {
-                            if let Some(paren_end) = callback[paren_start..].find(')') {
-                                let params = &callback[paren_start+1..paren_start+paren_end];
-                                params.split(',').any(|p| p.trim() == "set")
-                            } else { false }
-                        } else { false }
-                    } else if let Some(arrow_pos) = callback.find("=>") {
-                        // Arrow function: (set) => or set =>
-                        let before_arrow = callback[..arrow_pos].trim();
-                        if before_arrow.starts_with('(') && before_arrow.ends_with(')') {
-                            let params = &before_arrow[1..before_arrow.len()-1];
-                            params.split(',').any(|p| p.trim() == "set")
-                        } else {
-                            before_arrow == "set"
-                        }
-                    } else {
-                        // Not a recognizable callback
-                        continue;
-                    };
-
-                    if !has_set {
-                        let start = (base + offset) as u32;
-                        let end = start + factory.len() as u32;
-                        ctx.diagnostic(
-                            "Store callbacks must use `set` param.",
-                            Span::new(start, end),
-                        );
-                    }
+                if !has_set {
+                    let start = (base + offset) as u32;
+                    ctx.diagnostic("Store callbacks must use `set` param.", Span::new(start, start + factory.len() as u32));
                 }
             }
         }
