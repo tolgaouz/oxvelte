@@ -15,70 +15,42 @@ impl Rule for NoReactiveLiterals {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        if let Some(script) = &ctx.ast.instance {
-            // Look for $: x = <literal>
-            let content = &script.content;
-            let mut search_from = 0;
-            while let Some(pos) = content[search_from..].find("$:") {
-                let abs_pos = search_from + pos;
-                let after = content[abs_pos + 2..].trim_start();
+        let Some(script) = &ctx.ast.instance else { return };
+        let content = &script.content;
+        let base = script.span.start as usize;
+        let gt = ctx.source[base..script.span.end as usize].find('>').unwrap_or(0);
 
-                // Skip `$: { ... }` reactive blocks — they're not simple assignments
-                if after.starts_with('{') {
-                    search_from = abs_pos + 2;
-                    continue;
-                }
-
-                // Check if it's a simple assignment to a literal
-                if let Some(eq_pos) = after.find('=') {
-                    let rhs = after[eq_pos + 1..].trim_start();
-                    // Only flag simple literals (not template literals with ${},
-                    // arrays, or objects which may contain reactive values)
+        let mut search_from = 0;
+        while let Some(pos) = content[search_from..].find("$:") {
+            let abs = search_from + pos;
+            let after = content[abs + 2..].trim_start();
+            if !after.starts_with('{') {
+                if let Some(eq) = after.find('=') {
+                    let rhs = after[eq + 1..].trim_start();
+                    let is_kw = |kw: &str| rhs == kw || rhs.starts_with(&format!("{};", kw)) || rhs.starts_with(&format!("{}\n", kw));
                     let is_literal = rhs.starts_with('"') || rhs.starts_with('\'')
                         || (rhs.starts_with('`') && !rhs.contains("${"))
-                        || rhs.starts_with("true;") || rhs.starts_with("true\n") || rhs == "true"
-                        || rhs.starts_with("false;") || rhs.starts_with("false\n") || rhs == "false"
-                        || rhs.starts_with("null;") || rhs.starts_with("null\n") || rhs == "null"
-                        || rhs.starts_with("undefined;") || rhs.starts_with("undefined\n") || rhs == "undefined"
-                        || is_numeric_literal(rhs)
-                        || rhs.starts_with("[]") || rhs.starts_with("{}");
-
-                    if is_literal && !after[..eq_pos].contains('(') {
-                        let tag_start = script.span.start as usize;
-                        let source = ctx.source;
-                        let tag_text = &source[tag_start..script.span.end as usize];
-                        if let Some(gt) = tag_text.find('>') {
-                            let source_pos = tag_start + gt + 1 + abs_pos;
-                            ctx.diagnostic(
-                                "Do not assign literal values inside reactive statements unless absolutely necessary.",
-                                oxc::span::Span::new(source_pos as u32, (source_pos + 2) as u32),
-                            );
-                        }
+                        || is_kw("true") || is_kw("false") || is_kw("null") || is_kw("undefined")
+                        || is_numeric_literal(rhs) || rhs.starts_with("[]") || rhs.starts_with("{}");
+                    if is_literal && !after[..eq].contains('(') {
+                        let sp = base + gt + 1 + abs;
+                        ctx.diagnostic("Do not assign literal values inside reactive statements unless absolutely necessary.",
+                            oxc::span::Span::new(sp as u32, (sp + 2) as u32));
                     }
                 }
-                search_from = abs_pos + 2;
             }
+            search_from = abs + 2;
         }
     }
 }
 
-/// Check if the RHS is a standalone numeric literal (e.g., `42;`, `3.14\n`),
-/// not a numeric expression like `5 * viewScale`.
 fn is_numeric_literal(rhs: &str) -> bool {
-    let first = rhs.chars().next();
-    if !first.map(|c| c.is_ascii_digit() || c == '-').unwrap_or(false) {
-        return false;
-    }
-    // Consume digits, dots, underscores, hex prefix, exponent — then expect `;", newline, or end
-    let end = rhs.find(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '_' && c != '-' && c != '+')
-        .unwrap_or(rhs.len());
+    if !rhs.as_bytes().first().map_or(false, |&c| c.is_ascii_digit() || c == b'-') { return false; }
+    let end = rhs.find(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '_' && c != '-' && c != '+').unwrap_or(rhs.len());
     if end == rhs.len() { return true; }
-    let next = rhs.as_bytes()[end];
-    // Accept semicolon, newline, or whitespace followed by newline/end
-    if next == b';' || next == b'\n' || next == b'\r' { return true; }
-    if next == b' ' || next == b'\t' {
-        let rest = rhs[end..].trim_start();
-        return rest.is_empty() || rest.starts_with(';') || rest.starts_with('\n');
+    match rhs.as_bytes()[end] {
+        b';' | b'\n' | b'\r' => true,
+        b' ' | b'\t' => { let r = rhs[end..].trim_start(); r.is_empty() || r.starts_with(';') || r.starts_with('\n') }
+        _ => false,
     }
-    false
 }
