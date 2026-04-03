@@ -172,10 +172,7 @@ impl PreferSvelteReactivity {
                 let abs = content_offset + new_expr.span.start as usize;
                 let end = content_offset + new_expr.span.end as usize;
                 ctx.diagnostic(
-                    format!(
-                        "Found a mutable instance of the built-in {} class. Use {} instead.",
-                        builtin.name, builtin.svelte_name
-                    ),
+                    mutable_class_msg(builtin),
                     Span::new(abs as u32, end as u32),
                 );
                 continue;
@@ -187,10 +184,7 @@ impl PreferSvelteReactivity {
                 let abs = content_offset + new_expr.span.start as usize;
                 let end = content_offset + new_expr.span.end as usize;
                 ctx.diagnostic(
-                    format!(
-                        "Found a mutable instance of the built-in {} class. Use {} instead.",
-                        builtin.name, builtin.svelte_name
-                    ),
+                    mutable_class_msg(builtin),
                     Span::new(abs as u32, end as u32),
                 );
                 continue;
@@ -209,18 +203,10 @@ impl PreferSvelteReactivity {
                     // a writable store is not directly mutable.
                     if let Some(var_name) = &var_name_fallback {
                         if var_name.starts_with('$') { continue; }
-                        let is_mut_by_name = is_mutated_by_name(content, var_name, builtin);
-                        let is_template_mut = is_mutated_in_template(ctx.source, content, var_name, builtin);
-                        if is_mut_by_name || is_template_mut {
+                        if has_mutation_pattern(ctx.source, var_name, builtin) {
                             let abs = content_offset + new_expr.span.start as usize;
                             let end = content_offset + new_expr.span.end as usize;
-                            ctx.diagnostic(
-                                format!(
-                                    "Found a mutable instance of the built-in {} class. Use {} instead.",
-                                    builtin.name, builtin.svelte_name
-                                ),
-                                Span::new(abs as u32, end as u32),
-                            );
+                            ctx.diagnostic(mutable_class_msg(builtin), Span::new(abs as u32, end as u32));
                         }
                     }
                     continue;
@@ -273,10 +259,7 @@ impl PreferSvelteReactivity {
                 let abs = content_offset + new_expr.span.start as usize;
                 let end = content_offset + new_expr.span.end as usize;
                 ctx.diagnostic(
-                    format!(
-                        "Found a mutable instance of the built-in {} class. Use {} instead.",
-                        builtin.name, builtin.svelte_name
-                    ),
+                    mutable_class_msg(builtin),
                     Span::new(abs as u32, end as u32),
                 );
             }
@@ -287,6 +270,10 @@ impl PreferSvelteReactivity {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+fn mutable_class_msg(builtin: &BuiltinClass) -> String {
+    format!("Found a mutable instance of the built-in {} class. Use {} instead.", builtin.name, builtin.svelte_name)
+}
 
 /// Check if a NewExpression is inside an export declaration.
 fn is_inside_export(
@@ -518,53 +505,40 @@ fn is_transitively_mutated(
     false
 }
 
+/// Check if a variable has mutating method/property patterns in the given text.
+fn has_mutation_pattern(text: &str, var_name: &str, builtin: &BuiltinClass) -> bool {
+    for method in builtin.mutating_methods {
+        let pat = format!("{}.{}(", var_name, method);
+        if find_word_boundary_pos(text, &pat).is_some() { return true; }
+    }
+    for prop in builtin.mutating_props {
+        let pat = format!("{}.{} =", var_name, prop);
+        if let Some(pos) = find_word_boundary_pos(text, &pat) {
+            if !text[pos + pat.len()..].starts_with('=') { return true; }
+        }
+    }
+    false
+}
+
 /// Check if a variable is mutated in the template (outside script blocks).
 fn is_mutated_in_template(
     source: &str, script_content: &str, var_name: &str, builtin: &BuiltinClass,
 ) -> bool {
     for method in builtin.mutating_methods {
         let pat = format!("{}.{}(", var_name, method);
-        if find_word_boundary(source, &pat) && !find_word_boundary(script_content, &pat) {
+        if find_word_boundary_pos(source, &pat).is_some() && find_word_boundary_pos(script_content, &pat).is_none() {
             return true;
         }
     }
     for prop in builtin.mutating_props {
         let pat = format!("{}.{} =", var_name, prop);
         if let Some(pos) = find_word_boundary_pos(source, &pat) {
-            let after = &source[pos + pat.len()..];
-            if !after.starts_with('=') && !find_word_boundary(script_content, &pat) {
+            if !source[pos + pat.len()..].starts_with('=') && find_word_boundary_pos(script_content, &pat).is_none() {
                 return true;
             }
         }
     }
     false
-}
-
-/// Check if a variable is mutated by name within the script content.
-/// Used as a fallback when no SymbolId is available (e.g. implicit `$:` declarations).
-fn is_mutated_by_name(content: &str, var_name: &str, builtin: &BuiltinClass) -> bool {
-    for method in builtin.mutating_methods {
-        let pat = format!("{}.{}(", var_name, method);
-        if find_word_boundary(content, &pat) {
-            return true;
-        }
-    }
-    for prop in builtin.mutating_props {
-        let pat = format!("{}.{} =", var_name, prop);
-        if let Some(pos) = find_word_boundary_pos(content, &pat) {
-            let after = &content[pos + pat.len()..];
-            if !after.starts_with('=') {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Find a pattern in content, ensuring it starts at a word boundary
-/// (the character before the match is not alphanumeric, _, or $).
-fn find_word_boundary(content: &str, pat: &str) -> bool {
-    find_word_boundary_pos(content, pat).is_some()
 }
 
 fn find_word_boundary_pos(content: &str, pat: &str) -> Option<usize> {
@@ -661,13 +635,7 @@ fn detect_chained_new_in_template(ctx: &mut LintContext) {
                 for method in builtin.mutating_methods {
                     let call = format!("{}(", method);
                     if method_start.starts_with(&call) {
-                        ctx.diagnostic(
-                            format!(
-                                "Found a mutable instance of the built-in {} class. Use {} instead.",
-                                builtin.name, builtin.svelte_name
-                            ),
-                            Span::new(abs as u32, (close + 1) as u32),
-                        );
+                        ctx.diagnostic(mutable_class_msg(builtin), Span::new(abs as u32, (close + 1) as u32));
                         found_chained = true;
                         break;
                     }
@@ -684,13 +652,7 @@ fn detect_chained_new_in_template(ctx: &mut LintContext) {
                     if let Some((scope_start, scope_end)) = find_enclosing_brace_scope(source, abs) {
                         let scope_text = &source[scope_start..scope_end];
                         if has_mutating_call_in_scope(scope_text, &var_name, builtin) {
-                            ctx.diagnostic(
-                                format!(
-                                    "Found a mutable instance of the built-in {} class. Use {} instead.",
-                                    builtin.name, builtin.svelte_name
-                                ),
-                                Span::new(abs as u32, (close + 1) as u32),
-                            );
+                            ctx.diagnostic(mutable_class_msg(builtin), Span::new(abs as u32, (close + 1) as u32));
                         }
                     }
                 }
