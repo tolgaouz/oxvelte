@@ -35,17 +35,11 @@ impl Rule for HtmlClosingBracketNewLine {
                 .map(|s| s == "always")
                 .unwrap_or(true); // default "always"
 
-            // selfClosingTag option overrides singleline/multiline for self-closing tags
-            let sc_singleline: Option<bool> = opts
-                .and_then(|o| o.get("selfClosingTag"))
-                .and_then(|o| o.get("singleline"))
-                .and_then(|v| v.as_str())
-                .map(|s| s == "always");
-            let sc_multiline: Option<bool> = opts
-                .and_then(|o| o.get("selfClosingTag"))
-                .and_then(|o| o.get("multiline"))
-                .and_then(|v| v.as_str())
-                .map(|s| s == "always");
+            let sc = opts.and_then(|o| o.get("selfClosingTag"));
+            let sc_singleline: Option<bool> = sc.and_then(|o| o.get("singleline"))
+                .and_then(|v| v.as_str()).map(|s| s == "always");
+            let sc_multiline: Option<bool> = sc.and_then(|o| o.get("multiline"))
+                .and_then(|v| v.as_str()).map(|s| s == "always");
 
             (singleline_expect_newline, multiline_expect_newline, sc_singleline, sc_multiline)
         };
@@ -131,63 +125,28 @@ impl Rule for HtmlClosingBracketNewLine {
                 }
             }
 
-            // Determine effective expect_newline based on selfClosingTag overrides
-            let effective_multi_expect = if is_self_closing {
-                sc_multiline.unwrap_or(multiline_expect_newline)
-            } else { multiline_expect_newline };
-            let effective_single_expect = if is_self_closing {
-                sc_singleline.unwrap_or(singleline_expect_newline)
-            } else { singleline_expect_newline };
+            let expect_newline = if is_multiline {
+                if is_self_closing { sc_multiline.unwrap_or(multiline_expect_newline) }
+                else { multiline_expect_newline }
+            } else if is_self_closing { sc_singleline.unwrap_or(singleline_expect_newline) }
+            else { singleline_expect_newline };
 
-            if is_multiline {
-                if effective_multi_expect {
-                    // Multiline: expect exactly 1 line break
-                    if line_breaks != 1 {
-                        let abs_pos = span.start + bracket_start as u32;
-                        if line_breaks == 0 {
-                            ctx.diagnostic(
-                                "Expected 1 line break before closing bracket, but no line breaks found.",
-                                oxc::span::Span::new(abs_pos, abs_pos + if is_self_closing { 2 } else { 1 }),
-                            );
-                        } else {
-                            ctx.diagnostic(
-                                format!("Expected 1 line break before closing bracket, but {} line breaks found.", line_breaks),
-                                oxc::span::Span::new(abs_pos, abs_pos + if is_self_closing { 2 } else { 1 }),
-                            );
-                        }
-                    }
+            let bracket_len = if is_self_closing { 2u32 } else { 1 };
+            if expect_newline && line_breaks != 1 {
+                let abs_pos = span.start + bracket_start as u32;
+                let msg = if line_breaks == 0 {
+                    "Expected 1 line break before closing bracket, but no line breaks found.".to_string()
                 } else {
-                    // Multiline "never": expect 0 line breaks
-                    if line_breaks > 0 {
-                        let abs_pos = span.start + bracket_start as u32;
-                        ctx.diagnostic(
-                            format!("Expected no line breaks before closing bracket, but {} line break{} found.",
-                                line_breaks, if line_breaks != 1 { "s" } else { "" }),
-                            oxc::span::Span::new(abs_pos, abs_pos + if is_self_closing { 2 } else { 1 }),
-                        );
-                    }
-                }
-            } else {
-                if effective_single_expect {
-                    // Singleline "always": expect a line break
-                    if line_breaks == 0 {
-                        let abs_pos = span.start + bracket_start as u32;
-                        ctx.diagnostic(
-                            "Expected 1 line break before closing bracket, but no line breaks found.",
-                            oxc::span::Span::new(abs_pos, abs_pos + if is_self_closing { 2 } else { 1 }),
-                        );
-                    }
-                } else {
-                    // Singleline "never": expect 0 line breaks
-                    if line_breaks > 0 {
-                        let abs_pos = span.start + bracket_start as u32;
-                        ctx.diagnostic(
-                            format!("Expected no line breaks before closing bracket, but {} line break{} found.",
-                                line_breaks, if line_breaks != 1 { "s" } else { "" }),
-                            oxc::span::Span::new(abs_pos, abs_pos + if is_self_closing { 2 } else { 1 }),
-                        );
-                    }
-                }
+                    format!("Expected 1 line break before closing bracket, but {} line breaks found.", line_breaks)
+                };
+                ctx.diagnostic(msg, oxc::span::Span::new(abs_pos, abs_pos + bracket_len));
+            } else if !expect_newline && line_breaks > 0 {
+                let abs_pos = span.start + bracket_start as u32;
+                ctx.diagnostic(
+                    format!("Expected no line breaks before closing bracket, but {} line break{} found.",
+                        line_breaks, if line_breaks != 1 { "s" } else { "" }),
+                    oxc::span::Span::new(abs_pos, abs_pos + bracket_len),
+                );
             }
         });
     }
