@@ -24,17 +24,11 @@ impl Rule for MaxAttributesPerLine {
             .and_then(|v| v.as_object())
             .cloned();
 
-        let singleline_max = opts.as_ref()
-            .and_then(|o| o.get("singleline"))
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize)
-            .unwrap_or(1);
-
-        let multiline_max = opts.as_ref()
-            .and_then(|o| o.get("multiline"))
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize)
-            .unwrap_or(1);
+        let get_opt = |key: &str| opts.as_ref()
+            .and_then(|o| o.get(key)).and_then(|v| v.as_u64())
+            .map(|v| v as usize).unwrap_or(1);
+        let singleline_max = get_opt("singleline");
+        let multiline_max = get_opt("multiline");
 
         // Build line-start table for span → line number conversion.
         let source = ctx.source;
@@ -63,48 +57,23 @@ impl Rule for MaxAttributesPerLine {
                 let el_start = el.span.start as usize;
                 let el_end = el.span.end as usize;
 
-                // Find the end of the opening tag (first `>` that closes the start tag).
-                let opening_tag_end_line = if el_end <= source.len() {
-                    let tag_src = &source[el_start..el_end];
-                    if let Some(close_pos) = tag_src.find('>') {
-                        let opening_end_offset = el_start + close_pos;
-                        offset_to_line(opening_end_offset)
-                    } else {
-                        offset_to_line(el_end)
-                    }
-                } else {
-                    offset_to_line(el_end)
-                };
+                let tag_close = source.get(el_start..el_end)
+                    .and_then(|s| s.find('>')).map(|p| el_start + p).unwrap_or(el_end);
+                let opening_tag_end_line = offset_to_line(tag_close);
 
                 let opening_start_line = offset_to_line(el_start);
                 let is_singleline = opening_start_line == opening_tag_end_line;
 
                 if is_singleline {
-                    // For singleline elements: report the attribute at index `singleline_max`
-                    // (the first one that exceeds the limit).
-                    if attrs.len() > singleline_max {
-                        if let Some(attr) = attrs.get(singleline_max) {
-                            let name = attr_name(attr, source);
-                            ctx.diagnostic(
-                                format!("'{}' should be on a new line.", name),
-                                attr_span(attr),
-                            );
-                        }
+                    if let Some(attr) = attrs.get(singleline_max) {
+                        let name = attr_name(attr, source);
+                        ctx.diagnostic(format!("'{}' should be on a new line.", name), attr_span(attr));
                     }
                 } else {
-                    // For multiline elements: group attributes by their line number,
-                    // then for each line group that exceeds the limit, report the attr
-                    // at index `multiline_max` within that group.
-                    let groups = group_attrs_by_line(attrs, source, &offset_to_line);
-                    for group in &groups {
-                        if group.len() > multiline_max {
-                            if let Some(attr) = group.get(multiline_max) {
-                                let name = attr_name(attr, source);
-                                ctx.diagnostic(
-                                    format!("'{}' should be on a new line.", name),
-                                    attr_span(attr),
-                                );
-                            }
+                    for group in group_attrs_by_line(attrs, &offset_to_line) {
+                        if let Some(attr) = group.get(multiline_max) {
+                            let name = attr_name(attr, source);
+                            ctx.diagnostic(format!("'{}' should be on a new line.", name), attr_span(attr));
                         }
                     }
                 }
@@ -171,42 +140,15 @@ fn directive_prefix(kind: &DirectiveKind) -> &'static str {
     }
 }
 
-/// Group attributes by the line they start on.
-/// Returns a Vec of groups (each group is a Vec of attribute refs), in source order.
-fn group_attrs_by_line<'a, F>(
-    attrs: &'a [Attribute],
-    _source: &str,
-    offset_to_line: &F,
-) -> Vec<Vec<&'a Attribute>>
-where
-    F: Fn(usize) -> usize,
-{
-    // Mirrors the vendor's groupAttributesByLine logic:
-    // attributes that share the same start line as the *end line* of the first attr
-    // in the current group are placed in the same group.
+fn group_attrs_by_line<'a, F>(attrs: &'a [Attribute], offset_to_line: &F) -> Vec<Vec<&'a Attribute>>
+where F: Fn(usize) -> usize {
     let mut groups: Vec<Vec<&Attribute>> = Vec::new();
-
     for attr in attrs {
-        let attr_start_line = offset_to_line(attr_span(attr).start as usize);
-
-        // Try to find an existing group whose first attr's end line matches this attr's start line.
-        let found = if let Some(first_group) = groups.last_mut() {
-            if let Some(first_attr) = first_group.first() {
-                let first_end_line = offset_to_line(attr_span(first_attr).end as usize);
-                first_end_line == attr_start_line
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        if found {
-            groups.last_mut().unwrap().push(attr);
-        } else {
-            groups.push(vec![attr]);
-        }
+        let start_line = offset_to_line(attr_span(attr).start as usize);
+        let same = groups.last().and_then(|g| g.first())
+            .map_or(false, |first| offset_to_line(attr_span(first).end as usize) == start_line);
+        if same { groups.last_mut().unwrap().push(attr); }
+        else { groups.push(vec![attr]); }
     }
-
     groups
 }
