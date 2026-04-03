@@ -18,55 +18,30 @@ impl Rule for RequireEventDispatcherTypes {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        if let Some(script) = &ctx.ast.instance {
-            // Only applies to TypeScript scripts
-            if script.lang.as_deref() != Some("ts") {
-                return;
-            }
+        let Some(script) = &ctx.ast.instance else { return };
+        if script.lang.as_deref() != Some("ts") { return; }
+        let content = &script.content;
+        if content.contains("$props()") { return; }
+        let imports = parse_imports(content);
+        let names: Vec<String> = imports.iter()
+            .filter(|(_, imp, m)| (imp == "createEventDispatcher" || imp == "*") && m == "svelte")
+            .map(|(l, imp, _)| if imp == "*" { format!("{}.createEventDispatcher", l) } else { l.clone() })
+            .collect();
+        if names.is_empty() { return; }
+        let base = script.span.start as usize;
+        let gt = ctx.source[base..script.span.end as usize].find('>').unwrap_or(0);
 
-            let content = &script.content;
-
-            // Skip Svelte 5 components that use $props() — they use callback props
-            // instead of createEventDispatcher.
-            if content.contains("$props()") {
-                return;
-            }
-            let imports = parse_imports(content);
-
-            // Find local names for createEventDispatcher from 'svelte'
-            let dispatcher_names: Vec<String> = imports.iter()
-                .filter(|(_, imported, module)| {
-                    (imported == "createEventDispatcher" || imported == "*") && module == "svelte"
-                })
-                .map(|(local, imported, _)| {
-                    if imported == "*" { format!("{}.createEventDispatcher", local) } else { local.clone() }
-                })
-                .collect();
-
-            if dispatcher_names.is_empty() { return; }
-
-            let base = script.span.start as usize;
-            let source = ctx.source;
-            let tag_text = &source[base..script.span.end as usize];
-            let gt = tag_text.find('>').unwrap_or(0);
-
-            for name in &dispatcher_names {
-                // Look for name() without type parameters (name<...>() has type params)
-                let pattern = format!("{}()", name);
-                let mut search_from = 0;
-                while let Some(pos) = content[search_from..].find(&pattern) {
-                    let abs = search_from + pos;
-                    // Check it's not name<...>() — look for < before ()
-                    let before = &content[..abs + name.len()];
-                    if !before.ends_with('>') {
-                        let source_pos = base + gt + 1 + abs;
-                        ctx.diagnostic(
-                            "Type parameters missing for the `createEventDispatcher` function call.",
-                            oxc::span::Span::new(source_pos as u32, (source_pos + pattern.len()) as u32),
-                        );
-                    }
-                    search_from = abs + pattern.len();
+        for name in &names {
+            let pat = format!("{}()", name);
+            let mut from = 0;
+            while let Some(pos) = content[from..].find(&pat) {
+                let abs = from + pos;
+                if !content[..abs + name.len()].ends_with('>') {
+                    let sp = base + gt + 1 + abs;
+                    ctx.diagnostic("Type parameters missing for the `createEventDispatcher` function call.",
+                        oxc::span::Span::new(sp as u32, (sp + pat.len()) as u32));
                 }
+                from = abs + pat.len();
             }
         }
     }

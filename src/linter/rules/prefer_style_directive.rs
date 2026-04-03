@@ -17,54 +17,25 @@ impl Rule for PreferStyleDirective {
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         walk_template_nodes(&ctx.ast.html, &mut |node| {
-            if let TemplateNode::Element(el) = node {
-                // Skip components (style: directives only work on HTML/svelte:element)
-                // svelte:element renders as a real DOM element, so it supports style:
-                if el.name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
-                    || (el.name.starts_with("svelte:") && el.name != "svelte:element")
-                {
-                    return;
-                }
-                for attr in &el.attributes {
-                    if let Attribute::NormalAttribute { name, value, span } = attr {
-                        if name == "style" {
-                            // Only flag static style attributes with parseable CSS declarations
-                            // Don't flag expression-only styles (variables), shorthand, or concat
-                            match value {
-                                AttributeValue::Static(s) => {
-                                    // Report once per CSS declaration
-                                    let decl_count = s.split(';')
-                                        .filter(|d| d.trim().contains(':'))
-                                        .count();
-                                    for _ in 0..decl_count {
-                                        ctx.diagnostic(
-                                            "Can use style directives instead.",
-                                            *span,
-                                        );
-                                    }
-                                }
-                                AttributeValue::Concat(parts) => {
-                                    // Flag if static parts contain CSS declarations or if
-                                    // expressions contain CSS-like strings
-                                    let has_css_pattern = parts.iter().any(|p| {
-                                        match p {
-                                            crate::ast::AttributeValuePart::Static(s) => s.contains(':'),
-                                            crate::ast::AttributeValuePart::Expression(e) => {
-                                                // Check if expression contains CSS-like property:value patterns
-                                                e.contains(':')
-                                            }
-                                        }
-                                    });
-                                    if has_css_pattern {
-                                        ctx.diagnostic(
-                                            "Can use style directives instead.",
-                                            *span,
-                                        );
-                                    }
-                                }
-                                _ => {}
+            let TemplateNode::Element(el) = node else { return };
+            if el.name.as_bytes().first().map_or(false, |c| c.is_ascii_uppercase())
+                || (el.name.starts_with("svelte:") && el.name != "svelte:element") { return; }
+            for attr in &el.attributes {
+                if let Attribute::NormalAttribute { name, value, span } = attr {
+                    if name != "style" { continue; }
+                    match value {
+                        AttributeValue::Static(s) => {
+                            for _ in 0..s.split(';').filter(|d| d.trim().contains(':')).count() {
+                                ctx.diagnostic("Can use style directives instead.", *span);
                             }
                         }
+                        AttributeValue::Concat(parts) => {
+                            use crate::ast::AttributeValuePart::*;
+                            if parts.iter().any(|p| match p { Static(s) => s.contains(':'), Expression(e) => e.contains(':') }) {
+                                ctx.diagnostic("Can use style directives instead.", *span);
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
