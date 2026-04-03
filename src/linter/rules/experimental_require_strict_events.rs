@@ -2,52 +2,19 @@
 
 use crate::linter::{LintContext, Rule};
 
-fn is_ts_lang(lang: Option<&str>) -> bool {
-    match lang {
-        Some(l) => l.eq_ignore_ascii_case("ts") || l.eq_ignore_ascii_case("typescript"),
-        None => false,
-    }
-}
-
 pub struct ExperimentalRequireStrictEvents;
 
 impl Rule for ExperimentalRequireStrictEvents {
-    fn name(&self) -> &'static str {
-        "svelte/experimental-require-strict-events"
-    }
+    fn name(&self) -> &'static str { "svelte/experimental-require-strict-events" }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        // Only applies to TypeScript components
-        let instance_is_ts = ctx.ast.instance.as_ref()
-            .map(|s| is_ts_lang(s.lang.as_deref()))
-            .unwrap_or(false);
-        let module_is_ts = ctx.ast.module.as_ref()
-            .map(|s| is_ts_lang(s.lang.as_deref()))
-            .unwrap_or(false);
-        if !instance_is_ts && !module_is_ts { return; }
-
-        // Check for strictEvents attribute on the instance script tag
-        let Some(script) = ctx.ast.instance.as_ref() else { return; };
-        let tag_text = &ctx.source[script.span.start as usize..script.span.end as usize];
-        let tag_attrs = tag_text.split('>').next().unwrap_or("");
-        if tag_attrs.contains("strictEvents") {
-            return;
-        }
-
-        // Check if the component defines strict events via $$Events type
-        let has_events_type = script.content.contains("$$Events")
-            || ctx.ast.module.as_ref()
-                .map(|s| s.content.contains("$$Events"))
-                .unwrap_or(false);
-
-        if !has_events_type {
-            let span = ctx.ast.instance.as_ref()
-                .map(|s| s.span)
-                .unwrap_or(ctx.ast.html.span);
-            ctx.diagnostic(
-                "The component must have the strictEvents attribute on its <script> tag or it must define the $$Events interface.",
-                span,
-            );
-        }
+        let is_ts = |s: &crate::ast::Script| matches!(s.lang.as_deref(), Some("ts" | "typescript" | "TS" | "Typescript" | "TypeScript"));
+        let scripts = [&ctx.ast.instance, &ctx.ast.module];
+        if !scripts.iter().any(|s| s.as_ref().map_or(false, |s| is_ts(s))) { return; }
+        let Some(script) = ctx.ast.instance.as_ref() else { return };
+        let tag = &ctx.source[script.span.start as usize..script.span.end as usize];
+        if tag.split('>').next().unwrap_or("").contains("strictEvents") { return; }
+        if script.content.contains("$$Events") || ctx.ast.module.as_ref().map_or(false, |m| m.content.contains("$$Events")) { return; }
+        ctx.diagnostic("The component must have the strictEvents attribute on its <script> tag or it must define the $$Events interface.", script.span);
     }
 }
