@@ -32,7 +32,24 @@ impl Rule for NoDupeStyleProperties {
                             span,
                             ..
                         } => {
-                            report_or_record(name, *span, &mut first_seen, &mut reported, ctx);
+                            if let Some(first_span) = first_seen.get(name) {
+                                // Report first occurrence (if not already)
+                                if reported.insert(first_span.start) {
+                                    ctx.diagnostic(
+                                        format!("Duplicate property '{}'.", name),
+                                        *first_span,
+                                    );
+                                }
+                                // Report this occurrence
+                                if reported.insert(span.start) {
+                                    ctx.diagnostic(
+                                        format!("Duplicate property '{}'.", name),
+                                        *span,
+                                    );
+                                }
+                            } else {
+                                first_seen.insert(name.clone(), *span);
+                            }
                         }
                         // Check inline style="..." attributes
                         Attribute::NormalAttribute { name, value, span } if name == "style" => {
@@ -43,25 +60,6 @@ impl Rule for NoDupeStyleProperties {
                 }
             }
         });
-    }
-}
-
-fn report_or_record(
-    prop: &str,
-    current_span: oxc::span::Span,
-    first_seen: &mut FxHashMap<String, oxc::span::Span>,
-    reported: &mut FxHashSet<u32>,
-    ctx: &mut LintContext<'_>,
-) {
-    if let Some(first_span) = first_seen.get(prop) {
-        if reported.insert(first_span.start) {
-            ctx.diagnostic(format!("Duplicate property '{}'.", prop), *first_span);
-        }
-        if reported.insert(current_span.start) {
-            ctx.diagnostic(format!("Duplicate property '{}'.", prop), current_span);
-        }
-    } else {
-        first_seen.insert(prop.to_string(), current_span);
     }
 }
 
@@ -86,22 +84,58 @@ fn check_style_value(
                         check_css_props_in_text(s, first_seen, reported, attr_span, attr_text, ctx);
                     }
                     AttributeValuePart::Expression(expr) => {
-                        let empty = FxHashSet::default();
-                        for prop in extract_props_from_expression(expr) {
-                            let skip = if first_seen.contains_key(&prop) { &*reported } else { &empty };
-                            let diag_span = find_prop_in_attr(attr_text, &prop, attr_span.start, skip).unwrap_or(attr_span);
-                            report_or_record(&prop, diag_span, first_seen, reported, ctx);
+                        let expr_props = extract_props_from_expression(expr);
+                        for prop in expr_props {
+                            if let Some(first_span) = first_seen.get(&prop) {
+                                if reported.insert(first_span.start) {
+                                    ctx.diagnostic(
+                                        format!("Duplicate property '{}'.", prop),
+                                        *first_span,
+                                    );
+                                }
+                                // Find position of this property in the source
+                                let diag_span = find_prop_in_attr(attr_text, &prop, attr_span.start, reported)
+                                    .unwrap_or(attr_span);
+                                if reported.insert(diag_span.start) {
+                                    ctx.diagnostic(
+                                        format!("Duplicate property '{}'.", prop),
+                                        diag_span,
+                                    );
+                                }
+                            } else {
+                                // Record first occurrence
+                                let diag_span = find_prop_in_attr(attr_text, &prop, attr_span.start, &FxHashSet::default())
+                                    .unwrap_or(attr_span);
+                                first_seen.insert(prop, diag_span);
+                            }
                         }
                     }
                 }
             }
         }
         AttributeValue::Expression(expr) => {
-            let empty = FxHashSet::default();
-            for prop in extract_props_from_expression(expr) {
-                let skip = if first_seen.contains_key(&prop) { &*reported } else { &empty };
-                let diag_span = find_prop_in_attr(attr_text, &prop, attr_span.start, skip).unwrap_or(attr_span);
-                report_or_record(&prop, diag_span, first_seen, reported, ctx);
+            let expr_props = extract_props_from_expression(expr);
+            for prop in expr_props {
+                if let Some(first_span) = first_seen.get(&prop) {
+                    if reported.insert(first_span.start) {
+                        ctx.diagnostic(
+                            format!("Duplicate property '{}'.", prop),
+                            *first_span,
+                        );
+                    }
+                    let diag_span = find_prop_in_attr(attr_text, &prop, attr_span.start, reported)
+                        .unwrap_or(attr_span);
+                    if reported.insert(diag_span.start) {
+                        ctx.diagnostic(
+                            format!("Duplicate property '{}'.", prop),
+                            diag_span,
+                        );
+                    }
+                } else {
+                    let diag_span = find_prop_in_attr(attr_text, &prop, attr_span.start, &FxHashSet::default())
+                        .unwrap_or(attr_span);
+                    first_seen.insert(prop, diag_span);
+                }
             }
         }
         _ => {}
@@ -116,11 +150,30 @@ fn check_css_props_in_text(
     attr_text: &str,
     ctx: &mut LintContext<'_>,
 ) {
-    let empty = FxHashSet::default();
     for prop in collect_props_from_css_text(text) {
-        let skip = if first_seen.contains_key(&prop) { &*reported } else { &empty };
-        let diag_span = find_prop_in_attr(attr_text, &prop, attr_span.start, skip).unwrap_or(attr_span);
-        report_or_record(&prop, diag_span, first_seen, reported, ctx);
+        if let Some(first_span) = first_seen.get(&prop) {
+            // Report first occurrence
+            if reported.insert(first_span.start) {
+                ctx.diagnostic(
+                    format!("Duplicate property '{}'.", prop),
+                    *first_span,
+                );
+            }
+            // Find and report this occurrence
+            let diag_span = find_prop_in_attr(attr_text, &prop, attr_span.start, reported)
+                .unwrap_or(attr_span);
+            if reported.insert(diag_span.start) {
+                ctx.diagnostic(
+                    format!("Duplicate property '{}'.", prop),
+                    diag_span,
+                );
+            }
+        } else {
+            // Record first occurrence with its actual position
+            let diag_span = find_prop_in_attr(attr_text, &prop, attr_span.start, &FxHashSet::default())
+                .unwrap_or(attr_span);
+            first_seen.insert(prop, diag_span);
+        }
     }
 }
 
