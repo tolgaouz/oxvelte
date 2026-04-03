@@ -8,136 +8,67 @@ use std::collections::HashMap;
 
 pub struct NoNotFunctionHandler;
 
-/// Check if a JS expression string looks like a non-function literal.
 fn is_non_function_literal(expr: &str) -> bool {
     let s = expr.trim();
-    // Booleans, undefined
-    if s == "true" || s == "false" || s == "undefined" {
-        return true;
-    }
-    // Numbers (including negative)
-    if s.parse::<f64>().is_ok() {
-        return true;
-    }
-    // BigInt (e.g. 42n)
-    if s.ends_with('n') && s[..s.len()-1].parse::<i64>().is_ok() {
-        return true;
-    }
-    // String literals
-    if (s.starts_with('"') && s.ends_with('"'))
-        || (s.starts_with('\'') && s.ends_with('\''))
-        || (s.starts_with('`') && s.ends_with('`'))
-    {
-        return true;
-    }
-    // Regex
-    if s.starts_with('/') && s.len() > 1 {
-        // Find closing / (skip first char)
-        if let Some(end) = s[1..].rfind('/') {
-            let after = &s[end+2..];
-            // After closing / should be just flags (gimsuvy)
-            if after.chars().all(|c| "gimsuy".contains(c)) {
-                return true;
-            }
-        }
-    }
-    // Array/Object literals
-    if (s.starts_with('[') && s.ends_with(']'))
-        || (s.starts_with('{') && s.ends_with('}'))
-    {
-        return true;
-    }
-    // class expressions, new expressions
-    if s.starts_with("class ") || s.starts_with("new ") {
-        return true;
-    }
-    false
+    matches!(s, "true" | "false" | "undefined")
+        || s.parse::<f64>().is_ok()
+        || (s.ends_with('n') && s[..s.len()-1].parse::<i64>().is_ok())
+        || matches!(s.as_bytes(), [b'"', .., b'"'] | [b'\'', .., b'\''] | [b'`', .., b'`']
+            | [b'[', .., b']'] | [b'{', .., b'}'])
+        || s.starts_with("class ") || s.starts_with("new ")
+        || (s.starts_with('/') && s.len() > 1 && s[1..].rfind('/').map_or(false, |e| s[e+2..].chars().all(|c| "gimsuy".contains(c))))
 }
 
-/// Get the type label for a non-function literal expression.
 fn non_function_phrase(expr: &str) -> &'static str {
     let s = expr.trim();
-    if s.starts_with('[') { "array" }
-    else if s.starts_with('{') { "object" }
-    else if s.starts_with('"') || s.starts_with('\'') || s.starts_with('`') { "string value" }
-    else if s == "true" || s == "false" { "boolean value" }
-    else if s.starts_with("new ") { "new expression" }
-    else if s.starts_with("class ") { "class" }
-    else if s.ends_with('n') && s[..s.len()-1].parse::<i64>().is_ok() { "bigint value" }
-    else if s.parse::<f64>().is_ok() { "number value" }
-    else if s.starts_with('/') { "regex value" }
-    else { "non-function value" }
+    match s.as_bytes().first() {
+        Some(b'[') => "array", Some(b'{') => "object",
+        Some(b'"' | b'\'' | b'`') => "string value", Some(b'/') => "regex value",
+        _ if s == "true" || s == "false" => "boolean value",
+        _ if s.starts_with("new ") => "new expression",
+        _ if s.starts_with("class ") => "class",
+        _ if s.ends_with('n') && s[..s.len()-1].parse::<i64>().is_ok() => "bigint value",
+        _ if s.parse::<f64>().is_ok() => "number value",
+        _ => "non-function value",
+    }
 }
 
-/// Scan script content for variable declarations with non-function initializers.
-/// Returns map of variable names → type phrase.
 fn find_non_function_vars(content: &str) -> HashMap<String, &'static str> {
-    let mut non_fn_vars = HashMap::new();
-    // Simple heuristic: look for `const|let|var NAME = <literal>;`
+    let mut vars = HashMap::new();
     for line in content.lines() {
-        let trimmed = line.trim();
-        for keyword in &["const ", "let ", "var "] {
-            if let Some(rest) = trimmed.strip_prefix(keyword) {
-                // Extract variable name (until = or space)
-                let name_end = rest.find(|c: char| c == '=' || c == ' ' || c == ':').unwrap_or(rest.len());
-                let name = rest[..name_end].trim();
-                if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
-                    continue;
-                }
-                // Find the initializer after =
-                if let Some(eq_pos) = rest.find('=') {
-                    let init = rest[eq_pos + 1..].trim();
-                    // Strip trailing semicolon
-                    let init = init.strip_suffix(';').unwrap_or(init).trim();
-                    if !init.is_empty() && is_non_function_literal(init) {
-                        non_fn_vars.insert(name.to_string(), non_function_phrase(init));
-                    }
+        let t = line.trim();
+        for kw in &["const ", "let ", "var "] {
+            if let Some(rest) = t.strip_prefix(kw) {
+                let ne = rest.find(|c: char| c == '=' || c == ' ' || c == ':').unwrap_or(rest.len());
+                let name = rest[..ne].trim();
+                if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') { continue; }
+                if let Some(eq) = rest.find('=') {
+                    let init = rest[eq + 1..].trim().strip_suffix(';').unwrap_or(rest[eq + 1..].trim()).trim();
+                    if !init.is_empty() && is_non_function_literal(init) { vars.insert(name.to_string(), non_function_phrase(init)); }
                 }
             }
         }
     }
-    non_fn_vars
+    vars
 }
 
-/// Check if a handler attribute value contains a non-function expression.
 fn check_handler_value(ctx: &mut LintContext, non_fn_vars: &HashMap<String, &'static str>, span: Span) {
     let region = &ctx.source[span.start as usize..span.end as usize];
-    if let Some(eq_pos) = region.find('=') {
-        let value = region[eq_pos + 1..].trim();
-        if value.starts_with('{') && value.ends_with('}') {
-            let expr = value[1..value.len()-1].trim();
-            let brace_open = span.start as usize + region.find('{').unwrap_or(eq_pos + 1);
-            let expr_in_source = &ctx.source[brace_open + 1..span.end as usize];
-            let trimmed_start = expr_in_source.len() - expr_in_source.trim_start().len();
-            let expr_span_start = (brace_open + 1 + trimmed_start) as u32;
-            let expr_span_end = expr_span_start + expr.len() as u32;
-            let expr_span = Span::new(expr_span_start, expr_span_end);
+    let Some(eq_pos) = region.find('=') else { return };
+    let value = region[eq_pos + 1..].trim();
+    if !value.starts_with('{') || !value.ends_with('}') { return; }
+    let expr = value[1..value.len()-1].trim();
+    let bo = span.start as usize + region.find('{').unwrap_or(eq_pos + 1);
+    let es = &ctx.source[bo + 1..span.end as usize];
+    let ts = es.len() - es.trim_start().len();
+    let expr_span = Span::new((bo + 1 + ts) as u32, (bo + 1 + ts + expr.len()) as u32);
 
-            // Check for inline non-function literals
-            if is_non_function_literal(expr) {
-                let msg = if expr.starts_with('[') {
-                    "Unexpected array in event handler.".to_string()
-                } else if expr.starts_with('{') {
-                    "Unexpected object in event handler.".to_string()
-                } else if expr.starts_with('"') || expr.starts_with('\'') || expr.starts_with('`') {
-                    "Unexpected string value in event handler.".to_string()
-                } else if expr == "true" || expr == "false" {
-                    "Unexpected boolean value in event handler.".to_string()
-                } else if expr.starts_with("new ") {
-                    "Unexpected new expression in event handler.".to_string()
-                } else if expr.starts_with("class ") {
-                    "Unexpected class in event handler.".to_string()
-                } else {
-                    format!("Expected a function as event handler, got '{}'.", expr)
-                };
-                ctx.diagnostic(msg, expr_span);
-            } else if expr.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
-                // Simple identifier reference — check if it's a known non-function var
-                if let Some(phrase) = non_fn_vars.get(expr) {
-                    let msg = format!("Unexpected {} in event handler.", phrase);
-                    ctx.diagnostic(msg, expr_span);
-                }
-            }
+    if is_non_function_literal(expr) {
+        let phrase = non_function_phrase(expr);
+        ctx.diagnostic(format!("Unexpected {} in event handler.", phrase), expr_span);
+    } else if expr.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+        if let Some(phrase) = non_fn_vars.get(expr) {
+            ctx.diagnostic(format!("Unexpected {} in event handler.", phrase), expr_span);
         }
     }
 }
@@ -152,25 +83,17 @@ impl Rule for NoNotFunctionHandler {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        // Build set of non-function variable names from script
-        let non_fn_vars = if let Some(script) = &ctx.ast.instance {
-            find_non_function_vars(&script.content)
-        } else {
-            HashMap::new()
-        };
-
+        let vars = ctx.ast.instance.as_ref().map(|s| find_non_function_vars(&s.content)).unwrap_or_default();
         walk_template_nodes(&ctx.ast.html, &mut |node| {
-            if let TemplateNode::Element(el) = node {
-                for attr in &el.attributes {
-                    let span = match attr {
-                        Attribute::Directive { kind: DirectiveKind::EventHandler, span, .. } => Some(*span),
-                        Attribute::NormalAttribute { name, span, .. }
-                            if name.starts_with("on") && name.len() > 2
-                                && name.as_bytes()[2].is_ascii_lowercase() => Some(*span),
-                        _ => None,
-                    };
-                    if let Some(s) = span { check_handler_value(ctx, &non_fn_vars, s); }
-                }
+            let TemplateNode::Element(el) = node else { return };
+            for attr in &el.attributes {
+                let span = match attr {
+                    Attribute::Directive { kind: DirectiveKind::EventHandler, span, .. } => *span,
+                    Attribute::NormalAttribute { name, span, .. }
+                        if name.starts_with("on") && name.len() > 2 && name.as_bytes()[2].is_ascii_lowercase() => *span,
+                    _ => continue,
+                };
+                check_handler_value(ctx, &vars, span);
             }
         });
     }
