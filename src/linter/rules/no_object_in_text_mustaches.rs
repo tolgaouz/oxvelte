@@ -62,7 +62,7 @@ fn detect_expression_kind(expr: &str) -> Option<&'static str> {
     // not an array used in a method call chain like `[...].includes(x)`.
     if expr.starts_with('[') {
         // Find the matching `]` then check if anything follows (method call = not a standalone array)
-        if let Some(end) = find_matching_bracket(expr) {
+        if let Some(end) = find_matching(expr, '[', ']') {
             let after = expr[end + 1..].trim_start();
             if after.is_empty() {
                 return Some("array");
@@ -114,7 +114,7 @@ fn is_top_level_arrow(expr: &str) -> bool {
 
     if s.starts_with('(') {
         // Find matching `)` then check for `=>`
-        if let Some(close) = find_matching_paren(s) {
+        if let Some(close) = find_matching(s, '(', ')') {
             let after = s[close + 1..].trim_start();
             return after.starts_with("=>");
         }
@@ -132,35 +132,15 @@ fn is_top_level_arrow(expr: &str) -> bool {
     false
 }
 
-/// Find the position of the matching closing bracket `]` for an expression starting with `[`.
-fn find_matching_bracket(s: &str) -> Option<usize> {
+fn find_matching(s: &str, open: char, close: char) -> Option<usize> {
     let mut depth = 0i32;
     let mut in_string = None::<char>;
     for (i, c) in s.char_indices() {
         match c {
             '\'' | '"' | '`' if in_string.is_none() => in_string = Some(c),
             c2 if in_string == Some(c2) => in_string = None,
-            '[' if in_string.is_none() => depth += 1,
-            ']' if in_string.is_none() => {
-                depth -= 1;
-                if depth == 0 { return Some(i); }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-/// Find the position of the matching closing paren `)` for an expression starting with `(`.
-fn find_matching_paren(s: &str) -> Option<usize> {
-    let mut depth = 0i32;
-    let mut in_string = None::<char>;
-    for (i, c) in s.char_indices() {
-        match c {
-            '\'' | '"' | '`' if in_string.is_none() => in_string = Some(c),
-            c2 if in_string == Some(c2) => in_string = None,
-            '(' if in_string.is_none() => depth += 1,
-            ')' if in_string.is_none() => {
+            c2 if c2 == open && in_string.is_none() => depth += 1,
+            c2 if c2 == close && in_string.is_none() => {
                 depth -= 1;
                 if depth == 0 { return Some(i); }
             }
