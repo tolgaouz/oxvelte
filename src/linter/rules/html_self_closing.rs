@@ -53,20 +53,13 @@ impl Rule for HtmlSelfClosing {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        // Parse config options
         let opts = ctx.config.options.as_ref()
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first());
+        let preset = opts.and_then(|v| v.as_str());
 
-        // Check for string preset options like "html" or "none"
-        let preset = ctx.config.options.as_ref()
-            .and_then(|v| v.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-
-        let (component_opt, normal_opt, void_opt, svg_opt, math_opt, svelte_opt) = if let Some(ref p) = preset {
-            match p.as_str() {
+        let (component_opt, normal_opt, void_opt, svg_opt, math_opt, svelte_opt) = if let Some(p) = preset {
+            match p {
                 "html" => ("never", "never", "always", "always", "never", "always"),
                 "none" => ("never", "never", "never", "never", "never", "never"),
                 "all" => ("always", "always", "always", "always", "always", "always"),
@@ -92,32 +85,21 @@ impl Rule for HtmlSelfClosing {
 
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
-                let is_svelte = el.name.starts_with("svelte:");
-                let is_component = !is_svelte && (el.name.starts_with(|c: char| c.is_uppercase())
-                    || el.name.contains('.'));
-                let is_void = VOID_ELEMENTS.contains(&el.name.as_str());
-                let is_svg = is_svg_element(&el.name);
-                let is_math = is_math_element(&el.name);
-                let _is_normal = !is_component && !is_svelte && !is_void && !is_svg && !is_math;
-
-                let has_only_whitespace = el.children.iter().all(|c| {
-                    if let TemplateNode::Text(t) = c { t.data.trim().is_empty() } else { false }
-                });
-                let is_empty = el.children.is_empty() || has_only_whitespace;
-
-                let (kind, opt) = if is_svelte {
+                let (kind, opt) = if el.name.starts_with("svelte:") {
                     (ElementKind::Svelte, &svelte_opt)
-                } else if is_component {
+                } else if el.name.starts_with(|c: char| c.is_uppercase()) || el.name.contains('.') {
                     (ElementKind::Component, &component_opt)
-                } else if is_void {
+                } else if VOID_ELEMENTS.contains(&el.name.as_str()) {
                     (ElementKind::Void, &void_opt)
-                } else if is_svg {
+                } else if is_svg_element(&el.name) {
                     (ElementKind::Svg, &svg_opt)
-                } else if is_math {
+                } else if is_math_element(&el.name) {
                     (ElementKind::Math, &math_opt)
                 } else {
                     (ElementKind::Normal, &normal_opt)
                 };
+                let is_empty = el.children.is_empty() || el.children.iter().all(|c|
+                    matches!(c, TemplateNode::Text(t) if t.data.trim().is_empty()));
 
                 if opt == "ignore" { return; }
 
@@ -133,7 +115,7 @@ impl Rule for HtmlSelfClosing {
                 if opt == "never" && el.self_closing {
                     ctx.diagnostic(format!("Disallow self-closing on {}.", label), el.span);
                 } else if opt == "always" && !el.self_closing {
-                    if is_void || is_empty {
+                    if matches!(kind, ElementKind::Void) || is_empty {
                         ctx.diagnostic(format!("Require self-closing on {}.", label), el.span);
                     }
                 }
