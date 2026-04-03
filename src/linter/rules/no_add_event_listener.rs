@@ -3,38 +3,23 @@
 
 use crate::linter::{LintContext, Rule};
 
-const EVENT_LISTENER_METHODS: &[&str] = &[
-    "addEventListener(",
-    ".addEventListener(",
-];
-
 pub struct NoAddEventListener;
 
 impl Rule for NoAddEventListener {
-    fn name(&self) -> &'static str {
-        "svelte/no-add-event-listener"
-    }
+    fn name(&self) -> &'static str { "svelte/no-add-event-listener" }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        if let Some(script) = &ctx.ast.instance {
-            let content = &script.content;
-            let tag_start = script.span.start as usize;
-            let source = ctx.source;
-
-            for method in EVENT_LISTENER_METHODS {
-                let mut search_from = 0;
-                while let Some(pos) = content[search_from..].find(method) {
-                    let abs_pos = search_from + pos;
-                    let tag_text = &source[tag_start..script.span.end as usize];
-                    if let Some(gt) = tag_text.find('>') {
-                        let source_pos = tag_start + gt + 1 + abs_pos;
-                        ctx.diagnostic(
-                            "Do not use `addEventListener`. Use the `on` function from `svelte/events` instead.",
-                            oxc::span::Span::new(source_pos as u32, (source_pos + method.len()) as u32),
-                        );
-                    }
-                    search_from = abs_pos + method.len();
-                }
+        let Some(script) = &ctx.ast.instance else { return };
+        let base = script.span.start as usize;
+        let gt = ctx.source[base..script.span.end as usize].find('>').unwrap_or(0);
+        for method in &["addEventListener(", ".addEventListener("] {
+            let mut from = 0;
+            while let Some(pos) = script.content[from..].find(method) {
+                let abs = from + pos;
+                let sp = base + gt + 1 + abs;
+                ctx.diagnostic("Do not use `addEventListener`. Use the `on` function from `svelte/events` instead.",
+                    oxc::span::Span::new(sp as u32, (sp + method.len()) as u32));
+                from = abs + method.len();
             }
         }
     }

@@ -12,31 +12,15 @@ impl Rule for NoDynamicSlotName {
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         walk_template_nodes(&ctx.ast.html, &mut |node| {
-            if let TemplateNode::Element(el) = node {
-                if el.name == "slot" {
-                    for attr in &el.attributes {
-                        if let Attribute::NormalAttribute { name, value, span } = attr {
-                            if name == "name" {
-                                match value {
-                                    AttributeValue::Static(_) => {
-                                        // Static string is fine
-                                    }
-                                    AttributeValue::True => {
-                                        ctx.diagnostic(
-                                            "`<slot>` name requires a value.",
-                                            *span,
-                                        );
-                                    }
-                                    _ => {
-                                        // Expression or Concat — dynamic
-                                        ctx.diagnostic(
-                                            "`<slot>` name cannot be dynamic.",
-                                            *span,
-                                        );
-                                    }
-                                }
-                            }
-                        }
+            let TemplateNode::Element(el) = node else { return };
+            if el.name != "slot" { return; }
+            for attr in &el.attributes {
+                if let Attribute::NormalAttribute { name, value, span } = attr {
+                    if name != "name" { continue; }
+                    match value {
+                        AttributeValue::Static(_) => {}
+                        AttributeValue::True => ctx.diagnostic("`<slot>` name requires a value.", *span),
+                        _ => ctx.diagnostic("`<slot>` name cannot be dynamic.", *span),
                     }
                 }
             }
