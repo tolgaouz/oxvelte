@@ -19,22 +19,12 @@ impl Rule for ButtonHasType {
             .and_then(|v| v.as_object())
             .cloned();
 
-        // Determine which type values are forbidden
-        let button_forbidden = opts.as_ref()
-            .and_then(|o| o.get("button"))
-            .and_then(|v| v.as_bool())
-            .map(|v| !v)
-            .unwrap_or(false);
-        let submit_forbidden = opts.as_ref()
-            .and_then(|o| o.get("submit"))
-            .and_then(|v| v.as_bool())
-            .map(|v| !v)
-            .unwrap_or(false);
-        let reset_forbidden = opts.as_ref()
-            .and_then(|o| o.get("reset"))
-            .and_then(|v| v.as_bool())
-            .map(|v| !v)
-            .unwrap_or(false);
+        let is_forbidden = |key: &str| opts.as_ref()
+            .and_then(|o| o.get(key)).and_then(|v| v.as_bool())
+            .map(|v| !v).unwrap_or(false);
+        let button_forbidden = is_forbidden("button");
+        let submit_forbidden = is_forbidden("submit");
+        let reset_forbidden = is_forbidden("reset");
 
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
@@ -117,13 +107,7 @@ impl Rule for ButtonHasType {
                         }
                     }
                     None => {
-                        // No type attribute found — check for spread (type may be spread in)
-                        let has_spread = el.attributes.iter().any(|attr| {
-                            matches!(attr, Attribute::Spread { .. })
-                        });
-                        if has_spread {
-                            return;
-                        }
+                        if el.attributes.iter().any(|a| matches!(a, Attribute::Spread { .. })) { return; }
                         ctx.diagnostic(
                             "Missing an explicit type attribute for button.",
                             el.span,
