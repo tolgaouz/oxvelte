@@ -98,7 +98,7 @@ impl Rule for HtmlSelfClosing {
                 let is_void = VOID_ELEMENTS.contains(&el.name.as_str());
                 let is_svg = is_svg_element(&el.name);
                 let is_math = is_math_element(&el.name);
-                let is_normal = !is_component && !is_svelte && !is_void && !is_svg && !is_math;
+                let _is_normal = !is_component && !is_svelte && !is_void && !is_svg && !is_math;
 
                 let has_only_whitespace = el.children.iter().all(|c| {
                     if let TemplateNode::Text(t) = c { t.data.trim().is_empty() } else { false }

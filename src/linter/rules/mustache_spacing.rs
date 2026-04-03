@@ -41,7 +41,7 @@ impl Rule for MustacheSpacing {
             .unwrap_or("never")
             .to_string();
         // "always" = always require space, "always-after-expression" = only for tags with expressions, "never" = no space
-        let tags_closing_always = tags_closing_mode == "always";
+        let _tags_closing_always = tags_closing_mode == "always";
 
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             // Check SnippetBlock opening and closing tags
