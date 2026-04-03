@@ -20,37 +20,26 @@ impl Rule for NoUselessMustaches {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        // Config: { "ignoreIncludesComment": true, "ignoreStringEscape": true }
         let opts = ctx.config.options.as_ref()
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first());
-        let ignore_includes_comment = opts
-            .and_then(|v| v.get("ignoreIncludesComment"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let ignore_string_escape = opts
-            .and_then(|v| v.get("ignoreStringEscape"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let get_bool = |key| opts.and_then(|v| v.get(key)).and_then(|v| v.as_bool()).unwrap_or(false);
+        let ignore_comment = get_bool("ignoreIncludesComment");
+        let ignore_escape = get_bool("ignoreStringEscape");
 
         walk_template_nodes(&ctx.ast.html, &mut |node| {
-            // Check text-level mustache tags
             if let TemplateNode::MustacheTag(tag) = node {
-                check_expression(&tag.expression, tag.span, ctx, ignore_includes_comment, ignore_string_escape);
+                check_expression(&tag.expression, tag.span, ctx, ignore_comment, ignore_escape);
             }
-            // Check attribute-level mustache expressions
             if let TemplateNode::Element(el) = node {
                 for attr in &el.attributes {
                     match attr {
                         Attribute::NormalAttribute { value, span, name, .. } => {
-                            // Skip `this` attribute on `svelte:element` — mustaches are required there
-                            if name == "this" && el.name.starts_with("svelte:") {
-                                continue;
-                            }
-                            check_attribute_value(value, *span, ctx, ignore_includes_comment, ignore_string_escape);
+                            if name == "this" && el.name.starts_with("svelte:") { continue; }
+                            check_attribute_value(value, *span, ctx, ignore_comment, ignore_escape);
                         }
                         Attribute::Directive { kind: DirectiveKind::StyleDirective, value, span, .. } => {
-                            check_attribute_value(value, *span, ctx, ignore_includes_comment, ignore_string_escape);
+                            check_attribute_value(value, *span, ctx, ignore_comment, ignore_escape);
                         }
                         _ => {}
                     }
@@ -60,15 +49,13 @@ impl Rule for NoUselessMustaches {
     }
 }
 
-fn check_attribute_value(value: &AttributeValue, span: oxc::span::Span, ctx: &mut LintContext<'_>, ignore_includes_comment: bool, ignore_string_escape: bool) {
+fn check_attribute_value(value: &AttributeValue, span: oxc::span::Span, ctx: &mut LintContext<'_>, ignore_comment: bool, ignore_escape: bool) {
     match value {
-        AttributeValue::Expression(expr) => {
-            check_expression(expr, span, ctx, ignore_includes_comment, ignore_string_escape);
-        }
+        AttributeValue::Expression(expr) => check_expression(expr, span, ctx, ignore_comment, ignore_escape),
         AttributeValue::Concat(parts) => {
             for part in parts {
                 if let AttributeValuePart::Expression(expr) = part {
-                    check_expression(expr, span, ctx, ignore_includes_comment, ignore_string_escape);
+                    check_expression(expr, span, ctx, ignore_comment, ignore_escape);
                 }
             }
         }
@@ -87,16 +74,10 @@ fn check_expression(expr: &str, span: oxc::span::Span, ctx: &mut LintContext<'_>
     if let Some(inner) = extract_simple_string_literal(stripped) {
         // If ignoreStringEscape is true, skip strings with meaningful control-character escapes
         // Only \n \r \v \t \b \f \u \x are "meaningful" — plain \\ and \' \" are not
-        if ignore_string_escape {
-            let bytes = inner.as_bytes();
-            for i in 0..bytes.len().saturating_sub(1) {
-                if bytes[i] == b'\\' {
-                    let next = bytes[i + 1];
-                    if matches!(next, b'n' | b'r' | b'v' | b't' | b'b' | b'f' | b'u' | b'x') {
-                        return;
-                    }
-                }
-            }
+        if ignore_string_escape && inner.as_bytes().windows(2).any(|w| {
+            w[0] == b'\\' && matches!(w[1], b'n' | b'r' | b'v' | b't' | b'b' | b'f' | b'u' | b'x')
+        }) {
+            return;
         }
         // Don't flag strings containing `{` — they can't be used as raw
         // text in Svelte templates (would start an expression block).
