@@ -70,110 +70,60 @@ fn check_style_value(
     attr_span: oxc::span::Span,
     ctx: &mut LintContext<'_>,
 ) {
-    let source = ctx.source;
-    let attr_text = &source[attr_span.start as usize..attr_span.end as usize];
+    let attr_text = &ctx.source[attr_span.start as usize..attr_span.end as usize];
 
     match value {
         AttributeValue::Static(s) => {
-            check_css_props_in_text(s, first_seen, reported, attr_span, attr_text, ctx);
+            for prop in collect_props_from_css_text(s) {
+                report_or_record(prop, first_seen, reported, attr_text, attr_span, ctx);
+            }
         }
         AttributeValue::Concat(parts) => {
             for part in parts {
                 match part {
                     AttributeValuePart::Static(s) => {
-                        check_css_props_in_text(s, first_seen, reported, attr_span, attr_text, ctx);
+                        for prop in collect_props_from_css_text(s) {
+                            report_or_record(prop, first_seen, reported, attr_text, attr_span, ctx);
+                        }
                     }
                     AttributeValuePart::Expression(expr) => {
-                        let expr_props = extract_props_from_expression(expr);
-                        for prop in expr_props {
-                            if let Some(first_span) = first_seen.get(&prop) {
-                                if reported.insert(first_span.start) {
-                                    ctx.diagnostic(
-                                        format!("Duplicate property '{}'.", prop),
-                                        *first_span,
-                                    );
-                                }
-                                // Find position of this property in the source
-                                let diag_span = find_prop_in_attr(attr_text, &prop, attr_span.start, reported)
-                                    .unwrap_or(attr_span);
-                                if reported.insert(diag_span.start) {
-                                    ctx.diagnostic(
-                                        format!("Duplicate property '{}'.", prop),
-                                        diag_span,
-                                    );
-                                }
-                            } else {
-                                // Record first occurrence
-                                let diag_span = find_prop_in_attr(attr_text, &prop, attr_span.start, &FxHashSet::default())
-                                    .unwrap_or(attr_span);
-                                first_seen.insert(prop, diag_span);
-                            }
+                        for prop in extract_props_from_expression(expr) {
+                            report_or_record(prop, first_seen, reported, attr_text, attr_span, ctx);
                         }
                     }
                 }
             }
         }
         AttributeValue::Expression(expr) => {
-            let expr_props = extract_props_from_expression(expr);
-            for prop in expr_props {
-                if let Some(first_span) = first_seen.get(&prop) {
-                    if reported.insert(first_span.start) {
-                        ctx.diagnostic(
-                            format!("Duplicate property '{}'.", prop),
-                            *first_span,
-                        );
-                    }
-                    let diag_span = find_prop_in_attr(attr_text, &prop, attr_span.start, reported)
-                        .unwrap_or(attr_span);
-                    if reported.insert(diag_span.start) {
-                        ctx.diagnostic(
-                            format!("Duplicate property '{}'.", prop),
-                            diag_span,
-                        );
-                    }
-                } else {
-                    let diag_span = find_prop_in_attr(attr_text, &prop, attr_span.start, &FxHashSet::default())
-                        .unwrap_or(attr_span);
-                    first_seen.insert(prop, diag_span);
-                }
+            for prop in extract_props_from_expression(expr) {
+                report_or_record(prop, first_seen, reported, attr_text, attr_span, ctx);
             }
         }
         _ => {}
     }
 }
 
-fn check_css_props_in_text(
-    text: &str,
+fn report_or_record(
+    prop: String,
     first_seen: &mut FxHashMap<String, oxc::span::Span>,
     reported: &mut FxHashSet<u32>,
-    attr_span: oxc::span::Span,
     attr_text: &str,
+    attr_span: oxc::span::Span,
     ctx: &mut LintContext<'_>,
 ) {
-    for prop in collect_props_from_css_text(text) {
-        if let Some(first_span) = first_seen.get(&prop) {
-            // Report first occurrence
-            if reported.insert(first_span.start) {
-                ctx.diagnostic(
-                    format!("Duplicate property '{}'.", prop),
-                    *first_span,
-                );
-            }
-            // Find and report this occurrence
-            let diag_span = find_prop_in_attr(attr_text, &prop, attr_span.start, reported)
-                .unwrap_or(attr_span);
-            if reported.insert(diag_span.start) {
-                ctx.diagnostic(
-                    format!("Duplicate property '{}'.", prop),
-                    diag_span,
-                );
-            }
-        } else {
-            // Record first occurrence with its actual position
-            let diag_span = find_prop_in_attr(attr_text, &prop, attr_span.start, &FxHashSet::default())
-                .unwrap_or(attr_span);
-            first_seen.insert(prop, diag_span);
+    if let Some(first_span) = first_seen.get(&prop) {
+        if reported.insert(first_span.start) {
+            ctx.diagnostic(format!("Duplicate property '{}'.", prop), *first_span);
         }
+        let diag_span = find_prop_in_attr(attr_text, &prop, attr_span.start, reported)
+            .unwrap_or(attr_span);
+        if reported.insert(diag_span.start) {
+            ctx.diagnostic(format!("Duplicate property '{}'.", prop), diag_span);
+        }
+    } else {
+        let diag_span = find_prop_in_attr(attr_text, &prop, attr_span.start, &FxHashSet::default())
+            .unwrap_or(attr_span);
+        first_seen.insert(prop, diag_span);
     }
 }
 
