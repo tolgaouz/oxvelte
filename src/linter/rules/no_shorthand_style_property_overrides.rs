@@ -25,28 +25,7 @@ impl Rule for NoShorthandStylePropertyOverrides {
                 for attr in &el.attributes {
                     match attr {
                         Attribute::NormalAttribute { name, value, span } if name == "style" => {
-                            // Extract props from static text
-                            let style_text = collect_style_text(value);
-                            for decl in style_text.split(';') {
-                                let decl = decl.trim();
-                                if let Some(colon) = decl.find(':') {
-                                    let prop = decl[..colon].trim().to_lowercase();
-                                    if !prop.is_empty() && prop.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-                                        all_props.push((prop, *span));
-                                    }
-                                }
-                            }
-                            // Also extract props from expression strings
-                            if let AttributeValue::Concat(parts) = value {
-                                for part in parts {
-                                    if let AttributeValuePart::Expression(expr) = part {
-                                        let expr_props = extract_props_from_expression(expr);
-                                        for prop in expr_props {
-                                            all_props.push((prop, *span));
-                                        }
-                                    }
-                                }
-                            }
+                            collect_style_props(value, *span, &mut all_props);
                         }
                         Attribute::Directive { kind: DirectiveKind::StyleDirective, name, span, .. } => {
                             all_props.push((name.to_lowercase(), *span));
@@ -74,16 +53,31 @@ impl Rule for NoShorthandStylePropertyOverrides {
     }
 }
 
-fn collect_style_text(value: &AttributeValue) -> String {
+fn parse_css_prop(decl: &str) -> Option<String> {
+    let prop = decl[..decl.find(':')?].trim().to_lowercase();
+    if !prop.is_empty() && prop.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') { Some(prop) } else { None }
+}
+
+fn collect_static_props(text: &str, span: oxc::span::Span, out: &mut Vec<(String, oxc::span::Span)>) {
+    for decl in text.split(';') {
+        if let Some(prop) = parse_css_prop(decl.trim()) { out.push((prop, span)); }
+    }
+}
+
+fn collect_style_props(value: &AttributeValue, span: oxc::span::Span, out: &mut Vec<(String, oxc::span::Span)>) {
     match value {
-        AttributeValue::Static(s) => s.clone(),
+        AttributeValue::Static(s) => collect_static_props(s, span, out),
         AttributeValue::Concat(parts) => {
-            parts.iter().map(|p| match p {
-                AttributeValuePart::Static(s) => s.as_str(),
-                AttributeValuePart::Expression(_) => "",
-            }).collect::<Vec<_>>().join("")
+            for part in parts {
+                match part {
+                    AttributeValuePart::Static(s) => collect_static_props(s, span, out),
+                    AttributeValuePart::Expression(expr) => {
+                        for prop in extract_props_from_expression(expr) { out.push((prop, span)); }
+                    }
+                }
+            }
         }
-        _ => String::new(),
+        _ => {}
     }
 }
 
@@ -109,15 +103,8 @@ fn extract_props_from_expression(expr: &str) -> FxHashSet<String> {
                     continue;
                 }
                 if bytes[i] == ch {
-                    let literal = &expr[start..i];
-                    for decl in literal.split(';') {
-                        let decl = decl.trim();
-                        if let Some(colon) = decl.find(':') {
-                            let prop = decl[..colon].trim().to_lowercase();
-                            if !prop.is_empty() && prop.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-                                props.insert(prop);
-                            }
-                        }
+                    for decl in expr[start..i].split(';') {
+                        if let Some(prop) = parse_css_prop(decl.trim()) { props.insert(prop); }
                     }
                     break;
                 }
