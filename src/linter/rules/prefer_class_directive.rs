@@ -16,194 +16,94 @@ impl Rule for PreferClassDirective {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        // Config: { "prefer": "empty" } — only flag ternaries with empty false branch
-        let prefer_empty = ctx.config.options.as_ref()
-            .and_then(|v| v.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|v| v.get("prefer"))
-            .and_then(|v| v.as_str())
-            .map(|s| s != "always")
-            .unwrap_or(true);
+        let prefer_empty = ctx.config.options.as_ref().and_then(|v| v.as_array()).and_then(|a| a.first())
+            .and_then(|v| v.get("prefer")).and_then(|v| v.as_str()).map(|s| s != "always").unwrap_or(true);
+        let msg = "Unexpected class using the ternary operator.";
 
         walk_template_nodes(&ctx.ast.html, &mut |node| {
-            if let TemplateNode::Element(el) = node {
-                // Skip components (uppercase) but allow svelte:element
-                let first_char = el.name.chars().next().unwrap_or('a');
-                if first_char.is_uppercase() { return; }
-                if el.name.starts_with("svelte:") && el.name != "svelte:element" { return; }
+            let TemplateNode::Element(el) = node else { return };
+            if el.name.as_bytes().first().map_or(false, |c| c.is_ascii_uppercase()) { return; }
+            if el.name.starts_with("svelte:") && el.name != "svelte:element" { return; }
 
-                for attr in &el.attributes {
-                    if let Attribute::NormalAttribute { name, value, span } = attr {
-                        if name == "class" {
-                            match value {
-                                AttributeValue::Expression(expr) => {
-                                    if is_simple_class_ternary(expr) || (!prefer_empty && is_dual_class_ternary(expr)) {
-                                        ctx.diagnostic(
-                                            "Unexpected class using the ternary operator.",
-                                            *span,
-                                        );
-                                    }
-                                }
-                                AttributeValue::Concat(parts) => {
-                                    for (i, part) in parts.iter().enumerate() {
-                                        if let AttributeValuePart::Expression(expr) = part {
-                                            // Check for simple ternary with empty false branch
-                                            if is_simple_class_ternary(expr) {
-                                                let prev_ok = if i > 0 {
-                                                    match &parts[i - 1] {
-                                                        AttributeValuePart::Static(s) => s.is_empty() || s.ends_with(' '),
-                                                        AttributeValuePart::Expression(_) => false,
-                                                    }
-                                                } else { true };
-                                                let next_ok = if i + 1 < parts.len() {
-                                                    match &parts[i + 1] {
-                                                        AttributeValuePart::Static(s) => s.is_empty() || s.starts_with(' '),
-                                                        AttributeValuePart::Expression(_) => false,
-                                                    }
-                                                } else { true };
-                                                if prev_ok && next_ok {
-                                                    ctx.diagnostic(
-                                                        "Unexpected class using the ternary operator.",
-                                                        *span,
-                                                    );
-                                                }
-                                            }
-                                            // Check dual-class ternary only if ALL other expression parts
-                                            // have empty-string false branches (not spaces)
-                                            else if !prefer_empty && is_dual_class_ternary(expr) {
-                                                let all_others_empty = parts.iter().enumerate().all(|(j, p)| {
-                                                    if j == i { return true; }
-                                                    match p {
-                                                        AttributeValuePart::Expression(e) => {
-                                                            e.trim().ends_with(": ''") || e.trim().ends_with(": \"\"")
-                                                                || !e.contains('?') // non-ternary expr
-                                                        }
-                                                        AttributeValuePart::Static(_) => true,
-                                                    }
-                                                });
-                                                if all_others_empty {
-                                                    ctx.diagnostic(
-                                                        "Unexpected class using the ternary operator.",
-                                                        *span,
-                                                    );
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                _ => {}
+            for attr in &el.attributes {
+                let Attribute::NormalAttribute { name, value, span } = attr else { continue };
+                if name != "class" { continue; }
+                match value {
+                    AttributeValue::Expression(expr) => {
+                        if is_simple_class_ternary(expr) || (!prefer_empty && is_dual_class_ternary(expr)) {
+                            ctx.diagnostic(msg, *span);
+                        }
+                    }
+                    AttributeValue::Concat(parts) => {
+                        let boundary_ok = |parts: &[AttributeValuePart], idx: usize, before: bool| -> bool {
+                            let adj = if before { idx.checked_sub(1) } else { (idx < parts.len() - 1).then(|| idx + 1) };
+                            adj.map_or(true, |j| match &parts[j] {
+                                AttributeValuePart::Static(s) => if before { s.is_empty() || s.ends_with(' ') } else { s.is_empty() || s.starts_with(' ') },
+                                _ => false,
+                            })
+                        };
+                        for (i, part) in parts.iter().enumerate() {
+                            let AttributeValuePart::Expression(expr) = part else { continue };
+                            if is_simple_class_ternary(expr) && boundary_ok(parts, i, true) && boundary_ok(parts, i, false) {
+                                ctx.diagnostic(msg, *span);
+                            } else if !prefer_empty && is_dual_class_ternary(expr) {
+                                let ok = parts.iter().enumerate().all(|(j, p)| j == i || match p {
+                                    AttributeValuePart::Expression(e) => e.trim().ends_with(": ''") || e.trim().ends_with(": \"\"") || !e.contains('?'),
+                                    _ => true,
+                                });
+                                if ok { ctx.diagnostic(msg, *span); }
                             }
                         }
                     }
+                    _ => {}
                 }
             }
         });
     }
 }
 
-/// Check if an expression is a ternary with two non-empty single-word class name branches.
 fn is_dual_class_ternary(expr: &str) -> bool {
-    split_ternary(expr.trim())
-        .map_or(false, |(_, t, f)| is_single_class_name(t) && is_single_class_name(f))
+    split_ternary(expr.trim()).map_or(false, |(_, t, f)| is_single_class_name(t) && is_single_class_name(f))
 }
 
 fn is_single_class_name(s: &str) -> bool {
     let s = s.trim();
     if s.len() < 3 { return false; }
-    let inner = if (s.starts_with('\'') && s.ends_with('\''))
-        || (s.starts_with('"') && s.ends_with('"')) {
-        &s[1..s.len()-1]
-    } else { return false; };
-    let trimmed = inner.trim();
-    !trimmed.is_empty() && !trimmed.contains(' ')
+    let inner = if (s.starts_with('\'') && s.ends_with('\'')) || (s.starts_with('"') && s.ends_with('"')) { &s[1..s.len()-1] } else { return false; };
+    !inner.trim().is_empty() && !inner.trim().contains(' ')
 }
 
-/// Returns true if the string is a valid single CSS class name (matches /^[\w-]+$/).
-fn is_valid_class_name(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-')
-}
-
-/// Returns true if the string (contents of a quoted literal, already unquoted) is empty or
-/// whitespace-only — i.e., effectively an empty class name.
-fn is_empty_class_branch(s: &str) -> bool {
-    s.trim().is_empty()
-}
-
-/// If `s` is a quoted string literal (single, double, or backtick without `${}`),
-/// return its inner content. Otherwise return None.
 fn unquote_str(s: &str) -> Option<&str> {
     let s = s.trim();
-    if s.len() >= 2 {
-        let b = s.as_bytes();
-        if (b[0] == b'\'' && b[s.len()-1] == b'\'') || (b[0] == b'"' && b[s.len()-1] == b'"') {
-            return Some(&s[1..s.len()-1]);
-        }
-        // Backtick template literal with no interpolations
-        if b[0] == b'`' && b[s.len()-1] == b'`' {
-            let inner = &s[1..s.len()-1];
-            if !inner.contains("${") {
-                return Some(inner);
-            }
-        }
-    }
+    if s.len() < 2 { return None; }
+    let b = s.as_bytes();
+    if (b[0] == b'\'' && b[s.len()-1] == b'\'') || (b[0] == b'"' && b[s.len()-1] == b'"') { return Some(&s[1..s.len()-1]); }
+    if b[0] == b'`' && b[s.len()-1] == b'`' { let i = &s[1..s.len()-1]; if !i.contains("${") { return Some(i); } }
     None
 }
 
-/// Split a ternary expression at the top-level `?` and `:` (depth 0).
-/// Returns `(condition, true_branch, false_branch)` or `None` if not a ternary.
 fn split_ternary(expr: &str) -> Option<(&str, &str, &str)> {
     let bytes = expr.as_bytes();
-    let mut depth = 0i32;
-    let mut q_pos = None;
-    let mut c_pos = None;
-    let mut i = 0;
+    let (mut depth, mut q, mut c, mut i) = (0i32, None, None, 0);
     while i < bytes.len() {
         match bytes[i] {
             b'(' | b'[' | b'{' => depth += 1,
             b')' | b']' | b'}' => depth -= 1,
-            b'\'' | b'"' | b'`' => {
-                // Skip string literal
-                let quote = bytes[i];
-                i += 1;
-                while i < bytes.len() {
-                    if bytes[i] == b'\\' { i += 1; }
-                    else if bytes[i] == quote { break; }
-                    i += 1;
-                }
-            }
-            b'?' if depth == 0 && q_pos.is_none() => q_pos = Some(i),
-            b':' if depth == 0 && q_pos.is_some() && c_pos.is_none() => c_pos = Some(i),
+            b'\'' | b'"' | b'`' => { let qt = bytes[i]; i += 1; while i < bytes.len() { if bytes[i] == b'\\' { i += 1; } else if bytes[i] == qt { break; } i += 1; } }
+            b'?' if depth == 0 && q.is_none() => q = Some(i),
+            b':' if depth == 0 && q.is_some() && c.is_none() => c = Some(i),
             _ => {}
         }
         i += 1;
     }
-    if let (Some(q), Some(c)) = (q_pos, c_pos) {
-        Some((
-            expr[..q].trim(),
-            expr[q+1..c].trim(),
-            expr[c+1..].trim(),
-        ))
-    } else {
-        None
-    }
+    let (q, c) = (q?, c?);
+    Some((expr[..q].trim(), expr[q+1..c].trim(), expr[c+1..].trim()))
 }
 
-/// Check if an expression is a simple ternary like `cond ? 'class-name' : ''`
-/// (either the true or false branch is empty/whitespace and the other is a valid class name).
 fn is_simple_class_ternary(expr: &str) -> bool {
-    let trimmed = expr.trim();
-    let Some((_cond, true_branch, false_branch)) = split_ternary(trimmed) else {
-        return false;
-    };
-    if let (Some(true_inner), Some(false_inner)) = (unquote_str(true_branch), unquote_str(false_branch)) {
-        // false branch empty, true branch is a valid single class name
-        if is_empty_class_branch(false_inner) && is_valid_class_name(true_inner.trim()) {
-            return true;
-        }
-        // true branch empty, false branch is a valid single class name
-        if is_empty_class_branch(true_inner) && is_valid_class_name(false_inner.trim()) {
-            return true;
-        }
-    }
-    false
+    let Some((_, tb, fb)) = split_ternary(expr.trim()) else { return false; };
+    if let (Some(ti), Some(fi)) = (unquote_str(tb), unquote_str(fb)) {
+        let valid = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-');
+        (fi.trim().is_empty() && valid(ti.trim())) || (ti.trim().is_empty() && valid(fi.trim()))
+    } else { false }
 }
