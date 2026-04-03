@@ -52,7 +52,7 @@ impl Rule for HtmlClosingBracketSpacing {
             if el.self_closing {
                 if self_closing_opt == "ignore" { return; }
                 // Find `/>` in the opening tag
-                if let Some(rel) = find_self_close_bracket(tag_text) {
+                if let Some(rel) = find_tag_bracket(tag_text, true) {
                     // `rel` points to the `/` of `/>` within tag_text
                     let before_slash = &tag_text[..rel];
                     // Get trailing whitespace before `/>`
@@ -91,7 +91,7 @@ impl Rule for HtmlClosingBracketSpacing {
 
                 // --- Start tag ---
                 if start_tag_opt != "ignore" {
-                    if let Some(rel) = find_open_close_bracket(tag_text) {
+                    if let Some(rel) = find_tag_bracket(tag_text, false) {
                         // rel points to `>` of the opening tag
                         let before_bracket = &tag_text[..rel];
                         let spaces = trailing_spaces(before_bracket);
@@ -169,54 +169,26 @@ fn trailing_spaces(s: &str) -> &str {
     &s[trimmed_end.len()..]
 }
 
-/// Find the position of `/>` in a self-closing tag text (opening portion only).
-/// Returns the byte offset of `/` within `tag_text`, searching only in the opening tag part.
-fn find_self_close_bracket(tag_text: &str) -> Option<usize> {
-    // The opening tag ends at the first `/>` not inside a string or expression
+/// Scan a tag for a closing bracket, skipping strings and expressions.
+/// If `self_closing`, looks for `/>` and returns position of `/`.
+/// Otherwise looks for `>` and returns its position.
+fn find_tag_bracket(tag_text: &str, self_closing: bool) -> Option<usize> {
     let bytes = tag_text.as_bytes();
     let mut i = 1; // skip `<`
     let mut depth = 0i32;
-    while i < bytes.len().saturating_sub(1) {
+    let limit = if self_closing { bytes.len().saturating_sub(1) } else { bytes.len() };
+    while i < limit {
         match bytes[i] {
-            b'"' => {
-                i += 1;
-                while i < bytes.len() && bytes[i] != b'"' { i += 1; }
-            }
-            b'\'' => {
-                i += 1;
-                while i < bytes.len() && bytes[i] != b'\'' { i += 1; }
+            b'"' | b'\'' => {
+                let q = bytes[i]; i += 1;
+                while i < bytes.len() && bytes[i] != q { i += 1; }
             }
             b'{' => depth += 1,
             b'}' => { if depth > 0 { depth -= 1; } }
-            b'/' if depth == 0 && i + 1 < bytes.len() && bytes[i + 1] == b'>' => {
+            b'/' if self_closing && depth == 0 && i + 1 < bytes.len() && bytes[i + 1] == b'>' => {
                 return Some(i);
             }
-            _ => {}
-        }
-        i += 1;
-    }
-    None
-}
-
-/// Find the position of `>` closing the opening (start) tag of a non-self-closing element.
-/// Returns the byte offset of `>` within `tag_text`.
-fn find_open_close_bracket(tag_text: &str) -> Option<usize> {
-    let bytes = tag_text.as_bytes();
-    let mut i = 1; // skip `<`
-    let mut depth = 0i32;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'"' => {
-                i += 1;
-                while i < bytes.len() && bytes[i] != b'"' { i += 1; }
-            }
-            b'\'' => {
-                i += 1;
-                while i < bytes.len() && bytes[i] != b'\'' { i += 1; }
-            }
-            b'{' => depth += 1,
-            b'}' => { if depth > 0 { depth -= 1; } }
-            b'>' if depth == 0 => {
+            b'>' if !self_closing && depth == 0 => {
                 return Some(i);
             }
             _ => {}
