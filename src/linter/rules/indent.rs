@@ -25,7 +25,7 @@ impl Rule for Indent {
         let mut skip_next_line = false; // prettier-ignore: skip just the next non-empty line
         let mut depth = 0i32;
         let mut in_multiline_tag = false;
-        let mut multiline_tag_depth = 0i32;
+        let mut _multiline_tag_depth = 0i32;
         let mut multiline_tag_ignored = false;
         let mut multiline_tag_column = 0usize;
         let mut multiline_brace_depth = 0i32;
@@ -112,7 +112,6 @@ impl Rule for Indent {
                     // Only check if it's a simple attribute name at the right depth
                     let first_char = trimmed.chars().next().unwrap_or(' ');
                     let is_simple_attr = first_char.is_ascii_alphabetic() || first_char == '_' || first_char == '$';
-                    let is_at_attr_depth = actual == expected || actual == expected + indent;
                     // Flag only exact attribute-name lines at wrong indent
                     if is_simple_attr && actual != expected && actual < expected + indent {
                         let msg = format!("Expected indentation of {} spaces but found {} spaces.", expected, actual);
@@ -144,7 +143,7 @@ impl Rule for Indent {
                 skip_next_line = false;
                 if trimmed.starts_with('<') && !trimmed.starts_with("</") && !trimmed.starts_with("<!--") && !trimmed.contains('>') {
                     in_multiline_tag = true;
-                    multiline_tag_depth = depth;
+                    _multiline_tag_depth = depth;
                     multiline_tag_column = leading_spaces(line);
                     multiline_tag_ignored = false; // still check attributes of ignored tags
                     multiline_brace_depth = 0;
@@ -187,7 +186,7 @@ impl Rule for Indent {
             if trimmed.starts_with('<') && !trimmed.starts_with("</") && !trimmed.starts_with("<!--") {
                 if !trimmed.contains('>') {
                     in_multiline_tag = true;
-                    multiline_tag_depth = depth;
+                    _multiline_tag_depth = depth;
                     multiline_tag_column = leading_spaces(line);
                     multiline_tag_ignored = false;
                     multiline_brace_depth = 0;
