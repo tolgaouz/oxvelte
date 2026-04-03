@@ -40,6 +40,41 @@ fn pretty_print_langs(allowed: &[Option<String>]) -> String {
     }
 }
 
+fn parse_langs(opts: Option<&serde_json::Value>, key: &str) -> Option<Vec<Option<String>>> {
+    opts.and_then(|o| o.get(key)).and_then(|v| {
+        if let Some(arr) = v.as_array() {
+            Some(arr.iter().map(|v| v.as_str().map(String::from)).collect())
+        } else {
+            v.as_str().map(|s| vec![Some(s.to_string())])
+        }
+    })
+}
+
+fn check_block_lang(
+    tag: &str, span: Span, block_lang: Option<&str>,
+    allowed: &[Option<String>], source: &str, ctx: &mut LintContext<'_>,
+) {
+    let lang = block_lang.map(|l| l.to_lowercase());
+    let lang_ref = lang.as_deref();
+    let allowed_lower: Vec<Option<String>> = allowed.iter()
+        .map(|a| a.as_deref().map(|s| s.to_lowercase())).collect();
+    if allowed_lower.iter().any(|a| a.as_deref() == lang_ref) { return; }
+
+    let msg = format!("The lang attribute of the <{}> block should be {}.", tag, pretty_print_langs(allowed));
+    let src = &source[span.start as usize..span.end as usize];
+    let replacement = match (allowed.iter().find_map(|a| a.as_deref()), block_lang) {
+        (Some(target), Some(l)) => src.replacen(&format!("lang=\"{}\"", l), &format!("lang=\"{}\"", target), 1),
+        (Some(target), None) => src.replacen(&format!("<{}", tag), &format!("<{} lang=\"{}\"", tag, target), 1),
+        (None, Some(l)) => {
+            let with_space = format!(" lang=\"{}\"", l);
+            if src.contains(&with_space) { src.replacen(&with_space, "", 1) }
+            else { src.replacen(&format!("lang=\"{}\"", l), "", 1) }
+        }
+        (None, None) => src.to_string(),
+    };
+    ctx.diagnostic_with_fix(msg, span, Fix { span, replacement });
+}
+
 impl Rule for BlockLang {
     fn name(&self) -> &'static str {
         "svelte/block-lang"
@@ -50,175 +85,39 @@ impl Rule for BlockLang {
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first());
 
-        // Parse script allowed langs — can be a string or an array
-        let script_langs: Option<Vec<Option<String>>> = opts
-            .and_then(|o| o.get("script"))
-            .and_then(|v| {
-                if let Some(arr) = v.as_array() {
-                    Some(arr.iter().map(|v| v.as_str().map(String::from)).collect())
-                } else if let Some(s) = v.as_str() {
-                    Some(vec![Some(s.to_string())])
-                } else {
-                    None
-                }
-            });
+        let script_langs = parse_langs(opts, "script");
+        let style_langs = parse_langs(opts, "style");
+        let enforce_script = opts.and_then(|o| o.get("enforceScriptPresent"))
+            .and_then(|v| v.as_bool()).unwrap_or(false);
+        let enforce_style = opts.and_then(|o| o.get("enforceStylePresent"))
+            .and_then(|v| v.as_bool()).unwrap_or(false);
 
-        // Parse style allowed langs — can be a string or an array
-        let style_langs: Option<Vec<Option<String>>> = opts
-            .and_then(|o| o.get("style"))
-            .and_then(|v| {
-                if let Some(arr) = v.as_array() {
-                    Some(arr.iter().map(|v| v.as_str().map(String::from)).collect())
-                } else if let Some(s) = v.as_str() {
-                    Some(vec![Some(s.to_string())])
-                } else {
-                    None
-                }
-            });
-
-        // enforceScriptPresent: if true, script block must exist (but no lang requirement)
-        let enforce_script_present = opts
-            .and_then(|o| o.get("enforceScriptPresent"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        // enforceStylePresent
-        let enforce_style_present = opts
-            .and_then(|o| o.get("enforceStylePresent"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        // -----------------------------------------------------------------------
         // Script block checks
-        // -----------------------------------------------------------------------
-
-        // enforceScriptPresent is independent — always check it if enabled.
-        if enforce_script_present {
-            if ctx.ast.instance.is_none() && ctx.ast.module.is_none() {
-                let lang_desc = if let Some(ref allowed) = script_langs {
-                    pretty_print_langs(allowed)
-                } else {
-                    "omitted".to_string()
-                };
-                ctx.diagnostic(
-                    format!("The <script> block should be present and its lang attribute should be {}.", lang_desc),
-                    Span::new(0, 0),
-                );
-            }
+        if enforce_script && ctx.ast.instance.is_none() && ctx.ast.module.is_none() {
+            let desc = script_langs.as_ref().map_or("omitted".to_string(), |a| pretty_print_langs(a));
+            ctx.diagnostic(
+                format!("The <script> block should be present and its lang attribute should be {}.", desc),
+                Span::new(0, 0),
+            );
         }
-
-        // Lang check: only run when script option is explicitly configured.
         if let Some(allowed) = &script_langs {
             for script in [&ctx.ast.instance, &ctx.ast.module].iter().filter_map(|s| s.as_ref()) {
-                // Case-insensitive comparison
-                let lang = script.lang.as_deref().map(|l| l.to_lowercase());
-                let lang_ref = lang.as_deref();
-                let allowed_lower: Vec<Option<String>> = allowed.iter()
-                    .map(|a| a.as_deref().map(|s| s.to_lowercase()))
-                    .collect();
-
-                if !allowed_lower.iter().any(|a| a.as_deref() == lang_ref) {
-                    let pretty = pretty_print_langs(allowed);
-                    let msg = format!("The lang attribute of the <script> block should be {}.", pretty);
-
-                    // Build a single suggestion: fix to the first non-null allowed lang,
-                    // or remove lang if the first allowed is null.
-                    let source = &ctx.source[script.span.start as usize..script.span.end as usize];
-                    let first_allowed = allowed.iter().find_map(|a| a.as_deref());
-                    let replacement = if let Some(target_lang) = first_allowed {
-                        if let Some(l) = script.lang.as_deref() {
-                            source.replacen(&format!("lang=\"{}\"", l), &format!("lang=\"{}\"", target_lang), 1)
-                        } else {
-                            source.replacen("<script", &format!("<script lang=\"{}\"", target_lang), 1)
-                        }
-                    } else {
-                        // null-only allowed: remove the lang attribute
-                        if let Some(l) = script.lang.as_deref() {
-                            // Remove ` lang="..."` (with leading space)
-                            let with_space = format!(" lang=\"{}\"", l);
-                            if source.contains(&with_space) {
-                                source.replacen(&with_space, "", 1)
-                            } else {
-                                source.replacen(&format!("lang=\"{}\"", l), "", 1)
-                            }
-                        } else {
-                            source.to_string()
-                        }
-                    };
-
-                    ctx.diagnostic_with_fix(
-                        msg,
-                        script.span,
-                        Fix { span: script.span, replacement },
-                    );
-                }
+                check_block_lang("script", script.span, script.lang.as_deref(), allowed, ctx.source, ctx);
             }
         }
-        // If script_langs is None (not configured), no lang diagnostics — vendor treats it as a no-op.
 
-        // -----------------------------------------------------------------------
         // Style block checks
-        // -----------------------------------------------------------------------
-
-        // enforceStylePresent is independent — always check it if enabled.
-        if enforce_style_present {
-            if ctx.ast.css.is_none() {
-                let lang_desc = if let Some(ref allowed) = style_langs {
-                    pretty_print_langs(allowed)
-                } else {
-                    "omitted".to_string()
-                };
-                ctx.diagnostic(
-                    format!("The <style> block should be present and its lang attribute should be {}.", lang_desc),
-                    Span::new(0, 0),
-                );
-            }
+        if enforce_style && ctx.ast.css.is_none() {
+            let desc = style_langs.as_ref().map_or("omitted".to_string(), |a| pretty_print_langs(a));
+            ctx.diagnostic(
+                format!("The <style> block should be present and its lang attribute should be {}.", desc),
+                Span::new(0, 0),
+            );
         }
-
-        // Lang check: only run when style option is explicitly configured.
         if let Some(allowed) = &style_langs {
             if let Some(style) = &ctx.ast.css {
-                // Case-insensitive comparison
-                let lang = style.lang.as_deref().map(|l| l.to_lowercase());
-                let lang_ref = lang.as_deref();
-                let allowed_lower: Vec<Option<String>> = allowed.iter()
-                    .map(|a| a.as_deref().map(|s| s.to_lowercase()))
-                    .collect();
-
-                if !allowed_lower.iter().any(|a| a.as_deref() == lang_ref) {
-                    let pretty = pretty_print_langs(allowed);
-                    let msg = format!("The lang attribute of the <style> block should be {}.", pretty);
-
-                    let source = &ctx.source[style.span.start as usize..style.span.end as usize];
-                    let first_allowed = allowed.iter().find_map(|a| a.as_deref());
-                    let replacement = if let Some(target_lang) = first_allowed {
-                        if let Some(l) = style.lang.as_deref() {
-                            source.replacen(&format!("lang=\"{}\"", l), &format!("lang=\"{}\"", target_lang), 1)
-                        } else {
-                            source.replacen("<style", &format!("<style lang=\"{}\"", target_lang), 1)
-                        }
-                    } else {
-                        // null-only allowed: remove the lang attribute
-                        if let Some(l) = style.lang.as_deref() {
-                            let with_space = format!(" lang=\"{}\"", l);
-                            if source.contains(&with_space) {
-                                source.replacen(&with_space, "", 1)
-                            } else {
-                                source.replacen(&format!("lang=\"{}\"", l), "", 1)
-                            }
-                        } else {
-                            source.to_string()
-                        }
-                    };
-
-                    ctx.diagnostic_with_fix(
-                        msg,
-                        style.span,
-                        Fix { span: style.span, replacement },
-                    );
-                }
+                check_block_lang("style", style.span, style.lang.as_deref(), allowed, ctx.source, ctx);
             }
         }
-        // If style_langs is None (not configured), no lang diagnostics — vendor treats it as a no-op.
     }
 }
