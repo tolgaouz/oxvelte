@@ -151,7 +151,7 @@ impl Rule for SortAttributes {
                         for rule in &order_rules {
                             if rule.sort != "alphabetical" { continue; }
                             let matched: Vec<&str> = group.iter()
-                                .filter(|n| matches_order_rule(n, rule))
+                                .filter(|n| matches_pattern(n, &rule.patterns))
                                 .map(|s| s.as_str())
                                 .collect();
                             for window in matched.windows(2) {
@@ -192,15 +192,13 @@ struct OrderRule {
 
 fn parse_order_config(options: &Option<serde_json::Value>) -> Vec<OrderRule> {
     let mut rules = Vec::new();
-    let opts = match options {
+    let order = match options {
         Some(serde_json::Value::Array(arr)) => arr.first(),
         _ => return rules,
-    };
-    let opts = match opts {
-        Some(o) => o,
-        None => return rules,
-    };
-    let order = match opts.get("order").and_then(|o| o.as_array()) {
+    }
+    .and_then(|opts| opts.get("order"))
+    .and_then(|o| o.as_array());
+    let order = match order {
         Some(a) => a,
         None => return rules,
     };
@@ -241,17 +239,7 @@ fn parse_order_config(options: &Option<serde_json::Value>) -> Vec<OrderRule> {
 /// Find the position (index) of the first order rule that matches the attribute name.
 /// Returns None if no rule matches (unmatched attributes are free-positioned).
 fn find_order_position(name: &str, rules: &[OrderRule]) -> Option<usize> {
-    for (i, rule) in rules.iter().enumerate() {
-        if matches_order_rule(name, rule) {
-            return Some(i);
-        }
-    }
-    None
-}
-
-/// Check if a name matches a specific order rule.
-fn matches_order_rule(name: &str, rule: &OrderRule) -> bool {
-    matches_pattern(name, &rule.patterns)
+    rules.iter().position(|r| matches_pattern(name, &r.patterns))
 }
 
 fn matches_pattern(name: &str, patterns: &[String]) -> bool {
