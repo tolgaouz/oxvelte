@@ -25,7 +25,6 @@ impl Rule for Indent {
         let mut skip_next_line = false; // prettier-ignore: skip just the next non-empty line
         let mut depth = 0i32;
         let mut in_multiline_tag = false;
-        let mut _multiline_tag_depth = 0i32;
         let mut multiline_tag_ignored = false;
         let mut multiline_tag_column = 0usize;
         let mut multiline_brace_depth = 0i32;
@@ -36,19 +35,8 @@ impl Rule for Indent {
         let opts = ctx.config.options.as_ref()
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first());
-        // The first option element can be a number (indent size) or "tab"
-        let indent_size: usize = ctx.config.options.as_ref()
-            .and_then(|v| v.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|v| v.as_u64())
-            .map(|n| n as usize)
-            .unwrap_or(2);
-        let use_tabs: bool = ctx.config.options.as_ref()
-            .and_then(|v| v.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|v| v.as_str())
-            .map(|s| s == "tab")
-            .unwrap_or(false);
+        let indent_size: usize = opts.and_then(|v| v.as_u64()).map(|n| n as usize).unwrap_or(2);
+        let use_tabs = opts.and_then(|v| v.as_str()).map(|s| s == "tab").unwrap_or(false);
         let indent = if use_tabs { 1 } else { indent_size };
 
         let indent_script = opts
@@ -143,7 +131,6 @@ impl Rule for Indent {
                 skip_next_line = false;
                 if trimmed.starts_with('<') && !trimmed.starts_with("</") && !trimmed.starts_with("<!--") && !trimmed.contains('>') {
                     in_multiline_tag = true;
-                    _multiline_tag_depth = depth;
                     multiline_tag_column = leading_spaces(line);
                     multiline_tag_ignored = false; // still check attributes of ignored tags
                     multiline_brace_depth = 0;
@@ -186,7 +173,6 @@ impl Rule for Indent {
             if trimmed.starts_with('<') && !trimmed.starts_with("</") && !trimmed.starts_with("<!--") {
                 if !trimmed.contains('>') {
                     in_multiline_tag = true;
-                    _multiline_tag_depth = depth;
                     multiline_tag_column = leading_spaces(line);
                     multiline_tag_ignored = false;
                     multiline_brace_depth = 0;
