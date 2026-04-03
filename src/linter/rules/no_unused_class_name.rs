@@ -67,11 +67,7 @@ impl Rule for NoUnusedClassName {
                     match attr {
                         Attribute::NormalAttribute { name, value, .. } if name == "class" => {
                             if let AttributeValue::Static(val) = value {
-                                for cls in val.split_whitespace() {
-                                    if !cls.is_empty() {
-                                        element_classes.push(cls.to_string());
-                                    }
-                                }
+                                element_classes.extend(val.split_whitespace().map(String::from));
                             }
                         }
                         Attribute::Directive { kind: DirectiveKind::Class, name: cls_name, .. } => {
@@ -107,41 +103,18 @@ impl Rule for NoUnusedClassName {
 fn simple_regex_match(pattern: &str, text: &str) -> bool {
     let anchored_start = pattern.starts_with('^');
     let anchored_end = pattern.ends_with('$');
-    let inner = pattern
-        .strip_prefix('^').unwrap_or(pattern)
-        .strip_suffix('$').unwrap_or_else(|| pattern.strip_prefix('^').unwrap_or(pattern));
+    let inner = pattern.strip_prefix('^').unwrap_or(pattern);
+    let inner = inner.strip_suffix('$').unwrap_or(inner);
 
-    // For fully anchored patterns (^...$), do a full match
-    if anchored_start && anchored_end {
-        return regex_match_inner_full(inner, text, 0, 0);
-    }
     if anchored_start {
-        return regex_match_inner(inner, text, 0, 0);
+        return regex_match_inner_impl(inner, text, 0, 0, anchored_end);
     }
-    if anchored_end {
-        // Try matching from each position
-        for i in 0..=text.len() {
-            if regex_match_inner(inner, text, 0, i) {
-                return true;
-            }
-        }
-        return false;
-    }
-    // Unanchored: contains match
     for i in 0..=text.len() {
-        if regex_match_inner(inner, text, 0, i) {
+        if regex_match_inner_impl(inner, text, 0, i, anchored_end) {
             return true;
         }
     }
     false
-}
-
-fn regex_match_inner(pattern: &str, text: &str, pi: usize, ti: usize) -> bool {
-    regex_match_inner_impl(pattern, text, pi, ti, false)
-}
-
-fn regex_match_inner_full(pattern: &str, text: &str, pi: usize, ti: usize) -> bool {
-    regex_match_inner_impl(pattern, text, pi, ti, true)
 }
 
 fn regex_match_inner_impl(pattern: &str, text: &str, pi: usize, ti: usize, must_consume_all: bool) -> bool {
