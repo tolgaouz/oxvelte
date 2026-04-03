@@ -85,18 +85,10 @@ fn extract_function_props(content: &str, check_async: bool) -> Vec<(String, usiz
             // Check what follows the identifier
             let rest = &content[i..].trim_start();
             // Check if this is a void-returning function property
-            let is_void_method = {
-                if rest.starts_with("():") || rest.starts_with("()") {
-                    // name(): RETURN_TYPE — check return type is void
-                    let after_parens = if rest.starts_with("():") { &rest[3..] } else { &rest[2..] };
-                    let after_parens = after_parens.trim_start().trim_start_matches(':').trim_start();
-                    let is_void_ret = after_parens.starts_with("void") && !after_parens.starts_with("void;")
-                        || after_parens.starts_with("void;") || after_parens.starts_with("void\n");
-                    let is_promise_void_ret = check_async && (
-                        after_parens.starts_with("Promise<void>")
-                    );
-                    is_void_ret || is_promise_void_ret
-                } else { false }
+            let is_void_method = (rest.starts_with("():") || rest.starts_with("()")) && {
+                let ap = if rest.starts_with("():") { &rest[3..] } else { &rest[2..] };
+                let ap = ap.trim_start().trim_start_matches(':').trim_start();
+                ap.starts_with("void") || (check_async && ap.starts_with("Promise<void>"))
             };
             let is_fn_type = rest.starts_with(':') && {
                 let after_colon = rest[1..].trim_start();

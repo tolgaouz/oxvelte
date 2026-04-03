@@ -30,17 +30,11 @@ impl Rule for HtmlQuotes {
 
         let prefer_char = if prefer == "single" { '\'' } else { '"' };
 
-        let dynamic_quoted = opts
-            .and_then(|o| o.get("dynamic"))
-            .and_then(|d| d.get("quoted"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        let avoid_invalid_unquoted = opts
-            .and_then(|o| o.get("dynamic"))
-            .and_then(|d| d.get("avoidInvalidUnquotedInHTML"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let dynamic = opts.and_then(|o| o.get("dynamic"));
+        let dynamic_quoted = dynamic.and_then(|d| d.get("quoted"))
+            .and_then(|v| v.as_bool()).unwrap_or(false);
+        let avoid_invalid_unquoted = dynamic.and_then(|d| d.get("avoidInvalidUnquotedInHTML"))
+            .and_then(|v| v.as_bool()).unwrap_or(false);
 
         let expected_msg = if prefer == "single" {
             "Expected to be enclosed by single quotes."
@@ -70,7 +64,7 @@ impl Rule for HtmlQuotes {
                                         if !is_correct {
                                             ctx.diagnostic(
                                                 expected_msg,
-                                                Span::new(span.start, span.end),
+                                                *span,
                                             );
                                         }
                                     }
@@ -81,7 +75,7 @@ impl Rule for HtmlQuotes {
                                             if !val_part.starts_with(prefer_char) {
                                                 ctx.diagnostic(
                                                     expected_msg,
-                                                    Span::new(span.start, span.end),
+                                                    *span,
                                                 );
                                             }
                                         } else {
@@ -90,7 +84,7 @@ impl Rule for HtmlQuotes {
                                             if is_quoted {
                                                 ctx.diagnostic(
                                                     unexpected_msg,
-                                                    Span::new(span.start, span.end),
+                                                    *span,
                                                 );
                                             } else if avoid_invalid_unquoted {
                                                 // Check if the unquoted value contains chars invalid in HTML
@@ -99,7 +93,7 @@ impl Rule for HtmlQuotes {
                                                 {
                                                     ctx.diagnostic(
                                                         expected_msg,
-                                                        Span::new(span.start, span.end),
+                                                        *span,
                                                     );
                                                 }
                                             }
@@ -121,7 +115,7 @@ impl Rule for HtmlQuotes {
                                     if val_part.starts_with('{') && !val_part.starts_with(prefer_char) {
                                         ctx.diagnostic(
                                             expected_msg,
-                                            Span::new(span.start, span.end),
+                                            *span,
                                         );
                                     }
                                 } else {
@@ -130,7 +124,7 @@ impl Rule for HtmlQuotes {
                                     if is_quoted {
                                         ctx.diagnostic(
                                             unexpected_msg,
-                                            Span::new(span.start, span.end),
+                                            *span,
                                         );
                                     } else if avoid_invalid_unquoted {
                                         if val_part.contains('>') || val_part.contains('<')
@@ -138,7 +132,7 @@ impl Rule for HtmlQuotes {
                                         {
                                             ctx.diagnostic(
                                                 expected_msg,
-                                                Span::new(span.start, span.end),
+                                                *span,
                                             );
                                         }
                                     }
