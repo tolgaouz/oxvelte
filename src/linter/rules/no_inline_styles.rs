@@ -11,32 +11,16 @@ impl Rule for NoInlineStyles {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let opts = ctx.config.options.as_ref()
-            .and_then(|v| v.as_array())
-            .and_then(|arr| arr.first());
-
-        let allow_transitions = opts
-            .and_then(|o| o.get("allowTransitions"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-
+        let allow_transitions = ctx.config.options.as_ref().and_then(|v| v.as_array()).and_then(|arr| arr.first())
+            .and_then(|o| o.get("allowTransitions")).and_then(|v| v.as_bool()).unwrap_or(true);
         walk_template_nodes(&ctx.ast.html, &mut |node| {
-            if let TemplateNode::Element(el) = node {
-                for attr in &el.attributes {
-                    match attr {
-                        Attribute::NormalAttribute { name, span, .. } if name == "style" => {
-                            ctx.diagnostic("Found disallowed style attribute.", *span);
-                        }
-                        Attribute::Directive { kind: DirectiveKind::StyleDirective, span, .. } => {
-                            ctx.diagnostic("Found disallowed style directive.", *span);
-                        }
-                        Attribute::Directive { kind, span, .. }
-                            if !allow_transitions && matches!(kind, DirectiveKind::Transition) =>
-                        {
-                            ctx.diagnostic("Found disallowed transition.", *span);
-                        }
-                        _ => {}
-                    }
+            let TemplateNode::Element(el) = node else { return };
+            for attr in &el.attributes {
+                match attr {
+                    Attribute::NormalAttribute { name, span, .. } if name == "style" => ctx.diagnostic("Found disallowed style attribute.", *span),
+                    Attribute::Directive { kind: DirectiveKind::StyleDirective, span, .. } => ctx.diagnostic("Found disallowed style directive.", *span),
+                    Attribute::Directive { kind: DirectiveKind::Transition, span, .. } if !allow_transitions => ctx.diagnostic("Found disallowed transition.", *span),
+                    _ => {}
                 }
             }
         });
