@@ -32,17 +32,13 @@ impl Rule for NoNavigationWithoutBase {
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         // Config options: ignoreGoto, ignorePushState, ignoreReplaceState, ignoreLinks
-        let (ignore_goto, ignore_push_state, ignore_replace_state, ignore_links) = {
-            let opts = ctx.config.options.as_ref()
-                .and_then(|v| v.as_array())
-                .and_then(|arr| arr.first());
-            (
-                opts.and_then(|v| v.get("ignoreGoto")).and_then(|v| v.as_bool()).unwrap_or(false),
-                opts.and_then(|v| v.get("ignorePushState")).and_then(|v| v.as_bool()).unwrap_or(false),
-                opts.and_then(|v| v.get("ignoreReplaceState")).and_then(|v| v.as_bool()).unwrap_or(false),
-                opts.and_then(|v| v.get("ignoreLinks")).and_then(|v| v.as_bool()).unwrap_or(false),
-            )
-        };
+        let opts = ctx.config.options.as_ref()
+            .and_then(|v| v.as_array()).and_then(|arr| arr.first());
+        let get_bool = |key: &str| opts.and_then(|v| v.get(key)).and_then(|v| v.as_bool()).unwrap_or(false);
+        let ignore_goto = get_bool("ignoreGoto");
+        let ignore_push_state = get_bool("ignorePushState");
+        let ignore_replace_state = get_bool("ignoreReplaceState");
+        let ignore_links = get_bool("ignoreLinks");
 
         // Parse imports to find base and navigation functions
         let imports = if let Some(script) = &ctx.ast.instance {
@@ -135,7 +131,6 @@ impl Rule for NoNavigationWithoutBase {
         if ignore_links { return; }
 
         // Check <a> elements for href values that are paths without base
-        let base_local_clone = base_local.clone();
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
                 if el.name != "a" { return; }
@@ -162,7 +157,7 @@ impl Rule for NoNavigationWithoutBase {
                                 let expr = val[1..val.len()-1].trim();
 
                                 // Check if expression uses base AS A PREFIX
-                                let uses_base = if let Some(ref bname) = base_local_clone {
+                                let uses_base = if let Some(ref bname) = base_local {
                                     // base + '/path' or base+'/path'
                                     expr.starts_with(&format!("{} +", bname))
                                     || expr.starts_with(&format!("{}+", bname))
@@ -173,14 +168,9 @@ impl Rule for NoNavigationWithoutBase {
 
                                 if uses_base { continue; }
 
-                                // Check if it's a string literal starting with /
-                                let is_path_literal = if let Some(q) = expr.chars().next() {
-                                    if q == '\'' || q == '"' || q == '`' {
-                                        if let Some(end) = expr[1..].find(q) {
-                                            expr[1..end+1].starts_with('/')
-                                        } else { false }
-                                    } else { false }
-                                } else { false };
+                                let is_path_literal = matches!(expr.as_bytes().first(), Some(b'\'' | b'"' | b'`'))
+                                    && expr[1..].find(expr.as_bytes()[0] as char)
+                                        .map_or(false, |e| expr[1..e+1].starts_with('/'));
 
                                 // Check for concatenation expressions containing path strings
                                 let has_path_concat = expr.contains("'/'") || expr.contains("\"/\"");
