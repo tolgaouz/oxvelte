@@ -106,20 +106,6 @@ fn check_handler_value(ctx: &mut LintContext, non_fn_vars: &HashMap<String, &'st
         let value = region[eq_pos + 1..].trim();
         if value.starts_with('{') && value.ends_with('}') {
             let expr = value[1..value.len()-1].trim();
-            let expr_start = span.start as usize + eq_pos + 1
-                + region[eq_pos + 1..].len()
-                - region[eq_pos + 1..].trim_start().len()
-                + 1; // skip '{'
-            // Find the actual position of expr within the braces
-            let inner = &value[1..value.len()-1];
-            let trim_offset = inner.len() - inner.trim_start().len();
-            let expr_byte_start = (span.start as usize + eq_pos + 1
-                + (value.as_ptr() as usize - region[eq_pos + 1..].trim().as_ptr() as usize).wrapping_add(0)
-                ) as u32;
-            let _ = expr_byte_start;
-            let _ = expr_start;
-            let _ = trim_offset;
-            // For simplicity, compute expr span from the source
             let brace_open = span.start as usize + region.find('{').unwrap_or(eq_pos + 1);
             let expr_in_source = &ctx.source[brace_open + 1..span.end as usize];
             let trimmed_start = expr_in_source.len() - expr_in_source.trim_start().len();
@@ -176,18 +162,14 @@ impl Rule for NoNotFunctionHandler {
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
                 for attr in &el.attributes {
-                    // Check on:event directives (Svelte 4)
-                    if let Attribute::Directive { kind: DirectiveKind::EventHandler, span, .. } = attr {
-                        check_handler_value(ctx, &non_fn_vars, *span);
-                    }
-                    // Check Svelte 5 on* attributes (onclick, onmouseover, etc.)
-                    if let Attribute::NormalAttribute { name, span, .. } = attr {
-                        if name.starts_with("on") && name.len() > 2
-                            && name.as_bytes()[2].is_ascii_lowercase()
-                        {
-                            check_handler_value(ctx, &non_fn_vars, *span);
-                        }
-                    }
+                    let span = match attr {
+                        Attribute::Directive { kind: DirectiveKind::EventHandler, span, .. } => Some(*span),
+                        Attribute::NormalAttribute { name, span, .. }
+                            if name.starts_with("on") && name.len() > 2
+                                && name.as_bytes()[2].is_ascii_lowercase() => Some(*span),
+                        _ => None,
+                    };
+                    if let Some(s) = span { check_handler_value(ctx, &non_fn_vars, s); }
                 }
             }
         });
