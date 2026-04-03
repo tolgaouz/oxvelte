@@ -6,6 +6,15 @@ use std::collections::HashSet;
 
 pub struct NoUnusedProps;
 
+fn get_option_bool(options: &Option<serde_json::Value>, key: &str) -> bool {
+    options.as_ref()
+        .and_then(|o| o.as_array())
+        .and_then(|a| a.first())
+        .and_then(|o| o.get(key))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
 impl Rule for NoUnusedProps {
     fn name(&self) -> &'static str {
         "svelte/no-unused-props"
@@ -52,12 +61,7 @@ impl Rule for NoUnusedProps {
         if has_rest { return; }
 
         // For non-destructured patterns (const props = $props()), track props.X accesses
-        let check_imported_early = ctx.config.options.as_ref()
-            .and_then(|o| o.as_array())
-            .and_then(|a| a.first())
-            .and_then(|o| o.get("checkImportedTypes"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let check_imported_early = get_option_bool(&ctx.config.options, "checkImportedTypes");
         let resolve_path_early = if check_imported_early { ctx.file_path.as_deref() } else { None };
 
         if !uses_destructuring {
@@ -93,12 +97,7 @@ impl Rule for NoUnusedProps {
                     || full_source.contains(&bracket_access)
                     || full_source.contains(&bracket_access2) {
                     // Property is used — but check nested sub-properties (unless disabled)
-                    let allow_nested = ctx.config.options.as_ref()
-                        .and_then(|o| o.as_array())
-                        .and_then(|a| a.first())
-                        .and_then(|o| o.get("allowUnusedNestedProperties"))
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
+                    let allow_nested = get_option_bool(&ctx.config.options, "allowUnusedNestedProperties");
                     if !allow_nested {
                         check_nested_properties(content, content_offset, full_source, var_name, prop_name, ctx);
                     }
@@ -117,14 +116,9 @@ impl Rule for NoUnusedProps {
         let type_name = extract_type_name(before_props);
 
         // Config: ignorePropertyPatterns, checkImportedTypes, ignoreTypePatterns
-        let ignore_patterns = extract_ignore_patterns(&ctx.config.options);
-        let ignore_type_patterns = extract_ignore_type_patterns(&ctx.config.options);
-        let check_imported = ctx.config.options.as_ref()
-            .and_then(|o| o.as_array())
-            .and_then(|a| a.first())
-            .and_then(|o| o.get("checkImportedTypes"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let ignore_patterns = extract_option_patterns(&ctx.config.options, "ignorePropertyPatterns");
+        let ignore_type_patterns = extract_option_patterns(&ctx.config.options, "ignoreTypePatterns");
+        let check_imported = get_option_bool(&ctx.config.options, "checkImportedTypes");
 
         // Get all type properties
         // Only pass file_path for cross-file resolution when checkImportedTypes is true
@@ -340,12 +334,7 @@ fn extract_type_properties_with_file(content: &str, type_name: &str, file_path: 
     }
 
     // Check for type alias: type X = ...
-    let type_patterns = [
-        format!("type {} =", type_name),
-    ];
-    let type_start = type_patterns.iter()
-        .filter_map(|p| content.find(p.as_str()))
-        .min();
+    let type_start = content.find(&format!("type {} =", type_name));
 
     if let Some(start) = type_start {
         let eq_pos = content[start..].find('=').unwrap_or(0);
@@ -425,7 +414,6 @@ fn resolve_imported_type_properties(content: &str, type_name: &str, file_path: &
     // Find import statement for this type
     // Patterns: import type { TypeName } from './path'
     //           import { TypeName } from './path'
-    let import_pattern = format!("import");
     for line in content.lines() {
         let trimmed = line.trim();
         if !trimmed.starts_with("import") { continue; }
@@ -585,21 +573,11 @@ fn strip_block_comments(s: &str) -> String {
     result
 }
 
-fn extract_ignore_patterns(options: &Option<serde_json::Value>) -> Vec<String> {
+fn extract_option_patterns(options: &Option<serde_json::Value>, key: &str) -> Vec<String> {
     options.as_ref()
         .and_then(|o| o.as_array())
         .and_then(|a| a.first())
-        .and_then(|o| o.get("ignorePropertyPatterns"))
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-        .unwrap_or_default()
-}
-
-fn extract_ignore_type_patterns(options: &Option<serde_json::Value>) -> Vec<String> {
-    options.as_ref()
-        .and_then(|o| o.as_array())
-        .and_then(|a| a.first())
-        .and_then(|o| o.get("ignoreTypePatterns"))
+        .and_then(|o| o.get(key))
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default()
