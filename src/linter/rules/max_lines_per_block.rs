@@ -143,46 +143,18 @@ impl Rule for MaxLinesPerBlock {
             .and_then(|v| v.as_u64())
             .map(|v| v as usize);
 
-        // Check instance script block
-        if let Some(max) = script_limit {
-            if let Some(script) = &ctx.ast.instance {
-                let line_count = count_lines(&script.content, skip_blank_lines, skip_comments);
+        let blocks: Vec<(&str, oxc::span::Span, Option<usize>, &str)> = [
+            ctx.ast.instance.as_ref().map(|s| (s.content.as_str(), s.span, script_limit, "script")),
+            ctx.ast.module.as_ref().map(|s| (s.content.as_str(), s.span, script_limit, "script")),
+            ctx.ast.css.as_ref().map(|s| (s.content.as_str(), s.span, style_limit, "style")),
+        ].into_iter().flatten().collect();
+        for (content, span, limit, tag) in blocks {
+            if let Some(max) = limit {
+                let line_count = count_lines(content, skip_blank_lines, skip_comments);
                 if line_count > max {
                     ctx.diagnostic(
-                        format!(
-                            "<script> block has too many lines ({line_count}). Maximum allowed is {max}."
-                        ),
-                        script.span,
-                    );
-                }
-            }
-        }
-
-        // Check module script block
-        if let Some(max) = script_limit {
-            if let Some(module) = &ctx.ast.module {
-                let line_count = count_lines(&module.content, skip_blank_lines, skip_comments);
-                if line_count > max {
-                    ctx.diagnostic(
-                        format!(
-                            "<script> block has too many lines ({line_count}). Maximum allowed is {max}."
-                        ),
-                        module.span,
-                    );
-                }
-            }
-        }
-
-        // Check style block
-        if let Some(max) = style_limit {
-            if let Some(style) = &ctx.ast.css {
-                let line_count = count_lines(&style.content, skip_blank_lines, skip_comments);
-                if line_count > max {
-                    ctx.diagnostic(
-                        format!(
-                            "<style> block has too many lines ({line_count}). Maximum allowed is {max}."
-                        ),
-                        style.span,
+                        format!("<{tag}> block has too many lines ({line_count}). Maximum allowed is {max}."),
+                        span,
                     );
                 }
             }
