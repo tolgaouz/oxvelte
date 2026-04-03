@@ -13,53 +13,24 @@ impl Rule for PreferDestructuredStoreProps {
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         walk_template_nodes(&ctx.ast.html, &mut |node| {
-            if let TemplateNode::MustacheTag(tag) = node {
-                let expr = tag.expression.trim();
-                if !expr.starts_with('$') || expr.contains('(') {
-                    return;
-                }
+            let TemplateNode::MustacheTag(tag) = node else { return };
+            let expr = tag.expression.trim();
+            if !expr.starts_with('$') || expr.contains('(') { return; }
+            let msg = |prop, store| format!("Destructure {} from {} for better change tracking & fewer redraws", prop, store);
 
-                // Check for dot access: $store.prop
-                if let Some(dot_pos) = expr.find('.') {
-                    let store = &expr[..dot_pos];
-                    // Only use the first segment (stop at second dot)
-                    let rest = &expr[dot_pos + 1..];
-                    let property = rest.split('.').next().unwrap_or(rest);
-                    // Skip $$props, $$slots, $$restProps
-                    if store.starts_with("$$") {
-                        return;
-                    }
-                    ctx.diagnostic(
-                        format!(
-                            "Destructure {} from {} for better change tracking & fewer redraws",
-                            property, store
-                        ),
-                        tag.span,
-                    );
-                    return;
-                }
-
-                // Check for bracket access: $store[prop] or $store['prop']
-                // But NOT $store[`template${var}`] (computed access)
-                if let Some(bracket_pos) = expr.find('[') {
-                    let store = &expr[..bracket_pos];
-                    let inner = &expr[bracket_pos + 1..];
-                    if let Some(close) = inner.rfind(']') {
-                        let key = inner[..close].trim();
-                        // Only flag simple identifiers and string literals
-                        let is_simple = key.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
-                            || (key.starts_with('\'') && key.ends_with('\''))
-                            || (key.starts_with('"') && key.ends_with('"'));
-                        if is_simple {
-                            ctx.diagnostic(
-                                format!(
-                                    "Destructure {} from {} for better change tracking & fewer redraws",
-                                    key, store
-                                ),
-                                tag.span,
-                            );
-                        }
-                    }
+            if let Some(dot) = expr.find('.') {
+                let store = &expr[..dot];
+                if store.starts_with("$$") { return; }
+                let prop = expr[dot + 1..].split('.').next().unwrap_or("");
+                ctx.diagnostic(msg(prop, store), tag.span);
+            } else if let Some(br) = expr.find('[') {
+                let store = &expr[..br];
+                if let Some(close) = expr[br + 1..].rfind(']') {
+                    let key = expr[br + 1..br + 1 + close].trim();
+                    let is_simple = key.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+                        || (key.starts_with('\'') && key.ends_with('\''))
+                        || (key.starts_with('"') && key.ends_with('"'));
+                    if is_simple { ctx.diagnostic(msg(key, store), tag.span); }
                 }
             }
         });
