@@ -18,33 +18,20 @@ impl Rule for NoShorthandStylePropertyOverrides {
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         walk_template_nodes(&ctx.ast.html, &mut |node| {
-            if let TemplateNode::Element(el) = node {
-                // Collect all style properties in order: from style attribute + style: directives
-                let mut all_props: Vec<(String, oxc::span::Span)> = Vec::new();
-
-                for attr in &el.attributes {
-                    match attr {
-                        Attribute::NormalAttribute { name, value, span } if name == "style" => {
-                            collect_style_props(value, *span, &mut all_props);
-                        }
-                        Attribute::Directive { kind: DirectiveKind::StyleDirective, name, span, .. } => {
-                            all_props.push((name.to_lowercase(), *span));
-                        }
-                        _ => {}
-                    }
+            let TemplateNode::Element(el) = node else { return };
+            let mut props: Vec<(String, oxc::span::Span)> = Vec::new();
+            for attr in &el.attributes {
+                match attr {
+                    Attribute::NormalAttribute { name, value, span } if name == "style" => collect_style_props(value, *span, &mut props),
+                    Attribute::Directive { kind: DirectiveKind::StyleDirective, name, span, .. } => props.push((name.to_lowercase(), *span)),
+                    _ => {}
                 }
-
-                // Check for shorthand overrides
-                for i in 0..all_props.len() {
-                    let shorthands = get_shorthands_for(&all_props[i].0);
-                    for shorthand in shorthands {
-                        for j in (i + 1)..all_props.len() {
-                            if all_props[j].0 == *shorthand {
-                                ctx.diagnostic(
-                                    format!("Unexpected shorthand '{}' after '{}'.", all_props[j].0, all_props[i].0),
-                                    all_props[j].1,
-                                );
-                            }
+            }
+            for i in 0..props.len() {
+                for sh in get_shorthands_for(&props[i].0) {
+                    for j in (i + 1)..props.len() {
+                        if props[j].0 == *sh {
+                            ctx.diagnostic(format!("Unexpected shorthand '{}' after '{}'.", props[j].0, props[i].0), props[j].1);
                         }
                     }
                 }
@@ -67,16 +54,12 @@ fn collect_static_props(text: &str, span: oxc::span::Span, out: &mut Vec<(String
 fn collect_style_props(value: &AttributeValue, span: oxc::span::Span, out: &mut Vec<(String, oxc::span::Span)>) {
     match value {
         AttributeValue::Static(s) => collect_static_props(s, span, out),
-        AttributeValue::Concat(parts) => {
-            for part in parts {
-                match part {
-                    AttributeValuePart::Static(s) => collect_static_props(s, span, out),
-                    AttributeValuePart::Expression(expr) => {
-                        for prop in extract_props_from_expression(expr) { out.push((prop, span)); }
-                    }
-                }
+        AttributeValue::Concat(parts) => for part in parts {
+            match part {
+                AttributeValuePart::Static(s) => collect_static_props(s, span, out),
+                AttributeValuePart::Expression(e) => for p in extract_props_from_expression(e) { out.push((p, span)); },
             }
-        }
+        },
         _ => {}
     }
 }
@@ -116,9 +99,6 @@ fn extract_props_from_expression(expr: &str) -> FxHashSet<String> {
     props
 }
 
-/// Returns all shorthands that the given longhand property is a sub-property of.
-/// A longhand can belong to more than one shorthand (e.g. `grid-column-start` belongs
-/// to both `grid-area` and `grid-column`).
 fn get_shorthands_for(property: &str) -> &'static [&'static str] {
     match property {
         // margin
