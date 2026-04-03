@@ -135,39 +135,6 @@ impl Rule for NoImmutableReactiveStatements {
             }
         }
 
-        // Check bind:value in template
-        walk_template_nodes(&ctx.ast.html, &mut |node| {
-            if let TemplateNode::Element(el) = node {
-                for attr in &el.attributes {
-                    if let Attribute::Directive { kind: DirectiveKind::Binding, span, .. } = attr {
-                        let region = &ctx.source[span.start as usize..span.end as usize];
-                        if let Some(open) = region.find('{') {
-                            if let Some(close) = region.find('}') {
-                                let var = region[open+1..close].trim();
-                                if let_names.contains(var) {
-                                    mutable_lets.insert(var);
-                                }
-                                // Also check member binding: bind:value={record.name}
-                                // The base variable (before `.`) is mutable
-                                let base = var.split('.').next().unwrap_or(var);
-                                if base != var && let_names.contains(base) {
-                                    mutable_lets.insert(base);
-                                }
-                            }
-                        }
-                        if !region.contains('{') && !region.contains('=') {
-                            if let Some(colon) = region.find(':') {
-                                let name = region[colon+1..].trim();
-                                if let_names.contains(name) {
-                                    mutable_lets.insert(name);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
         // Classify const variables: immutable unless they have member writes
         // or are bound in template directives
         let mut const_member_written: HashSet<&str> = HashSet::new();
@@ -179,7 +146,7 @@ impl Rule for NoImmutableReactiveStatements {
             }
         }
 
-        // Check if const vars are bound via bind: directives (implicit member write)
+        // Check bind: directives in template (mutable lets + const member writes)
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
                 for attr in &el.attributes {
@@ -188,7 +155,13 @@ impl Rule for NoImmutableReactiveStatements {
                         if let Some(open) = region.find('{') {
                             if let Some(close) = region.find('}') {
                                 let expr = region[open+1..close].trim();
-                                // Check if the expression references a const var member
+                                if let_names.contains(expr) {
+                                    mutable_lets.insert(expr);
+                                }
+                                let base = expr.split('.').next().unwrap_or(expr);
+                                if base != expr && let_names.contains(base) {
+                                    mutable_lets.insert(base);
+                                }
                                 for &var in &const_names {
                                     if expr.starts_with(var) && expr.len() > var.len() {
                                         let next = expr.as_bytes()[var.len()];
@@ -196,6 +169,14 @@ impl Rule for NoImmutableReactiveStatements {
                                             const_member_written.insert(var);
                                         }
                                     }
+                                }
+                            }
+                        }
+                        if !region.contains('{') && !region.contains('=') {
+                            if let Some(colon) = region.find(':') {
+                                let name = region[colon+1..].trim();
+                                if let_names.contains(name) {
+                                    mutable_lets.insert(name);
                                 }
                             }
                         }
@@ -215,8 +196,7 @@ impl Rule for NoImmutableReactiveStatements {
         // const effectively mutable). But skip names that are shadowed by
         // {@const} declarations in the template — those {#each} blocks
         // reference the local variable, not the script-level one.
-        let each_iterable_names = collect_each_iterable_names(&ctx.ast.html);
-        let const_tag_names = collect_const_tag_names(&ctx.ast.html);
+        let (each_iterable_names, const_tag_names) = collect_each_and_const_names(&ctx.ast.html);
         immutable_names.retain(|n| {
             // Keep the name unless it's used as an each iterable WITHOUT
             // being shadowed by a {@const} declaration of the same name
@@ -576,28 +556,6 @@ fn extract_decl_name(line: &str) -> Option<&str> {
     None
 }
 
-fn is_literal_value(s: &str) -> bool {
-    s == "true" || s == "false" || s == "null" || s == "undefined"
-        || s == "{}" || s == "[]"
-        || s.parse::<f64>().is_ok()
-        || (s.starts_with('\'') && s.ends_with('\''))
-        || (s.starts_with('"') && s.ends_with('"'))
-        || (s.starts_with('`') && s.ends_with('`') && !s.contains("${"))
-}
-
-fn is_primitive_init(line: &str) -> bool {
-    if let Some(eq) = line.find('=') {
-        let init = line[eq + 1..].trim().trim_end_matches(';').trim();
-        init.starts_with('\'') || init.starts_with('"')
-            || (init.starts_with('`') && !init.contains("${"))
-            || init.parse::<f64>().is_ok()
-            || init == "true" || init == "false" || init == "null" || init == "undefined"
-    } else {
-        false
-    }
-}
-
-/// Extract import names from multi-line import statements in the full content.
 /// Extract import names from multi-line import statements in the full content.
 fn extract_multiline_imports<'a>(content: &'a str, immutable_names: &mut HashSet<&'a str>) {
     // Find multi-line imports: `import { ... } from '...'` or `import ... from '...'`
@@ -1193,64 +1151,31 @@ fn check_immutability_ast(content: &str, is_ts: bool, text_immutable: &HashSet<&
     result
 }
 
-/// Check if a root-scope symbol is immutable.
-fn is_symbol_immutable(
-    scoping: &oxc::semantic::Scoping,
-    symbol_id: oxc::semantic::SymbolId,
-) -> bool {
-    use oxc::semantic::SymbolFlags;
-    let flags = scoping.symbol_flags(symbol_id);
-
-    // Imports are always immutable
-    if flags.contains(SymbolFlags::Import) { return true; }
-
-    // Functions and classes are immutable
-    if flags.contains(SymbolFlags::Function) || flags.contains(SymbolFlags::Class) { return true; }
-
-    // Const variables are immutable (unless they have mutable members, but we
-    // handle that in the text-based pass)
-    if flags.contains(SymbolFlags::ConstVariable) { return true; }
-
-    // Check if the variable has any write references
-    let has_write = scoping.get_resolved_references(symbol_id)
-        .any(|r| r.is_write());
-
-    // If no writes, it's effectively immutable
-    !has_write
-}
-
-/// Check if a name is a well-known JavaScript global that the vendor's
-/// scope analysis resolves (through.resolved != null). These are safe to
-/// skip in the immutability check — they don't affect reactivity.
-/// Collect simple identifier names used as {#each} iterables from the template AST.
-fn collect_each_iterable_names(fragment: &crate::ast::Fragment) -> HashSet<String> {
-    let mut names = HashSet::new();
+/// Collect {#each} iterable names and {@const} tag names in a single template walk.
+fn collect_each_and_const_names(fragment: &crate::ast::Fragment) -> (HashSet<String>, HashSet<String>) {
+    let mut each_names = HashSet::new();
+    let mut const_names = HashSet::new();
     walk_template_nodes(fragment, &mut |node| {
-        if let TemplateNode::EachBlock(each) = node {
-            let expr = each.expression.trim();
-            if expr.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') && !expr.is_empty() {
-                names.insert(expr.to_string());
-            }
-        }
-    });
-    names
-}
-
-/// Collect variable names declared by {@const} tags in the template AST.
-fn collect_const_tag_names(fragment: &crate::ast::Fragment) -> HashSet<String> {
-    let mut names = HashSet::new();
-    walk_template_nodes(fragment, &mut |node| {
-        if let TemplateNode::ConstTag(ct) = node {
-            let decl = ct.declaration.trim();
-            if let Some(eq) = decl.find('=') {
-                let lhs = decl[..eq].trim();
-                if lhs.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') && !lhs.is_empty() {
-                    names.insert(lhs.to_string());
+        match node {
+            TemplateNode::EachBlock(each) => {
+                let expr = each.expression.trim();
+                if expr.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') && !expr.is_empty() {
+                    each_names.insert(expr.to_string());
                 }
             }
+            TemplateNode::ConstTag(ct) => {
+                let decl = ct.declaration.trim();
+                if let Some(eq) = decl.find('=') {
+                    let lhs = decl[..eq].trim();
+                    if lhs.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') && !lhs.is_empty() {
+                        const_names.insert(lhs.to_string());
+                    }
+                }
+            }
+            _ => {}
         }
     });
-    names
+    (each_names, const_names)
 }
 
 fn is_known_js_global(name: &str) -> bool {
