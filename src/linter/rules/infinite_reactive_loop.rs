@@ -477,34 +477,19 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
 /// Collect variables assigned after an `await` in a function body.
 /// Also returns (var_name, content_offset) pairs for each assignment.
 fn extract_func_name(line: &str) -> Option<String> {
-    if let Some(rest) = line.strip_prefix("const ") {
-        if let Some(eq) = rest.find(" = ") {
-            let name = &rest[..eq];
-            let after = rest[eq+3..].trim();
-            if is_direct_function_expr(after) {
-                return Some(name.to_string());
+    for prefix in &["const ", "let "] {
+        if let Some(rest) = line.strip_prefix(prefix) {
+            if let Some(eq) = rest.find(" = ") {
+                if is_direct_function_expr(rest[eq+3..].trim()) {
+                    return Some(rest[..eq].to_string());
+                }
             }
         }
     }
-    if let Some(rest) = line.strip_prefix("function ") {
-        let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
-        if !name.is_empty() { return Some(name); }
-    }
-    if let Some(rest) = line.strip_prefix("async function ") {
-        let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
-        if !name.is_empty() { return Some(name); }
-    }
-    // Also handle `let name = async ...` and `let name = (...) => { ... }`
-    if let Some(rest) = line.strip_prefix("let ") {
-        if let Some(eq) = rest.find(" = ") {
-            let name = &rest[..eq];
-            let after = rest[eq+3..].trim();
-            if is_direct_function_expr(after) {
-                return Some(name.to_string());
-            }
-        }
-    }
-    None
+    let rest = line.strip_prefix("function ")
+        .or_else(|| line.strip_prefix("async function "))?;
+    let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+    if !name.is_empty() { Some(name) } else { None }
 }
 
 /// Check if `after` (the text after `= `) is a direct function/arrow expression,
@@ -527,10 +512,8 @@ fn is_direct_function_expr(after: &str) -> bool {
                         // Direct arrow: `) => {`
                         if rest.starts_with("=>") { return true; }
                         // TypeScript return type: `): ReturnType => {`
-                        if rest.starts_with(':') {
-                            if let Some(arrow) = rest.find("=>") {
-                                return true;
-                            }
+                        if rest.starts_with(':') && rest.contains("=>") {
+                            return true;
                         }
                         return false;
                     }
@@ -682,16 +665,7 @@ fn is_word_start(text: &str, pos: usize) -> bool {
 /// Check if an assignment at `assign_pos` is after an await at `await_pos` on the same line,
 /// and the assignment actually executes after the await completes.
 fn is_after_await_same_line(line: &str, await_pos: usize, assign_pos: usize) -> bool {
-    if assign_pos <= await_pos { return false; }
-
-    // Check if there's a comma separator between await and assignment
-    // Pattern: `(await expr, (assignment))` or `(await expr, assignment)`
-    let between = &line[await_pos..assign_pos];
-    if between.contains(',') {
-        return true;
-    }
-
-    false
+    assign_pos > await_pos && line[await_pos..assign_pos].contains(',')
 }
 
 /// Find the position of an assignment to `var` in the line.
@@ -990,202 +964,168 @@ fn is_in_async_callback(block: &str, pos: usize, all_triggers: &[String]) -> boo
 /// Check if there's an `await` before `pos` in the block at the same scope depth,
 /// on a PRECEDING line. Uses brace-depth tracking to ignore awaits in nested functions.
 fn has_await_on_prev_line(block: &str, line_start_pos: usize) -> bool {
-    // We need to find an `await` keyword that:
-    // 1. Is on a previous line (before line_start_pos)
-    // 2. Is at the same brace depth as our position
-    // 3. Is inside an async function context
-
     let before = &block[..line_start_pos.min(block.len())];
+    if !before.contains("async ") && !before.contains("async(") { return false; }
 
-    // First check: is there any async context?
-    if !before.contains("async ") && !before.contains("async(") {
-        return false;
-    }
-
-    // Track brace depth from the start. Record the depth at our position.
+    let bytes = before.as_bytes();
+    // Single pass: compute target_depth + async_body_depth together
     let mut depth = 0i32;
     let mut in_str = false;
-    let mut sch = '"';
-    let bytes = block.as_bytes();
-
-    // First pass: find brace depth at line_start_pos
-    let mut target_depth = 0i32;
-    for i in 0..line_start_pos.min(bytes.len()) {
-        let ch = bytes[i] as char;
+    let mut sch = b'"';
+    let mut async_body_depth = 0i32;
+    for i in 0..bytes.len() {
         if in_str {
-            if ch == sch && (i == 0 || bytes[i-1] != b'\\') { in_str = false; }
+            if bytes[i] == sch && (i == 0 || bytes[i-1] != b'\\') { in_str = false; }
             continue;
         }
-        match ch {
-            '\'' | '"' | '`' => { in_str = true; sch = ch; }
-            '{' => depth += 1,
-            '}' => depth -= 1,
+        match bytes[i] {
+            b'\'' | b'"' | b'`' => { in_str = true; sch = bytes[i]; }
+            b'{' => depth += 1,
+            b'}' => depth -= 1,
             _ => {}
         }
-    }
-    target_depth = depth;
-
-    // Find the depth of the innermost enclosing async function body.
-    // This is the depth right after `async ... {` — await at this depth or deeper
-    // within the same function is relevant.
-    let async_body_depth = {
-        let mut d = 0i32;
-        let mut is = false;
-        let mut sc = '"';
-        let mut best = 0i32;
-        let b = &block[..line_start_pos.min(block.len())];
-        let mut j = 0;
-        while j < b.len() {
-            let c = b.as_bytes()[j] as char;
-            if is { if c == sc && (j == 0 || b.as_bytes()[j-1] != b'\\') { is = false; } j += 1; continue; }
-            match c {
-                '\'' | '"' | '`' => { is = true; sc = c; }
-                '{' => d += 1,
-                '}' => d -= 1,
-                _ => {}
-            }
-            // Check for `async ` followed eventually by `{`
-            if j + 6 <= b.len() && &b[j..j+6] == "async " {
-                // This async's body depth = d + 1 (the { that follows)
-                best = d + 1;
-            }
-            j += 1;
+        if i + 6 <= bytes.len() && &before[i..i+6] == "async " {
+            async_body_depth = depth + 1;
         }
-        best
-    };
+    }
+    let target_depth = depth;
 
-    // Second pass: find `await` keywords on preceding lines
+    // Second pass: find `await` keywords at correct depth
     depth = 0;
     in_str = false;
-    sch = '"';
-    let mut last_newline = 0usize;
-    let mut found_await_at_depth = false;
-
-    for i in 0..line_start_pos.min(bytes.len()) {
-        let ch = bytes[i] as char;
+    sch = b'"';
+    for i in 0..bytes.len() {
         if in_str {
-            if ch == sch && (i == 0 || bytes[i-1] != b'\\') { in_str = false; }
+            if bytes[i] == sch && (i == 0 || bytes[i-1] != b'\\') { in_str = false; }
             continue;
         }
-        match ch {
-            '\'' | '"' | '`' => { in_str = true; sch = ch; }
-            '{' => depth += 1,
-            '}' => depth -= 1,
+        match bytes[i] {
+            b'\'' | b'"' | b'`' => { in_str = true; sch = bytes[i]; }
+            b'{' => depth += 1,
+            b'}' => depth -= 1,
             _ => {}
         }
-        if ch == '\n' {
-            last_newline = i + 1;
-        }
-
-        // Check for `await ` at or above the target depth (within the same async function).
-        // Code in if/else branches after await in the same async function is still
-        // in a different microtask.
         if depth >= async_body_depth && depth <= target_depth
-            && i + 6 <= before.len() && &before[i..i+6] == "await " {
-            if i == 0 || !bytes[i-1].is_ascii_alphanumeric() {
-                if i < line_start_pos {
-                    found_await_at_depth = true;
-                }
-            }
+            && i + 6 <= bytes.len() && &before[i..i+6] == "await "
+            && (i == 0 || !bytes[i-1].is_ascii_alphanumeric()) {
+            return true;
         }
     }
+    false
+}
 
-    found_await_at_depth
+/// Skip past a string literal starting at `bytes[start]`. Returns position after closing quote.
+fn skip_string_raw(bytes: &[u8], start: usize) -> usize {
+    let q = bytes[start];
+    let mut j = start + 1;
+    while j < bytes.len() {
+        if bytes[j] == b'\\' { j += 2; continue; }
+        if bytes[j] == q { return j + 1; }
+        j += 1;
+    }
+    j
+}
+
+/// Skip past a comment starting at `bytes[i]`. Returns Some(end) or None if not a comment.
+fn skip_comment_raw(bytes: &[u8], i: usize) -> Option<usize> {
+    if i + 1 >= bytes.len() || bytes[i] != b'/' { return None; }
+    if bytes[i + 1] == b'/' {
+        let mut j = i + 2;
+        while j < bytes.len() && bytes[j] != b'\n' { j += 1; }
+        return Some(j);
+    }
+    if bytes[i + 1] == b'*' {
+        let mut j = i + 2;
+        while j + 1 < bytes.len() && !(bytes[j] == b'*' && bytes[j + 1] == b'/') { j += 1; }
+        return Some(if j + 1 < bytes.len() { j + 2 } else { j });
+    }
+    None
+}
+
+/// Find matching `}` from `bytes[start]` (which must be `{`), skipping strings/comments.
+fn skip_brace_body(bytes: &[u8], start: usize) -> usize {
+    let mut i = start + 1;
+    let mut depth = 1i32;
+    while i < bytes.len() && depth > 0 {
+        if let Some(end) = skip_comment_raw(bytes, i) { i = end; continue; }
+        match bytes[i] {
+            b'\'' | b'"' | b'`' => { i = skip_string_raw(bytes, i); continue; }
+            b'{' => depth += 1,
+            b'}' => { depth -= 1; if depth == 0 { return i; } }
+            _ => {}
+        }
+        i += 1;
+    }
+    i
+}
+
+/// Scan callback args starting after opening `(` at `bytes[after]`.
+/// Collects (body_start, body_end) for arrow/function callback bodies.
+/// If `first_only`, stops after finding the first callback.
+fn scan_callback_args(bytes: &[u8], after: usize, first_only: bool) -> Vec<(usize, usize)> {
+    let mut regions = Vec::new();
+    let mut i = after;
+    let mut paren_depth = 1i32;
+    while i < bytes.len() && paren_depth > 0 {
+        if let Some(end) = skip_comment_raw(bytes, i) { i = end; continue; }
+        match bytes[i] {
+            b'\'' | b'"' | b'`' => { i = skip_string_raw(bytes, i); }
+            b'(' => { paren_depth += 1; i += 1; }
+            b')' => { paren_depth -= 1; i += 1; }
+            b'=' if i + 1 < bytes.len() && bytes[i + 1] == b'>' && paren_depth == 1 => {
+                i += 2;
+                while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r') { i += 1; }
+                if i < bytes.len() && bytes[i] == b'{' {
+                    let body_start = i;
+                    i = skip_brace_body(bytes, i);
+                    regions.push((body_start, i));
+                    if i < bytes.len() { i += 1; }
+                } else if i < bytes.len() {
+                    // Expression body: scan to next `,` or `)` at depth 0
+                    let body_start = i;
+                    let mut pd = 0i32;
+                    while i < bytes.len() {
+                        if let Some(end) = skip_comment_raw(bytes, i) { i = end; continue; }
+                        match bytes[i] {
+                            b'\'' | b'"' | b'`' => { i = skip_string_raw(bytes, i); continue; }
+                            b'(' => { pd += 1; i += 1; }
+                            b')' if pd > 0 => { pd -= 1; i += 1; }
+                            b')' | b',' if pd == 0 => break,
+                            _ => { i += 1; }
+                        }
+                    }
+                    regions.push((body_start, i));
+                }
+                if first_only { break; }
+            }
+            b'{' if paren_depth == 1 => {
+                let body_start = i;
+                i = skip_brace_body(bytes, i);
+                regions.push((body_start, i));
+                if i < bytes.len() { i += 1; }
+                if first_only { break; }
+            }
+            _ => { i += 1; }
+        }
+    }
+    regions
 }
 
 /// Find byte ranges of callback bodies inside setTimeout/setInterval/queueMicrotask calls.
-/// Returns Vec<(body_start, body_end)> for each callback body found.
 fn find_timer_callback_regions(block: &str) -> Vec<(usize, usize)> {
     let mut regions = Vec::new();
     let bytes = block.as_bytes();
-    let timer_fns = ["setTimeout(", "setInterval(", "queueMicrotask("];
-
-    for pattern in &timer_fns {
+    for pattern in &["setTimeout(", "setInterval(", "queueMicrotask("] {
         let mut search = 0;
         while let Some(pos) = block[search..].find(pattern) {
             let abs = search + pos;
-            // Word boundary check
             if abs > 0 {
                 let prev = bytes[abs - 1];
                 if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' {
-                    search = abs + pattern.len();
-                    continue;
+                    search = abs + pattern.len(); continue;
                 }
             }
-            let after = abs + pattern.len();
-            let mut i = after;
-            let mut paren_depth = 1i32;
-
-            // Find the callback body (first arrow/function argument)
-            while i < bytes.len() && paren_depth > 0 {
-                // Skip strings
-                if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
-                    let q = bytes[i]; i += 1;
-                    while i < bytes.len() {
-                        if bytes[i] == b'\\' { i += 1; }
-                        else if bytes[i] == q { break; }
-                        i += 1;
-                    }
-                    if i < bytes.len() { i += 1; }
-                    continue;
-                }
-                // Skip comments
-                if bytes[i] == b'/' && i + 1 < bytes.len() {
-                    if bytes[i + 1] == b'/' {
-                        i += 2;
-                        while i < bytes.len() && bytes[i] != b'\n' { i += 1; }
-                        continue;
-                    }
-                    if bytes[i + 1] == b'*' {
-                        i += 2;
-                        while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') { i += 1; }
-                        if i + 1 < bytes.len() { i += 2; }
-                        continue;
-                    }
-                }
-                match bytes[i] {
-                    b'(' => { paren_depth += 1; i += 1; }
-                    b')' => { paren_depth -= 1; i += 1; }
-                    b'=' if i + 1 < bytes.len() && bytes[i + 1] == b'>' && paren_depth == 1 => {
-                        i += 2;
-                        while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r') { i += 1; }
-                        if i < bytes.len() && bytes[i] == b'{' {
-                            let body_start = i;
-                            let mut bd = 1i32; i += 1;
-                            while i < bytes.len() && bd > 0 {
-                                if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
-                                    let q = bytes[i]; i += 1;
-                                    while i < bytes.len() { if bytes[i] == b'\\' { i += 1; } else if bytes[i] == q { break; } i += 1; }
-                                    if i < bytes.len() { i += 1; }
-                                    continue;
-                                }
-                                match bytes[i] { b'{' => bd += 1, b'}' => { bd -= 1; if bd == 0 { break; } } _ => {} }
-                                i += 1;
-                            }
-                            regions.push((body_start, i));
-                        }
-                        break; // only need the first callback
-                    }
-                    b'{' if paren_depth == 1 => {
-                        // function() { ... } body
-                        let body_start = i;
-                        let mut bd = 1i32; i += 1;
-                        while i < bytes.len() && bd > 0 {
-                            if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
-                                let q = bytes[i]; i += 1;
-                                while i < bytes.len() { if bytes[i] == b'\\' { i += 1; } else if bytes[i] == q { break; } i += 1; }
-                                if i < bytes.len() { i += 1; }
-                                continue;
-                            }
-                            match bytes[i] { b'{' => bd += 1, b'}' => { bd -= 1; if bd == 0 { break; } } _ => {} }
-                            i += 1;
-                        }
-                        regions.push((body_start, i));
-                        break;
-                    }
-                    _ => { i += 1; }
-                }
-            }
+            regions.extend(scan_callback_args(bytes, abs + pattern.len(), true));
             search = abs + pattern.len();
         }
     }
@@ -1193,166 +1133,28 @@ fn find_timer_callback_regions(block: &str) -> Vec<(usize, usize)> {
 }
 
 /// Check if `pos` is in an "effective" then/catch async context.
-/// The vendor's AST traversal resets `isSameMicroTask=true` when leaving a nested
-/// `.then()/.catch()` callback. So positions AFTER a nested callback ends (but still
-/// inside an outer callback) are NOT considered async. This matches the vendor behavior.
 fn is_in_effective_then_catch(regions: &[(usize, usize)], pos: usize) -> bool {
-    // Find the innermost (smallest) region containing pos
-    let innermost = regions.iter()
+    let innermost = match regions.iter()
         .filter(|(s, e)| pos >= *s && pos < *e)
-        .min_by_key(|(s, e)| e - s);
-
-    let innermost = match innermost {
+        .min_by_key(|(s, e)| e - s) {
         Some(r) => r,
         None => return false,
     };
-
-    // Check if there's a strictly-nested region within the innermost that ends
-    // at or before pos. The vendor resets isSameMicroTask when leaving inner callbacks.
-    let has_inner_that_ended = regions.iter().any(|(s, e)| {
-        *s > innermost.0 && *e < innermost.1 // strictly nested
-            && *e <= pos                       // ended before or at our position
-    });
-
-    !has_inner_that_ended
+    !regions.iter().any(|(s, e)| *s > innermost.0 && *e < innermost.1 && *e <= pos)
 }
 
 /// Find byte ranges of .then() and .catch() callback bodies in the block.
-/// Returns Vec<(body_start, body_end)> where body is the content of the callback.
-/// Each callback in `.then(success, error)` gets its own region.
-/// Handles both block bodies `(x) => { ... }` and expression bodies `(x) => expr`.
 fn find_then_catch_regions(block: &str) -> Vec<(usize, usize)> {
     let mut regions = Vec::new();
     let bytes = block.as_bytes();
-
-    // Helper: skip a string literal starting at bytes[i], returns position after closing quote
-    let skip_string = |bytes: &[u8], start: usize| -> usize {
-        let q = bytes[start];
-        let mut j = start + 1;
-        while j < bytes.len() {
-            if bytes[j] == b'\\' { j += 1; }
-            else if bytes[j] == q { return j + 1; }
-            j += 1;
-        }
-        j
-    };
-
-    // Helper: skip a comment starting at bytes[i], returns position after comment
-    let skip_comment = |bytes: &[u8], i: usize| -> Option<usize> {
-        if i + 1 >= bytes.len() || bytes[i] != b'/' { return None; }
-        if bytes[i + 1] == b'/' {
-            let mut j = i + 2;
-            while j < bytes.len() && bytes[j] != b'\n' { j += 1; }
-            return Some(j);
-        }
-        if bytes[i + 1] == b'*' {
-            let mut j = i + 2;
-            while j + 1 < bytes.len() && !(bytes[j] == b'*' && bytes[j + 1] == b'/') { j += 1; }
-            if j + 1 < bytes.len() { return Some(j + 2); }
-            return Some(j);
-        }
-        None
-    };
-
-    // Find all `.then(` and `.catch(` positions
     for pattern in &[".then(", ".catch("] {
         let mut search = 0;
         while let Some(pos) = block[search..].find(pattern) {
             let abs = search + pos;
-            let after = abs + pattern.len();
-
-            // Scan the arguments of .then(...) / .catch(...)
-            // For each arrow/function callback found, record its body as a region.
-            let mut i = after;
-            let mut paren_depth = 1i32;
-
-            while i < bytes.len() && paren_depth > 0 {
-                // Skip comments
-                if let Some(end) = skip_comment(bytes, i) { i = end; continue; }
-                // Skip strings
-                if i < bytes.len() && (bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`') {
-                    i = skip_string(bytes, i); continue;
-                }
-
-                match bytes[i] {
-                    b'(' => { paren_depth += 1; i += 1; }
-                    b')' => {
-                        paren_depth -= 1;
-                        i += 1;
-                    }
-                    b'=' if i + 1 < bytes.len() && bytes[i + 1] == b'>' && paren_depth == 1 => {
-                        // Arrow function at top level of .then() args
-                        i += 2;
-                        // Skip whitespace
-                        while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r') { i += 1; }
-                        if i < bytes.len() && bytes[i] == b'{' {
-                            // Block body: find matching }
-                            let body_start = i;
-                            let mut brace_depth = 1i32;
-                            i += 1;
-                            while i < bytes.len() && brace_depth > 0 {
-                                if let Some(end) = skip_comment(bytes, i) { i = end; continue; }
-                                if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
-                                    i = skip_string(bytes, i); continue;
-                                }
-                                match bytes[i] {
-                                    b'{' => brace_depth += 1,
-                                    b'}' => { brace_depth -= 1; if brace_depth == 0 { break; } }
-                                    _ => {}
-                                }
-                                i += 1;
-                            }
-                            regions.push((body_start, i));
-                            if i < bytes.len() { i += 1; } // skip the }
-                        } else if i < bytes.len() {
-                            // Expression body: from here to next `,` or `)` at paren_depth 1
-                            let body_start = i;
-                            let mut pd = 0i32;
-                            while i < bytes.len() {
-                                if let Some(end) = skip_comment(bytes, i) { i = end; continue; }
-                                if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
-                                    i = skip_string(bytes, i); continue;
-                                }
-                                match bytes[i] {
-                                    b'(' => pd += 1,
-                                    b')' if pd > 0 => pd -= 1,
-                                    b')' if pd == 0 => break, // end of .then()
-                                    b',' if pd == 0 => break, // next argument
-                                    _ => {}
-                                }
-                                i += 1;
-                            }
-                            regions.push((body_start, i));
-                        }
-                    }
-                    b'{' if paren_depth == 1 => {
-                        // function() { ... } body (not arrow)
-                        let body_start = i;
-                        let mut brace_depth = 1i32;
-                        i += 1;
-                        while i < bytes.len() && brace_depth > 0 {
-                            if let Some(end) = skip_comment(bytes, i) { i = end; continue; }
-                            if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
-                                i = skip_string(bytes, i); continue;
-                            }
-                            match bytes[i] {
-                                b'{' => brace_depth += 1,
-                                b'}' => { brace_depth -= 1; if brace_depth == 0 { break; } }
-                                _ => {}
-                            }
-                            i += 1;
-                        }
-                        regions.push((body_start, i));
-                        if i < bytes.len() { i += 1; }
-                    }
-                    _ => { i += 1; }
-                }
-            }
-
+            regions.extend(scan_callback_args(bytes, abs + pattern.len(), false));
             search = abs + pattern.len();
         }
     }
-
     regions
 }
 
