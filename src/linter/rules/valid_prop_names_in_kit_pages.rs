@@ -118,10 +118,8 @@ fn check_destructured_props(
             let byte_offset = inner_base + pos + leading_ws + name_offset_in_trimmed;
             let start = byte_offset as u32;
             let end = (byte_offset + prop_name.len()) as u32;
-            ctx.diagnostic(
-                "disallow props other than data or errors in SvelteKit page components.".to_string(),
-                Span::new(start, end),
-            );
+            ctx.diagnostic("disallow props other than data or errors in SvelteKit page components.".to_string(),
+                Span::new(start, end));
         }
 
         pos += token.len() + 1; // +1 for the comma separator

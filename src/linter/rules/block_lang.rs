@@ -80,10 +80,8 @@ impl Rule for BlockLang {
 
         if enforce_script && ctx.ast.instance.is_none() && ctx.ast.module.is_none() {
             let desc = script_langs.as_ref().map_or("omitted".to_string(), |a| pretty_print_langs(a));
-            ctx.diagnostic(
-                format!("The <script> block should be present and its lang attribute should be {}.", desc),
-                Span::new(0, 0),
-            );
+            ctx.diagnostic(format!("The <script> block should be present and its lang attribute should be {}.", desc),
+                Span::new(0, 0));
         }
         if let Some(allowed) = &script_langs {
             for script in [&ctx.ast.instance, &ctx.ast.module].iter().filter_map(|s| s.as_ref()) {
@@ -93,10 +91,8 @@ impl Rule for BlockLang {
 
         if enforce_style && ctx.ast.css.is_none() {
             let desc = style_langs.as_ref().map_or("omitted".to_string(), |a| pretty_print_langs(a));
-            ctx.diagnostic(
-                format!("The <style> block should be present and its lang attribute should be {}.", desc),
-                Span::new(0, 0),
-            );
+            ctx.diagnostic(format!("The <style> block should be present and its lang attribute should be {}.", desc),
+                Span::new(0, 0));
         }
         if let Some(allowed) = &style_langs {
             if let Some(style) = &ctx.ast.css {

@@ -62,10 +62,8 @@ impl Rule for RequireStoresInit {
 
                 if should_report {
                     let source_pos = base + gt + 1 + abs;
-                    ctx.diagnostic(
-                        "Always set a default value for svelte stores.",
-                        oxc::span::Span::new(source_pos as u32, (base + gt + 1 + arg_end + 1) as u32),
-                    );
+                    ctx.diagnostic("Always set a default value for svelte stores.",
+                        oxc::span::Span::new(source_pos as u32, (base + gt + 1 + arg_end + 1) as u32));
                 }
                 search_from = abs + pattern.len();
             }

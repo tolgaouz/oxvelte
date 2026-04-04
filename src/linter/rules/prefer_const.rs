@@ -94,10 +94,8 @@ impl Rule for PreferConst {
             let symbol_span = scoping.symbol_span(symbol_id);
             let abs_start = content_offset + symbol_span.start as usize;
             let abs_end = content_offset + symbol_span.end as usize;
-            ctx.diagnostic(
-                format!("'{}' is never reassigned. Use 'const' instead.", scoping.symbol_name(symbol_id)),
-                Span::new(abs_start as u32, abs_end as u32),
-            );
+            ctx.diagnostic(format!("'{}' is never reassigned. Use 'const' instead.", scoping.symbol_name(symbol_id)),
+                Span::new(abs_start as u32, abs_end as u32));
         }
     }
 }
