@@ -522,10 +522,6 @@ fn is_word_start(text: &str, pos: usize) -> bool {
     !(b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b == b'.')
 }
 
-fn is_after_await_same_line(line: &str, await_pos: usize, assign_pos: usize) -> bool {
-    assign_pos > await_pos && line[await_pos..assign_pos].contains(',')
-}
-
 fn find_assign_pos(line: &str, var: &str) -> Option<usize> {
     for op in &[" = ", " += ", " -= "] {
         if let Some(pos) = find_var_op(line, var, op) {
@@ -574,30 +570,18 @@ fn find_block_end(content: &str, dollar: usize) -> usize {
 }
 
 fn find_matching_brace(content: &str, start: usize) -> usize {
-    let mut depth = 0i32;
-    let mut in_str = false;
-    let mut in_line_comment = false;
-    let mut sch = '"';
     let bytes = content.as_bytes();
-    for (i, ch) in content[start..].char_indices() {
-        let abs = start + i;
-        if in_line_comment {
-            if ch == '\n' { in_line_comment = false; }
-            continue;
-        }
-        if in_str {
-            if ch == sch && abs > 0 && bytes[abs - 1] != b'\\' { in_str = false; }
-            continue;
-        }
-        match ch {
-            '/' if abs + 1 < bytes.len() && bytes[abs + 1] == b'/' => {
-                in_line_comment = true;
-            }
-            '\'' | '"' | '`' => { in_str = true; sch = ch; }
-            '{' => depth += 1,
-            '}' => { depth -= 1; if depth == 0 { return start + i + 1; } }
+    let mut i = start;
+    let mut depth = 0i32;
+    while i < bytes.len() {
+        if let Some(end) = skip_comment_raw(bytes, i) { i = end; continue; }
+        match bytes[i] {
+            b'\'' | b'"' | b'`' => { i = skip_string_raw(bytes, i); continue; }
+            b'{' => depth += 1,
+            b'}' => { depth -= 1; if depth == 0 { return i + 1; } }
             _ => {}
         }
+        i += 1;
     }
     content.len()
 }
@@ -605,84 +589,62 @@ fn find_matching_brace(content: &str, start: usize) -> usize {
 fn find_stmt_end(content: &str, dollar: usize) -> usize {
     let mut pdepth = 0i32;
     let mut bdepth = 0i32;
-    let mut in_str = false;
-    let mut in_line_comment = false;
-    let mut sch = '"';
     let mut has_c = false;
     let bytes = content.as_bytes();
-    for (i, ch) in content[dollar + 2..].char_indices() {
-        let abs = dollar + 2 + i;
-        if in_line_comment {
-            if ch == '\n' {
-                in_line_comment = false;
-            } else {
-                continue;
+    let mut i = dollar + 2;
+    while i < bytes.len() {
+        if let Some(end) = skip_comment_raw(bytes, i) {
+            if bytes[end.min(bytes.len()) - 1] == b'\n' && pdepth <= 0 && bdepth <= 0 && has_c {
+                // line comment ended with newline — check newline logic below
             }
-        }
-        if in_str {
-            if ch == sch && abs > 0 && bytes[abs - 1] != b'\\' { in_str = false; }
+            i = end;
             continue;
         }
-        match ch {
-            '/' if abs + 1 < bytes.len() && bytes[abs + 1] == b'/' => {
-                in_line_comment = true;
-                continue;
-            }
-            '\'' | '"' | '`' => { in_str = true; sch = ch; has_c = true; }
-            '{' => { bdepth += 1; has_c = true; }
-            '}' => {
+        let b = bytes[i];
+        match b {
+            b'\'' | b'"' | b'`' => { has_c = true; i = skip_string_raw(bytes, i); continue; }
+            b'{' => { bdepth += 1; has_c = true; }
+            b'}' => {
                 bdepth -= 1;
                 if bdepth <= 0 && pdepth <= 0 && has_c {
-                    let rest = content[abs + 1..].trim_start();
-                    if rest.starts_with("else") {
-                    } else {
-                        return abs + 1;
-                    }
+                    let rest = content[i + 1..].trim_start();
+                    if !rest.starts_with("else") { return i + 1; }
                 }
             }
-            '(' => { pdepth += 1; has_c = true; }
-            ')' => {
+            b'(' => { pdepth += 1; has_c = true; }
+            b')' => {
                 pdepth -= 1;
                 if pdepth <= 0 && bdepth <= 0 && has_c {
-                    let rest = &content[abs + 1..];
+                    let rest = &content[i + 1..];
                     let nt = rest.trim_start_matches(|c: char| c == ' ' || c == '\t');
                     if nt.starts_with(';') {
-                        return abs + 1 + (rest.len() - nt.len()) + 1;
+                        return i + 1 + (rest.len() - nt.len()) + 1;
                     }
                     if nt.starts_with('\n') || nt.is_empty() {
                         let after_ws = nt.trim_start();
                         let is_continuation = after_ws.as_bytes().first().is_some_and(|b|
                             matches!(b, b'.' | b'?' | b':' | b'+' | b'-' | b'*' | b'/'
                                 | b'%' | b'&' | b'|' | b'^' | b'<' | b'>' | b'=' | b'!' | b',' | b'('));
-                        if !is_continuation {
-                            return abs + 1 + (rest.len() - nt.len());
-                        }
+                        if !is_continuation { return i + 1 + (rest.len() - nt.len()); }
                     }
                 }
             }
-            ';' if pdepth <= 0 && bdepth <= 0 && has_c => return abs + 1,
-            '\n' if pdepth <= 0 && bdepth <= 0 && has_c => {
-                let rest = &content[abs + 1..];
+            b';' if pdepth <= 0 && bdepth <= 0 && has_c => return i + 1,
+            b'\n' if pdepth <= 0 && bdepth <= 0 && has_c => {
+                let rest = &content[i + 1..];
                 let next_line = rest.trim_start();
-                if next_line.is_empty() {
-                    return abs + 1;
-                }
-                if rest.starts_with('\n') || (rest.starts_with("\r\n") && !next_line.is_empty()) {
-                    return abs + 1;
-                }
-                let stmt_starts = ["async ", "function ", "const ", "let ", "var ",
+                if next_line.is_empty() || rest.starts_with('\n')
+                    || (rest.starts_with("\r\n") && !next_line.is_empty()) { return i + 1; }
+                const STMT_STARTS: &[&str] = &["async ", "function ", "const ", "let ", "var ",
                     "if ", "if(", "for ", "for(", "while ", "while(", "return ",
                     "return;", "throw ", "class ", "import ", "export ",
                     "try ", "try{", "switch ", "switch(", "$: "];
-                for kw in &stmt_starts {
-                    if next_line.starts_with(kw) {
-                        return abs + 1;
-                    }
-                }
+                if STMT_STARTS.iter().any(|kw| next_line.starts_with(kw)) { return i + 1; }
             }
-            _ if !ch.is_whitespace() => has_c = true,
+            _ if !b.is_ascii_whitespace() => has_c = true,
             _ => {}
         }
+        i += 1;
     }
     content.len()
 }
@@ -753,12 +715,12 @@ fn is_in_async_callback(block: &str, pos: usize, all_triggers: &[String]) -> boo
 fn has_await_on_prev_line(block: &str, line_start_pos: usize) -> bool {
     let before = &block[..line_start_pos.min(block.len())];
     if !before.contains("async ") && !before.contains("async(") { return false; }
-
     let bytes = before.as_bytes();
     let mut depth = 0i32;
     let mut in_str = false;
     let mut sch = b'"';
     let mut async_body_depth = 0i32;
+    let mut await_positions = Vec::new();
     for i in 0..bytes.len() {
         if in_str {
             if bytes[i] == sch && (i == 0 || bytes[i-1] != b'\\') { in_str = false; }
@@ -773,30 +735,12 @@ fn has_await_on_prev_line(block: &str, line_start_pos: usize) -> bool {
         if i + 6 <= bytes.len() && &before[i..i+6] == "async " {
             async_body_depth = depth + 1;
         }
-    }
-    let target_depth = depth;
-
-    depth = 0;
-    in_str = false;
-    sch = b'"';
-    for i in 0..bytes.len() {
-        if in_str {
-            if bytes[i] == sch && (i == 0 || bytes[i-1] != b'\\') { in_str = false; }
-            continue;
-        }
-        match bytes[i] {
-            b'\'' | b'"' | b'`' => { in_str = true; sch = bytes[i]; }
-            b'{' => depth += 1,
-            b'}' => depth -= 1,
-            _ => {}
-        }
-        if depth >= async_body_depth && depth <= target_depth
-            && i + 6 <= bytes.len() && &before[i..i+6] == "await "
+        if depth >= async_body_depth && i + 6 <= bytes.len() && &before[i..i+6] == "await "
             && (i == 0 || !bytes[i-1].is_ascii_alphanumeric()) {
-            return true;
+            await_positions.push(depth);
         }
     }
-    false
+    await_positions.iter().any(|&d| d <= depth)
 }
 
 fn skip_string_raw(bytes: &[u8], start: usize) -> usize {
@@ -1031,41 +975,28 @@ fn analyze_block(
         let bytes = block.as_bytes();
         let mut i = 0;
         while i < bytes.len() {
-            if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
-                let q = bytes[i]; i += 1;
-                while i < bytes.len() && bytes[i] != q {
-                    if bytes[i] == b'\\' { i += 1; }
-                    i += 1;
-                }
-                if i < bytes.len() { i += 1; }
-                continue;
-            }
-            if bytes[i] == b'/' && i + 1 < bytes.len() {
-                if bytes[i+1] == b'/' { while i < bytes.len() && bytes[i] != b'\n' { i += 1; } continue; }
-                if bytes[i+1] == b'*' { i += 2; while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i+1] == b'/') { i += 1; } i += 2; continue; }
-            }
-            if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' || bytes[i] == b'$' {
-                if i > 0 && bytes[i-1] == b'.'
-                    && !(i >= 3 && bytes[i-2] == b'.' && bytes[i-3] == b'.') {
-                    while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') { i += 1; }
-                    continue;
-                }
-                let start = i;
-                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') { i += 1; }
-                let ident = &block[start..i];
-                let after_ident = block[i..].trim_start();
-                if after_ident.starts_with(':') && !after_ident.starts_with("::") {
-                    let before_start = block[..start].trim_end();
-                    if before_start.ends_with('{') || before_start.ends_with(',')
-                        || before_start.ends_with('\n') {
+            match bytes[i] {
+                b'\'' | b'"' | b'`' => { i = skip_string_raw(bytes, i); continue; }
+                b'/' => if let Some(end) = skip_comment_raw(bytes, i) { i = end; continue; },
+                b if b.is_ascii_alphabetic() || b == b'_' || b == b'$' => {
+                    if i > 0 && bytes[i-1] == b'.' && !(i >= 3 && bytes[i-2] == b'.' && bytes[i-3] == b'.') {
+                        while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') { i += 1; }
                         continue;
                     }
+                    let start = i;
+                    while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') { i += 1; }
+                    let ident = &block[start..i];
+                    let after_ident = block[i..].trim_start();
+                    if after_ident.starts_with(':') && !after_ident.starts_with("::") {
+                        let before_start = block[..start].trim_end();
+                        if before_start.ends_with('{') || before_start.ends_with(',')
+                            || before_start.ends_with('\n') { continue; }
+                    }
+                    if top_vars.iter().any(|v| v == ident) && !local_names.contains(&ident.to_string()) {
+                        tracked.insert(ident.to_string());
+                    }
                 }
-                if top_vars.iter().any(|v| v == ident) && !local_names.contains(&ident.to_string()) {
-                    tracked.insert(ident.to_string());
-                }
-            } else {
-                i += 1;
+                _ => { i += 1; }
             }
         }
         tracked
@@ -1240,16 +1171,9 @@ fn analyze_block(
 
                     if let Some(assign_pos) = find_assign_pos(t, var) {
                         if let Some(await_pos) = t.find("await ") {
-                            if assign_pos < await_pos {
-                                let indent = line.len() - t.len();
-                                let abs = base + block_start + line_offsets[idx] + indent + assign_pos;
-                                ctx.diagnostic(
-                                    format!("Possibly it may occur an infinite reactive loop because `{}` is updated across an await boundary.", var),
-                                    Span::new(abs as u32, abs as u32 + 1),
-                                );
-                                continue;
-                            }
-                            if is_after_await_same_line(t, await_pos, assign_pos) {
+                            let across = assign_pos < await_pos
+                                || (assign_pos > await_pos && t[await_pos..assign_pos].contains(','));
+                            if across {
                                 let indent = line.len() - t.len();
                                 let abs = base + block_start + line_offsets[idx] + indent + assign_pos;
                                 ctx.diagnostic(
