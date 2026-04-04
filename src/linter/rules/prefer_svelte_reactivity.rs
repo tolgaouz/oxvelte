@@ -182,28 +182,18 @@ impl PreferSvelteReactivity {
                 false
             };
 
-            let is_template_mut = if !is_mut && !is_transitive_mut
+            let is_template_mut = !is_mut && !is_transitive_mut
                 && scoping.symbol_scope_id(symbol_id) == scoping.root_scope_id()
-            {
-                let var_name = scoping.symbol_name(symbol_id);
-                let mut found = check_mutation_in(ctx.source, var_name, builtin, Some(content));
-                if !found {
-                    for ref_id in scoping.get_resolved_references(symbol_id) {
-                        if !ref_id.is_read() { continue; }
-                        let (downstream_sym, _) = find_target_symbol_or_name(nodes, scoping, ref_id.node_id());
-                        if let Some(ds) = downstream_sym {
-                            let ds_name = scoping.symbol_name(ds);
-                            if check_mutation_in(ctx.source, ds_name, builtin, Some(content)) {
-                                found = true;
-                                break;
+                && {
+                    let vn = scoping.symbol_name(symbol_id);
+                    check_mutation_in(ctx.source, vn, builtin, Some(content))
+                        || scoping.get_resolved_references(symbol_id).any(|ref_id| {
+                            ref_id.is_read() && {
+                                let (ds, _) = find_target_symbol_or_name(nodes, scoping, ref_id.node_id());
+                                ds.is_some_and(|s| check_mutation_in(ctx.source, scoping.symbol_name(s), builtin, Some(content)))
                             }
-                        }
-                    }
-                }
-                found
-            } else {
-                false
-            };
+                        })
+                };
 
             if is_mut || is_transitive_mut || is_template_mut {
                 flagged_symbols.insert(symbol_id);
@@ -217,10 +207,7 @@ fn mutable_class_msg(builtin: &BuiltinClass) -> String {
     format!("Found a mutable instance of the built-in {} class. Use {} instead.", builtin.name, builtin.svelte_name)
 }
 
-fn is_inside_export(
-    nodes: &oxc::semantic::AstNodes,
-    node_id: oxc::semantic::NodeId,
-) -> bool {
+fn is_inside_export(nodes: &oxc::semantic::AstNodes, node_id: oxc::semantic::NodeId) -> bool {
     use oxc::ast::AstKind;
     for ancestor_id in nodes.ancestor_ids(node_id) {
         match nodes.kind(ancestor_id) {
@@ -232,11 +219,7 @@ fn is_inside_export(
     false
 }
 
-fn is_directly_mutated(
-    nodes: &oxc::semantic::AstNodes,
-    new_expr_id: oxc::semantic::NodeId,
-    builtin: &BuiltinClass,
-) -> bool {
+fn is_directly_mutated(nodes: &oxc::semantic::AstNodes, new_expr_id: oxc::semantic::NodeId, builtin: &BuiltinClass) -> bool {
     use oxc::ast::AstKind;
     let mut current = new_expr_id;
     while matches!(nodes.kind(nodes.parent_id(current)),
@@ -252,10 +235,7 @@ fn is_directly_mutated(
     } else { false }
 }
 
-fn is_inside_state_call(
-    nodes: &oxc::semantic::AstNodes,
-    new_expr_id: oxc::semantic::NodeId,
-) -> bool {
+fn is_inside_state_call(nodes: &oxc::semantic::AstNodes, new_expr_id: oxc::semantic::NodeId) -> bool {
     use oxc::ast::ast::Expression;
     use oxc::ast::AstKind;
 
@@ -276,11 +256,7 @@ fn is_inside_state_call(
     false
 }
 
-fn find_target_symbol_or_name(
-    nodes: &oxc::semantic::AstNodes,
-    scoping: &oxc::semantic::Scoping,
-    node_id: oxc::semantic::NodeId,
-) -> (Option<oxc::semantic::SymbolId>, Option<String>) {
+fn find_target_symbol_or_name(nodes: &oxc::semantic::AstNodes, scoping: &oxc::semantic::Scoping, node_id: oxc::semantic::NodeId) -> (Option<oxc::semantic::SymbolId>, Option<String>) {
     use oxc::ast::ast::{AssignmentTarget, BindingPattern};
     use oxc::ast::AstKind;
 
@@ -315,12 +291,7 @@ fn find_target_symbol_or_name(
     (None, None)
 }
 
-fn is_symbol_mutated(
-    scoping: &oxc::semantic::Scoping,
-    nodes: &oxc::semantic::AstNodes,
-    symbol_id: oxc::semantic::SymbolId,
-    builtin: &BuiltinClass,
-) -> bool {
+fn is_symbol_mutated(scoping: &oxc::semantic::Scoping, nodes: &oxc::semantic::AstNodes, symbol_id: oxc::semantic::SymbolId, builtin: &BuiltinClass) -> bool {
     use oxc::ast::AstKind;
     use oxc::span::GetSpan;
     for reference in scoping.get_resolved_references(symbol_id) {
@@ -330,22 +301,14 @@ fn is_symbol_mutated(
             let prop = member.property.name.as_str();
             let gp = nodes.parent_id(parent_id);
             if builtin.mutating_methods.contains(&prop) && matches!(nodes.kind(gp), AstKind::CallExpression(_)) { return true; }
-            if builtin.mutating_props.contains(&prop) {
-                if let AstKind::AssignmentExpression(assign) = nodes.kind(gp) {
-                    if member.span.start == assign.left.span().start { return true; }
-                }
-            }
+            if builtin.mutating_props.contains(&prop)
+                && matches!(nodes.kind(gp), AstKind::AssignmentExpression(a) if member.span.start == a.left.span().start) { return true; }
         }
     }
     false
 }
 
-fn is_transitively_mutated(
-    scoping: &oxc::semantic::Scoping,
-    nodes: &oxc::semantic::AstNodes,
-    symbol_id: oxc::semantic::SymbolId,
-    builtin: &BuiltinClass,
-) -> bool {
+fn is_transitively_mutated(scoping: &oxc::semantic::Scoping, nodes: &oxc::semantic::AstNodes, symbol_id: oxc::semantic::SymbolId, builtin: &BuiltinClass) -> bool {
     use oxc::ast::AstKind;
     use oxc::ast::ast::BindingPattern;
 
@@ -438,12 +401,8 @@ fn detect_chained_new_in_template(ctx: &mut LintContext) {
         while let Some(rel) = source[search..].find(&new_pat) {
             let abs = search + rel;
 
-            if abs > 0 {
-                let prev = source.as_bytes()[abs - 1];
-                if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' {
-                    search = abs + 1;
-                    continue;
-                }
+            if abs > 0 && matches!(source.as_bytes()[abs - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$') {
+                search = abs + 1; continue;
             }
 
             if script_ranges.iter().any(|&(s, e)| abs >= s && abs < e) {
