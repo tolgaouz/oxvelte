@@ -60,40 +60,22 @@ impl Rule for ButtonHasType {
                     Some(Attribute::NormalAttribute { value, span, .. }) => {
                         match value {
                             AttributeValue::True => {
-                                ctx.diagnostic(
-                                    "A value must be set for button type attribute.",
-                                    *span,
-                                );
-                            }
-                            AttributeValue::Static(v) if v.is_empty() => {
-                                ctx.diagnostic(
-                                    "A value must be set for button type attribute.",
-                                    *span,
-                                );
+                                ctx.diagnostic("A value must be set for button type attribute.", *span);
                             }
                             AttributeValue::Static(v) => {
-                                let is_known = matches!(v.as_str(), "button" | "submit" | "reset");
-                                if !is_known {
-                                    ctx.diagnostic(
-                                        format!("{} is an invalid value for button type attribute.", v),
-                                        *span,
-                                    );
+                                if v.is_empty() {
+                                    ctx.diagnostic("A value must be set for button type attribute.", *span);
+                                } else if !matches!(v.as_str(), "button" | "submit" | "reset") {
+                                    ctx.diagnostic(format!("{} is an invalid value for button type attribute.", v), *span);
                                 } else {
-                                    let is_forbidden = match v.as_str() {
-                                        "button" => button_forbidden,
-                                        "submit" => submit_forbidden,
-                                        "reset" => reset_forbidden,
-                                        _ => false,
+                                    let forbidden = match v.as_str() {
+                                        "button" => button_forbidden, "submit" => submit_forbidden,
+                                        "reset" => reset_forbidden, _ => false,
                                     };
-                                    if is_forbidden {
-                                        ctx.diagnostic(
-                                            format!("{} is a forbidden value for button type attribute.", v),
-                                            *span,
-                                        );
-                                    }
+                                    if forbidden { ctx.diagnostic(format!("{} is a forbidden value for button type attribute.", v), *span); }
                                 }
                             }
-                            AttributeValue::Expression(_) | AttributeValue::Concat(_) => {}
+                            _ => {}
                         }
                     }
                     None => {
