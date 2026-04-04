@@ -41,17 +41,10 @@ impl Rule for NoNavigationWithoutResolve {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let (ignore_goto, ignore_push_state, ignore_replace_state, ignore_links) = {
-            let opts = ctx.config.options.as_ref()
-                .and_then(|v| v.as_array())
-                .and_then(|arr| arr.first());
-            (
-                opts.and_then(|v| v.get("ignoreGoto")).and_then(|v| v.as_bool()).unwrap_or(false),
-                opts.and_then(|v| v.get("ignorePushState")).and_then(|v| v.as_bool()).unwrap_or(false),
-                opts.and_then(|v| v.get("ignoreReplaceState")).and_then(|v| v.as_bool()).unwrap_or(false),
-                opts.and_then(|v| v.get("ignoreLinks")).and_then(|v| v.as_bool()).unwrap_or(false),
-            )
-        };
+        let opts = ctx.config.options.as_ref().and_then(|v| v.as_array()).and_then(|arr| arr.first());
+        let get_bool = |key: &str| opts.and_then(|v| v.get(key)).and_then(|v| v.as_bool()).unwrap_or(false);
+        let (ignore_goto, ignore_push_state, ignore_replace_state, ignore_links) =
+            (get_bool("ignoreGoto"), get_bool("ignorePushState"), get_bool("ignoreReplaceState"), get_bool("ignoreLinks"));
 
         let imports = ctx.ast.instance.as_ref()
             .map(|s| parse_imports(&s.content))
@@ -193,14 +186,10 @@ impl Rule for NoNavigationWithoutResolve {
                             let e = expr.trim();
                             if (e.starts_with("resolve") || e.starts_with("asset")) && e.ends_with(')') && !e.contains('+') { continue; }
                             if e.contains('(') && e.ends_with(')') && !e.contains('+') { continue; }
-                            if e.starts_with("'http") || e.starts_with("\"http")
-                                || e.starts_with("'#") || e.starts_with("\"#")
-                                || e.starts_with("'mailto:") || e.starts_with("\"mailto:")
-                                || e.starts_with("`#") || e.contains("'#'")
-                                || e.starts_with("'//") || e.starts_with("\"//")
-                                || (e.starts_with('`') && e.contains("://"))
-                                || e.contains("://")
-                                || e == "undefined" || e == "null"
+                            if ["'http", "\"http", "'#", "\"#", "'mailto:", "\"mailto:", "`#", "'//", "\"//"]
+                                .iter().any(|p| e.starts_with(p))
+                                || e.contains("'#'") || e.contains("://")
+                                || matches!(e, "undefined" | "null")
                             { continue; }
                             if e.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
                                 let script_content = ctx.ast.instance.as_ref().map(|s| s.content.as_str()).unwrap_or("");
