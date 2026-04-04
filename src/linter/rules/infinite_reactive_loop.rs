@@ -842,6 +842,19 @@ fn is_in_effective_then_catch(regions: &[(usize, usize)], pos: usize) -> bool {
     !regions.iter().any(|(s, e)| *s > innermost.0 && *e < innermost.1 && *e <= pos)
 }
 
+fn report_call_in_body(ctx: &mut LintContext, body: &str, body_offset: usize, callee: &str, var: &str) {
+    let pat = format!("{}(", callee);
+    if let Some(pos) = body.find(&pat) {
+        if is_word_start(body, pos) {
+            let abs = body_offset + pos;
+            ctx.diagnostic(
+                format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", var),
+                Span::new(abs as u32, abs as u32 + 1),
+            );
+        }
+    }
+}
+
 fn report_intermediate_calls(
     ctx: &mut LintContext,
     fi: &FuncInfo,
@@ -869,16 +882,7 @@ fn report_intermediate_calls(
         };
         if !callee_fi.assigns.contains(&pos_var.to_string()) { continue; }
 
-        let callee_call = format!("{}(", callee_name);
-        if let Some(cpos) = body.find(&callee_call) {
-            if is_word_start(body, cpos) {
-                let abs_pos = base + body_start + cpos;
-                ctx.diagnostic(
-                    format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", pos_var),
-                    Span::new(abs_pos as u32, abs_pos as u32 + 1),
-                );
-            }
-        }
+        report_call_in_body(ctx, body, base + body_start, callee_name, pos_var);
         reported.insert(callee_name);
 
         let (cb_start, cb_end) = callee_fi.body_range;
@@ -891,16 +895,7 @@ fn report_intermediate_calls(
                     None => continue,
                 };
                 if !deeper_fi.assigns.contains(&pos_var.to_string()) { continue; }
-                let deeper_call = format!("{}(", deeper_callee);
-                if let Some(dpos) = callee_body.find(&deeper_call) {
-                    if is_word_start(callee_body, dpos) {
-                        let abs_pos = base + cb_start + dpos;
-                        ctx.diagnostic(
-                            format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", pos_var),
-                            Span::new(abs_pos as u32, abs_pos as u32 + 1),
-                        );
-                    }
-                }
+                report_call_in_body(ctx, callee_body, base + cb_start, deeper_callee, pos_var);
                 reported.insert(deeper_callee.as_str());
             }
         }
