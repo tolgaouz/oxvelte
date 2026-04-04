@@ -145,23 +145,18 @@ impl PreferSvelteReactivity {
             let new_node_id = nodes.parent_id(new_node_id); // up to NewExpression
             if is_inside_state_call(nodes, new_node_id) { continue; }
 
+            let new_span = || Span::new(
+                (content_offset + new_expr.span.start as usize) as u32,
+                (content_offset + new_expr.span.end as usize) as u32,
+            );
+
             if is_svelte_module && is_inside_export(nodes, new_node_id) {
-                let abs = content_offset + new_expr.span.start as usize;
-                let end = content_offset + new_expr.span.end as usize;
-                ctx.diagnostic(
-                    mutable_class_msg(builtin),
-                    Span::new(abs as u32, end as u32),
-                );
+                ctx.diagnostic(mutable_class_msg(builtin), new_span());
                 continue;
             }
 
             if is_directly_mutated(nodes, new_node_id, builtin) {
-                let abs = content_offset + new_expr.span.start as usize;
-                let end = content_offset + new_expr.span.end as usize;
-                ctx.diagnostic(
-                    mutable_class_msg(builtin),
-                    Span::new(abs as u32, end as u32),
-                );
+                ctx.diagnostic(mutable_class_msg(builtin), new_span());
                 continue;
             }
 
@@ -172,9 +167,7 @@ impl PreferSvelteReactivity {
                     if let Some(var_name) = &var_name_fallback {
                         if var_name.starts_with('$') { continue; }
                         if check_mutation_in(ctx.source, var_name, builtin, None) {
-                            let abs = content_offset + new_expr.span.start as usize;
-                            let end = content_offset + new_expr.span.end as usize;
-                            ctx.diagnostic(mutable_class_msg(builtin), Span::new(abs as u32, end as u32));
+                            ctx.diagnostic(mutable_class_msg(builtin), new_span());
                         }
                     }
                     continue;
@@ -214,12 +207,7 @@ impl PreferSvelteReactivity {
 
             if is_mut || is_transitive_mut || is_template_mut {
                 flagged_symbols.insert(symbol_id);
-                let abs = content_offset + new_expr.span.start as usize;
-                let end = content_offset + new_expr.span.end as usize;
-                ctx.diagnostic(
-                    mutable_class_msg(builtin),
-                    Span::new(abs as u32, end as u32),
-                );
+                ctx.diagnostic(mutable_class_msg(builtin), new_span());
             }
         }
     }
@@ -363,36 +351,24 @@ fn is_transitively_mutated(
 
     for reference in scoping.get_resolved_references(symbol_id) {
         if !reference.is_read() { continue; }
-        let ref_node = reference.node_id();
-        for ancestor_id in nodes.ancestor_ids(ref_node) {
-            match nodes.kind(ancestor_id) {
+        for ancestor_id in nodes.ancestor_ids(reference.node_id()) {
+            let target_sym = match nodes.kind(ancestor_id) {
                 AstKind::VariableDeclarator(decl) => {
-                    if let BindingPattern::BindingIdentifier(ident) = &decl.id {
-                        if let Some(target_sym) = ident.symbol_id.get() {
-                            if target_sym != symbol_id && is_symbol_mutated(scoping, nodes, target_sym, builtin) {
-                                return true;
-                            }
-                        }
-                    }
-                    break;
+                    if let BindingPattern::BindingIdentifier(ident) = &decl.id { ident.symbol_id.get() } else { None }
                 }
                 AstKind::AssignmentExpression(assign) => {
                     if let oxc::ast::ast::AssignmentTarget::AssignmentTargetIdentifier(ident) = &assign.left {
-                        let ref_id = ident.reference_id.get();
-                        if let Some(target_sym) = ref_id.and_then(|r| scoping.get_reference(r).symbol_id()) {
-                            if target_sym != symbol_id && is_symbol_mutated(scoping, nodes, target_sym, builtin) {
-                                return true;
-                            }
-                        }
-                    }
-                    break;
+                        ident.reference_id.get().and_then(|r| scoping.get_reference(r).symbol_id())
+                    } else { None }
                 }
-                AstKind::ParenthesizedExpression(_)
-                | AstKind::LogicalExpression(_)
-                | AstKind::ConditionalExpression(_)
-                | AstKind::SequenceExpression(_) => continue,
+                AstKind::ParenthesizedExpression(_) | AstKind::LogicalExpression(_)
+                | AstKind::ConditionalExpression(_) | AstKind::SequenceExpression(_) => continue,
                 _ => break,
+            };
+            if let Some(s) = target_sym {
+                if s != symbol_id && is_symbol_mutated(scoping, nodes, s, builtin) { return true; }
             }
+            break;
         }
     }
     false
