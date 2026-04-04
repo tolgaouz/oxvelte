@@ -55,20 +55,13 @@ impl Rule for ValidPropNamesInKitPages {
                         check_destructured_props(inner, inner_base, VALID_KIT_PROPS, ctx);
                     }
                 } else {
-                    let var_end = rest
-                        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-                        .unwrap_or(rest.len());
-                    if var_end == 0 {
-                        continue;
-                    }
+                    let var_end = rest.find(|c: char| !c.is_ascii_alphanumeric() && c != '_').unwrap_or(rest.len());
+                    if var_end == 0 { continue; }
                     let prop_name = &rest[..var_end];
                     if !VALID_KIT_PROPS.contains(&prop_name) {
                         let start = (base + offset) as u32;
-                        let end = (base + offset + "export let ".len() + var_end) as u32;
-                        ctx.diagnostic(
-                            "disallow props other than data or errors in SvelteKit page components.".to_string(),
-                            Span::new(start, end),
-                        );
+                        ctx.diagnostic("disallow props other than data or errors in SvelteKit page components.".to_string(),
+                            Span::new(start, (start + "export let ".len() as u32 + var_end as u32)));
                     }
                 }
             }
