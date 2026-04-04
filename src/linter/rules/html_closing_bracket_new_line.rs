@@ -17,30 +17,13 @@ impl Rule for HtmlClosingBracketNewLine {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let (singleline_expect_newline, multiline_expect_newline, sc_singleline, sc_multiline) = {
-            let opts = ctx.config.options.as_ref()
-                .and_then(|v| v.as_array())
-                .and_then(|arr| arr.first());
-
-            let singleline_expect_newline = opts
-                .and_then(|o| o.get("singleline"))
-                .and_then(|v| v.as_str())
-                .map(|s| s == "always")
-                .unwrap_or(false); // default "never"
-            let multiline_expect_newline = opts
-                .and_then(|o| o.get("multiline"))
-                .and_then(|v| v.as_str())
-                .map(|s| s == "always")
-                .unwrap_or(true); // default "always"
-
-            let sc = opts.and_then(|o| o.get("selfClosingTag"));
-            let sc_singleline: Option<bool> = sc.and_then(|o| o.get("singleline"))
-                .and_then(|v| v.as_str()).map(|s| s == "always");
-            let sc_multiline: Option<bool> = sc.and_then(|o| o.get("multiline"))
-                .and_then(|v| v.as_str()).map(|s| s == "always");
-
-            (singleline_expect_newline, multiline_expect_newline, sc_singleline, sc_multiline)
-        };
+        let opts = ctx.config.options.as_ref().and_then(|v| v.as_array()).and_then(|arr| arr.first());
+        let get_str = |key: &str| opts.and_then(|o| o.get(key)).and_then(|v| v.as_str());
+        let singleline_expect_newline = get_str("singleline").map(|s| s == "always").unwrap_or(false);
+        let multiline_expect_newline = get_str("multiline").map(|s| s == "always").unwrap_or(true);
+        let sc = opts.and_then(|o| o.get("selfClosingTag"));
+        let sc_get = |key: &str| sc.and_then(|o| o.get(key)).and_then(|v| v.as_str()).map(|s| s == "always");
+        let (sc_singleline, sc_multiline) = (sc_get("singleline"), sc_get("multiline"));
 
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             let (span, attrs_count, source) = match node {
