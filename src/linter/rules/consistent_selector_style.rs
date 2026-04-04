@@ -43,71 +43,26 @@ fn collect_template_info(html: &[TemplateNode]) -> (
 }
 
 fn class_is_in_iteration_or_component(html: &[TemplateNode], class_name: &str) -> bool {
-    fn check_nodes(nodes: &[TemplateNode], class_name: &str, in_iteration: bool) -> bool {
-        for node in nodes {
-            match node {
-                TemplateNode::Element(el) => {
-                    let has_class = el.attributes.iter().any(|a| {
-                        if let Attribute::NormalAttribute { name, value, .. } = a {
-                            if name == "class" {
-                                if let AttributeValue::Static(val) = value {
-                                    return val.split_whitespace().any(|c| c == class_name);
-                                }
-                            }
-                        }
-                        false
-                    });
-                    if has_class && in_iteration {
-                        return true;
-                    }
-                    let is_component = el.name.starts_with(|c: char| c.is_uppercase());
-                    if check_nodes(&el.children, class_name, in_iteration || is_component) {
-                        return true;
-                    }
-                }
-                TemplateNode::EachBlock(each) => {
-                    if check_nodes(&each.body.nodes, class_name, true) {
-                        return true;
-                    }
-                    if let Some(alt) = &each.fallback {
-                        if check_nodes(&alt.nodes, class_name, true) {
-                            return true;
-                        }
-                    }
-                }
-                TemplateNode::IfBlock(ib) => {
-                    if check_nodes(&ib.consequent.nodes, class_name, in_iteration) {
-                        return true;
-                    }
-                    if let Some(alt) = &ib.alternate {
-                        if check_nodes(&[*alt.clone()], class_name, in_iteration) {
-                            return true;
-                        }
-                    }
-                }
-                TemplateNode::AwaitBlock(ab) => {
-                    if let Some(p) = &ab.pending {
-                        if check_nodes(&p.nodes, class_name, in_iteration) { return true; }
-                    }
-                    if let Some(t) = &ab.then {
-                        if check_nodes(&t.nodes, class_name, in_iteration) { return true; }
-                    }
-                    if let Some(c) = &ab.catch {
-                        if check_nodes(&c.nodes, class_name, in_iteration) { return true; }
-                    }
-                }
-                TemplateNode::KeyBlock(kb) => {
-                    if check_nodes(&kb.body.nodes, class_name, in_iteration) { return true; }
-                }
-                TemplateNode::SnippetBlock(sb) => {
-                    if check_nodes(&sb.body.nodes, class_name, true) { return true; }
-                }
-                _ => {}
+    fn check(nodes: &[TemplateNode], cn: &str, iter: bool) -> bool {
+        nodes.iter().any(|node| match node {
+            TemplateNode::Element(el) => {
+                let has = el.attributes.iter().any(|a| matches!(a,
+                    Attribute::NormalAttribute { name, value: AttributeValue::Static(val), .. }
+                    if name == "class" && val.split_whitespace().any(|c| c == cn)));
+                (has && iter) || check(&el.children, cn, iter || el.name.starts_with(|c: char| c.is_uppercase()))
             }
-        }
-        false
+            TemplateNode::EachBlock(each) => check(&each.body.nodes, cn, true)
+                || each.fallback.as_ref().is_some_and(|f| check(&f.nodes, cn, true)),
+            TemplateNode::IfBlock(ib) => check(&ib.consequent.nodes, cn, iter)
+                || ib.alternate.as_ref().is_some_and(|alt| check(&[*alt.clone()], cn, iter)),
+            TemplateNode::AwaitBlock(ab) => [&ab.pending, &ab.then, &ab.catch].iter()
+                .any(|f| f.as_ref().is_some_and(|f| check(&f.nodes, cn, iter))),
+            TemplateNode::KeyBlock(kb) => check(&kb.body.nodes, cn, iter),
+            TemplateNode::SnippetBlock(sb) => check(&sb.body.nodes, cn, true),
+            _ => false,
+        })
     }
-    check_nodes(html, class_name, false)
+    check(html, class_name, false)
 }
 
 fn class_has_directive(html: &[TemplateNode], class_name: &str) -> bool {
