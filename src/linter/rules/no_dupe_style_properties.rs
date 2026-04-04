@@ -116,50 +116,26 @@ fn find_prop_in_attr(
     let bytes = attr_text.as_bytes();
     let mut search_start = 0;
 
-    while search_start < attr_text.len() {
-        if let Some(pos) = attr_text[search_start..].find(prop) {
-            let abs_pos = search_start + pos;
-            let after = abs_pos + prop.len();
-
-            let rest = &attr_text[after..];
-            let trimmed = rest.trim_start();
-            if trimmed.starts_with(':') {
-                let is_start = abs_pos == 0 || {
-                    let prev = bytes[abs_pos - 1];
-                    !prev.is_ascii_alphanumeric() && prev != b'-' && prev != b'_'
-                };
-
-                if is_start {
-                    let span_start = attr_start + abs_pos as u32;
-                    let span_end = span_start + prop.len() as u32;
-
-                    if !already_reported.contains(&span_start) {
-                        return Some(oxc::span::Span::new(span_start, span_end));
-                    }
-                }
+    while let Some(pos) = attr_text[search_start..].find(prop) {
+        let abs = search_start + pos;
+        if attr_text[abs + prop.len()..].trim_start().starts_with(':')
+            && (abs == 0 || !matches!(bytes[abs - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'-' | b'_'))
+        {
+            let ss = attr_start + abs as u32;
+            if !already_reported.contains(&ss) {
+                return Some(oxc::span::Span::new(ss, ss + prop.len() as u32));
             }
-
-            search_start = abs_pos + 1;
-        } else {
-            break;
         }
+        search_start = abs + 1;
     }
     None
 }
 
 fn collect_props_from_css_text(text: &str) -> Vec<String> {
-    let mut props = Vec::new();
-    for decl in text.split(';') {
-        let decl = decl.trim();
-        if decl.is_empty() { continue; }
-        if let Some(colon_pos) = decl.find(':') {
-            let prop = decl[..colon_pos].trim().to_lowercase();
-            if !prop.is_empty() && prop.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-                props.push(prop);
-            }
-        }
-    }
-    props
+    text.split(';').filter_map(|decl| {
+        let prop = decl.trim().split_once(':')?.0.trim().to_lowercase();
+        (!prop.is_empty() && prop.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).then_some(prop)
+    }).collect()
 }
 
 fn extract_props_from_expression(expr: &str) -> FxHashSet<String> {
