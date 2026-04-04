@@ -88,10 +88,8 @@ impl Rule for NoUnusedProps {
                     continue;
                 }
                 let src_pos = content_offset + prop_offset;
-                ctx.diagnostic(
-                    format!("'{}' is an unused Props property.", prop_name),
-                    oxc::span::Span::new(src_pos as u32, (src_pos + prop_name.len()) as u32),
-                );
+                ctx.diagnostic(format!("'{}' is an unused Props property.", prop_name),
+                    oxc::span::Span::new(src_pos as u32, (src_pos + prop_name.len()) as u32));
             }
             return;
         }
@@ -131,10 +129,8 @@ impl Rule for NoUnusedProps {
         if has_index_sig && !has_rest {
             let decl_line_start = content[..props_call].rfind('\n').map(|p| p + 1).unwrap_or(0);
             let src_pos = content_offset + decl_line_start;
-            ctx.diagnostic(
-                "Index signature is unused. Consider using rest operator (...) to capture remaining properties.",
-                oxc::span::Span::new(src_pos as u32, (src_pos + 10) as u32),
-            );
+            ctx.diagnostic("Index signature is unused. Consider using rest operator (...) to capture remaining properties.",
+                oxc::span::Span::new(src_pos as u32, (src_pos + 10) as u32));
         }
 
         for (prop_name, prop_offset) in &all_props {
@@ -146,10 +142,8 @@ impl Rule for NoUnusedProps {
             }
 
             let src_pos = content_offset + prop_offset;
-            ctx.diagnostic(
-                format!("'{}' is an unused Props property.", prop_name),
-                oxc::span::Span::new(src_pos as u32, (src_pos + prop_name.len()) as u32),
-            );
+            ctx.diagnostic(format!("'{}' is an unused Props property.", prop_name),
+                oxc::span::Span::new(src_pos as u32, (src_pos + prop_name.len()) as u32));
         }
     }
 }

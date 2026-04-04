@@ -25,10 +25,8 @@ impl Rule for RequireEachKey {
                     if block.context.trim().is_empty() {
                         return;
                     }
-                    ctx.diagnostic(
-                        "Each block should have a key",
-                        block.span,
-                    );
+                    ctx.diagnostic("Each block should have a key",
+                        block.span);
                 }
             }
         });

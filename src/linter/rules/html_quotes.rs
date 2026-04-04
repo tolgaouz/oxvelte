@@ -58,10 +58,8 @@ impl Rule for HtmlQuotes {
                                     AttributeValue::Static(_) | AttributeValue::Concat(_) => {
                                         let is_correct = val_part.starts_with(prefer_char);
                                         if !is_correct {
-                                            ctx.diagnostic(
-                                                expected_msg,
-                                                *span,
-                                            );
+                                            ctx.diagnostic(expected_msg,
+                                                *span);
                                         }
                                     }
                                     AttributeValue::Expression(_) => {

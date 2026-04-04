@@ -18,10 +18,8 @@ impl Rule for NoAtHtmlTags {
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::RawMustacheTag(tag) = node {
-                ctx.diagnostic(
-                    "`{@html}` can lead to XSS attack.",
-                    tag.span,
-                );
+                ctx.diagnostic("`{@html}` can lead to XSS attack.",
+                    tag.span);
             }
         });
     }

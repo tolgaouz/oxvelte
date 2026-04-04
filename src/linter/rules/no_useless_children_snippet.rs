@@ -21,10 +21,8 @@ impl Rule for NoUselessChildrenSnippet {
                 for child in &el.children {
                     if let TemplateNode::SnippetBlock(snippet) = child {
                         if snippet.name == "children" && snippet.params.trim().is_empty() {
-                            ctx.diagnostic(
-                                "Found an unnecessary children snippet.",
-                                snippet.span,
-                            );
+                            ctx.diagnostic("Found an unnecessary children snippet.",
+                                snippet.span);
                         }
                     }
                 }
