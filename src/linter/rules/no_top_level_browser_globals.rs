@@ -151,15 +151,7 @@ impl Rule for NoTopLevelBrowserGlobals {
 
         for global in BROWSER_GLOBALS {
             for (byte_offset, _) in content.match_indices(global) {
-                if byte_offset > 0 {
-                    let p = bytes[byte_offset - 1];
-                    if p.is_ascii_alphanumeric() || p == b'_' || p == b'$' || p == b'.' { continue; }
-                }
-                let after_pos = byte_offset + global.len();
-                if after_pos < bytes.len() {
-                    let a = bytes[after_pos];
-                    if a.is_ascii_alphanumeric() || a == b'_' || a == b'$' { continue; }
-                }
+                if !is_word_boundary(content, byte_offset, global.len()) { continue; }
 
                 let depth: i32 = content[..byte_offset].bytes()
                     .fold(0i32, |acc, b| match b { b'{' => acc + 1, b'}' => acc - 1, _ => acc });
@@ -235,7 +227,6 @@ fn check_template_nodes(nodes: &[TemplateNode], ctx: &mut LintContext<'_>, in_br
         match node {
             TemplateNode::MustacheTag(tag) => {
                 if !in_browser_ctx {
-
                     check_expr_for_globals(&tag.expression, tag.span, ctx);
                 }
             }
@@ -295,18 +286,16 @@ fn check_template_nodes(nodes: &[TemplateNode], ctx: &mut LintContext<'_>, in_br
     }
 }
 
+fn is_word_boundary(text: &str, pos: usize, len: usize) -> bool {
+    let bytes = text.as_bytes();
+    (pos == 0 || !matches!(bytes[pos - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$' | b'.'))
+        && (pos + len >= bytes.len() || !matches!(bytes[pos + len], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$'))
+}
+
 fn check_expr_for_globals(expr: &str, span: Span, ctx: &mut LintContext<'_>) {
     for global in BROWSER_GLOBALS {
         if let Some(pos) = expr.find(global) {
-            if pos > 0 {
-                let p = expr.as_bytes()[pos - 1];
-                if p.is_ascii_alphanumeric() || p == b'_' || p == b'$' || p == b'.' { continue; }
-            }
-            let after = pos + global.len();
-            if after < expr.len() {
-                let a = expr.as_bytes()[after];
-                if a.is_ascii_alphanumeric() || a == b'_' { continue; }
-            }
+            if !is_word_boundary(expr, pos, global.len()) { continue; }
             ctx.diagnostic(
                 format!("Unexpected top-level browser global variable \"{}\".", global),
                 span,
