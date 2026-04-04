@@ -110,8 +110,7 @@ impl Rule for Indent {
                 continue;
             }
 
-            let opens = count_opens(trimmed);
-            let closes = count_closes(trimmed);
+            let (opens, closes) = count_changes(trimmed);
 
             if skip_next_line {
                 skip_next_line = false;
@@ -180,25 +179,16 @@ impl Rule for Indent {
     }
 }
 
-fn count_opens(t: &str) -> i32 {
-    let mut o = 0;
+fn count_changes(t: &str) -> (i32, i32) {
+    let (mut o, mut c) = (0, 0);
     if t.starts_with("{#") { o += 1; }
-    if t.starts_with("{:") { o += 1; } // re-open after close
-    if t.starts_with('<') && !t.starts_with("</") && !t.starts_with("<!--") {
-        if !t.ends_with("/>") && !has_close_on_line(t) && t.contains('>') {
-            o += 1;
-        }
-    }
-    if t == "{" { o += 1; }
-    o
-}
-
-fn count_closes(t: &str) -> i32 {
-    let mut c = 0;
+    if t.starts_with("{:") { o += 1; c += 1; }
     if t.starts_with("</") || t.starts_with("{/") { c += 1; }
-    if t.starts_with("{:") { c += 1; } // close before re-open
+    if t.starts_with('<') && !t.starts_with("</") && !t.starts_with("<!--")
+        && !t.ends_with("/>") && !has_close_on_line(t) && t.contains('>') { o += 1; }
+    if t == "{" { o += 1; }
     if t == "}" { c += 1; }
-    c
+    (o, c)
 }
 
 fn leading_spaces(line: &str) -> usize {
