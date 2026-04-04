@@ -109,9 +109,7 @@ fn attr_name(attr: &Attribute, source: &str) -> String {
 
 fn attr_span(attr: &Attribute) -> oxc::span::Span {
     match attr {
-        Attribute::NormalAttribute { span, .. } => *span,
-        Attribute::Spread { span } => *span,
-        Attribute::Directive { span, .. } => *span,
+        Attribute::NormalAttribute { span, .. } | Attribute::Spread { span } | Attribute::Directive { span, .. } => *span,
     }
 }
 
