@@ -19,13 +19,11 @@ impl Rule for NoDupeStyleProperties {
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
-                // Track: prop_name -> first occurrence span
                 let mut first_seen: FxHashMap<String, oxc::span::Span> = FxHashMap::default();
                 let mut reported: FxHashSet<u32> = FxHashSet::default(); // start positions already reported
 
                 for attr in &el.attributes {
                     match attr {
-                        // Check style: directives
                         Attribute::Directive {
                             kind: DirectiveKind::StyleDirective,
                             name,
@@ -33,14 +31,12 @@ impl Rule for NoDupeStyleProperties {
                             ..
                         } => {
                             if let Some(first_span) = first_seen.get(name) {
-                                // Report first occurrence (if not already)
                                 if reported.insert(first_span.start) {
                                     ctx.diagnostic(
                                         format!("Duplicate property '{}'.", name),
                                         *first_span,
                                     );
                                 }
-                                // Report this occurrence
                                 if reported.insert(span.start) {
                                     ctx.diagnostic(
                                         format!("Duplicate property '{}'.", name),
@@ -51,7 +47,6 @@ impl Rule for NoDupeStyleProperties {
                                 first_seen.insert(name.clone(), *span);
                             }
                         }
-                        // Check inline style="..." attributes
                         Attribute::NormalAttribute { name, value, span } if name == "style" => {
                             check_style_value(value, &mut first_seen, &mut reported, *span, ctx);
                         }
@@ -127,9 +122,6 @@ fn report_or_record(
     }
 }
 
-/// Find the position of a CSS property name in the attribute source text.
-/// Returns a span pointing to the property name. Skips positions that have
-/// already been reported.
 fn find_prop_in_attr(
     attr_text: &str,
     prop: &str,
@@ -140,16 +132,13 @@ fn find_prop_in_attr(
     let mut search_start = 0;
 
     while search_start < attr_text.len() {
-        // Search for the property name followed by optional whitespace and ':'
         if let Some(pos) = attr_text[search_start..].find(prop) {
             let abs_pos = search_start + pos;
             let after = abs_pos + prop.len();
 
-            // Check that what follows is whitespace* then ':'
             let rest = &attr_text[after..];
             let trimmed = rest.trim_start();
             if trimmed.starts_with(':') {
-                // Check word boundary before the property
                 let is_start = abs_pos == 0 || {
                     let prev = bytes[abs_pos - 1];
                     !prev.is_ascii_alphanumeric() && prev != b'-' && prev != b'_'
@@ -159,7 +148,6 @@ fn find_prop_in_attr(
                     let span_start = attr_start + abs_pos as u32;
                     let span_end = span_start + prop.len() as u32;
 
-                    // Skip if already reported at this position
                     if !already_reported.contains(&span_start) {
                         return Some(oxc::span::Span::new(span_start, span_end));
                     }
@@ -189,8 +177,6 @@ fn collect_props_from_css_text(text: &str) -> Vec<String> {
     props
 }
 
-/// Extract unique CSS property names from string literals within a JS expression.
-/// Returns a deduplicated set (so ternary branches with the same prop don't double-count).
 fn extract_props_from_expression(expr: &str) -> FxHashSet<String> {
     let mut props = FxHashSet::default();
     let bytes = expr.as_bytes();

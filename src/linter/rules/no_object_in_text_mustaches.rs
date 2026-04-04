@@ -51,41 +51,29 @@ impl Rule for NoObjectInTextMustaches {
     }
 }
 
-/// Detect if an expression is an object, array, function, arrow function, or class expression.
-/// Returns a label string if it matches, None otherwise.
 fn detect_expression_kind(expr: &str) -> Option<&'static str> {
-    // Object literal: starts with `{`
     if expr.starts_with('{') {
         return Some("object");
     }
-    // Array literal: starts with `[` — but only if it's a standalone array,
-    // not an array used in a method call chain like `[...].includes(x)`.
     if expr.starts_with('[') {
-        // Find the matching `]` then check if anything follows (method call = not a standalone array)
         if let Some(end) = find_matching(expr, '[', ']') {
             let after = expr[end + 1..].trim_start();
             if after.is_empty() {
                 return Some("array");
             }
         } else {
-            // No matching bracket found — treat as array literal
             return Some("array");
         }
     }
-    // Arrow function: the expression itself must be an arrow function at the top level.
-    // A top-level arrow starts with `(` (params) or an identifier followed by `=>`.
-    // Expressions like `items.filter((x) => x.active)` are CallExpressions, not arrow functions.
     if is_top_level_arrow(expr) {
         return Some("function");
     }
-    // Function expression
     if expr.starts_with("function") {
         let after = &expr["function".len()..];
         if after.is_empty() || after.starts_with(' ') || after.starts_with('(') || after.starts_with('*') {
             return Some("function");
         }
     }
-    // Class expression
     if expr.starts_with("class") {
         let after = &expr["class".len()..];
         if after.is_empty() || after.starts_with(' ') || after.starts_with('{') {
@@ -95,12 +83,9 @@ fn detect_expression_kind(expr: &str) -> Option<&'static str> {
     None
 }
 
-/// Check if the expression is a top-level arrow function expression.
-/// Matches patterns like: `() => ...`, `(a, b) => ...`, `x => ...`, `async () => ...`
 fn is_top_level_arrow(expr: &str) -> bool {
     let s = expr.trim();
 
-    // Handle `async` prefix
     let s = if s.starts_with("async") {
         let after = &s["async".len()..];
         if after.starts_with(' ') || after.starts_with('(') {
@@ -113,14 +98,11 @@ fn is_top_level_arrow(expr: &str) -> bool {
     };
 
     if s.starts_with('(') {
-        // Find matching `)` then check for `=>`
         if let Some(close) = find_matching(s, '(', ')') {
             let after = s[close + 1..].trim_start();
             return after.starts_with("=>");
         }
     } else {
-        // Single-param arrow: `identifier => ...`
-        // The identifier must be a simple name (alphanumeric/underscore)
         let end = s.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$').unwrap_or(s.len());
         if end > 0 {
             let after = s[end..].trim_start();

@@ -6,33 +6,19 @@ use oxc::span::Span;
 
 pub struct BlockLang;
 
-/// Build a human-readable description of the allowed langs list.
-/// Examples:
-///   [null]          → "omitted"
-///   ["ts"]          → "\"ts\""
-///   ["ts", null]    → "either omitted or \"ts\""
-///   ["ts", "typescript", null] → "either omitted or one of \"ts\", \"typescript\""
-///   ["ts", "typescript"] → "\"ts\" or \"typescript\""  (2 items, no null)
-///   ["ts", "typescript", "js"] → "one of \"ts\", \"typescript\", \"js\""
 fn pretty_print_langs(allowed: &[Option<String>]) -> String {
     let has_null = allowed.iter().any(|a| a.is_none());
     let named: Vec<&str> = allowed.iter().filter_map(|a| a.as_deref()).collect();
 
     match (has_null, named.len()) {
-        // Only null allowed
         (true, 0) => "omitted".to_string(),
-        // One non-null, with null also allowed
         (true, 1) => format!("either omitted or \"{}\"", named[0]),
-        // Multiple non-null, with null also allowed
         (true, _) => {
             let quoted: Vec<String> = named.iter().map(|s| format!("\"{}\"", s)).collect();
             format!("either omitted or one of {}", quoted.join(", "))
         }
-        // One non-null, no null
         (false, 1) => format!("\"{}\"", named[0]),
-        // Two non-null, no null
         (false, 2) => format!("\"{}\" or \"{}\"", named[0], named[1]),
-        // Three+ non-null, no null
         (false, _) => {
             let quoted: Vec<String> = named.iter().map(|s| format!("\"{}\"", s)).collect();
             format!("one of {}", quoted.join(", "))
@@ -92,7 +78,6 @@ impl Rule for BlockLang {
         let enforce_style = opts.and_then(|o| o.get("enforceStylePresent"))
             .and_then(|v| v.as_bool()).unwrap_or(false);
 
-        // Script block checks
         if enforce_script && ctx.ast.instance.is_none() && ctx.ast.module.is_none() {
             let desc = script_langs.as_ref().map_or("omitted".to_string(), |a| pretty_print_langs(a));
             ctx.diagnostic(
@@ -106,7 +91,6 @@ impl Rule for BlockLang {
             }
         }
 
-        // Style block checks
         if enforce_style && ctx.ast.css.is_none() {
             let desc = style_langs.as_ref().map_or("omitted".to_string(), |a| pretty_print_langs(a));
             ctx.diagnostic(

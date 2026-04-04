@@ -65,27 +65,20 @@ fn check_attribute_value(value: &AttributeValue, span: oxc::span::Span, ctx: &mu
 
 fn check_expression(expr: &str, span: oxc::span::Span, ctx: &mut LintContext<'_>, ignore_includes_comment: bool, ignore_string_escape: bool) {
     let trimmed = expr.trim();
-    // If ignoreIncludesComment is true, skip expressions containing JS comments
     if ignore_includes_comment && (trimmed.contains("//") || trimmed.contains("/*")) {
         return;
     }
     let stripped = strip_leading_js_comments(trimmed);
     let stripped = stripped.trim();
     if let Some(inner) = extract_simple_string_literal(stripped) {
-        // If ignoreStringEscape is true, skip strings with meaningful control-character escapes
-        // Only \n \r \v \t \b \f \u \x are "meaningful" — plain \\ and \' \" are not
         if ignore_string_escape && inner.as_bytes().windows(2).any(|w| {
             w[0] == b'\\' && matches!(w[1], b'n' | b'r' | b'v' | b't' | b'b' | b'f' | b'u' | b'x')
         }) {
             return;
         }
-        // Don't flag strings containing `{` — they can't be used as raw
-        // text in Svelte templates (would start an expression block).
-        // Note: `}` alone is fine; the vendor only skips `{`.
         if inner.contains('{') {
             return;
         }
-        // Don't flag backtick strings with newlines
         if stripped.starts_with('`') && inner.contains('\n') {
             return;
         }
@@ -100,8 +93,6 @@ fn check_expression(expr: &str, span: oxc::span::Span, ctx: &mut LintContext<'_>
     }
 }
 
-/// If `s` is exactly a simple string literal (single/double quoted, or backtick without ${...}),
-/// return the inner content. Otherwise return None.
 fn extract_simple_string_literal(s: &str) -> Option<&str> {
     if s.len() < 2 { return None; }
     let quote = s.as_bytes()[0];
@@ -128,7 +119,6 @@ fn extract_simple_string_literal(s: &str) -> Option<&str> {
     None
 }
 
-/// Strip leading JS comments (// line comments and /* block comments */) from an expression.
 fn strip_leading_js_comments(s: &str) -> &str {
     let mut rest = s.trim_start();
     loop {

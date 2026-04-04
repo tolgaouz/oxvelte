@@ -17,7 +17,6 @@ impl Rule for NoTrailingSpaces {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        // Read options
         let opts = ctx.config.options.as_ref()
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first());
@@ -34,7 +33,6 @@ impl Rule for NoTrailingSpaces {
 
         let source = ctx.source;
 
-        // Build set of 1-indexed line numbers to ignore
         let mut ignored_lines: HashSet<usize> = HashSet::new();
 
         collect_ignored_lines(source, ignore_comments, &mut ignored_lines);
@@ -45,7 +43,6 @@ impl Rule for NoTrailingSpaces {
             let line_start = offset;
             let line_end = offset + line.len();
 
-            // Skip blank lines when option is set
             if skip_blank_lines && line.trim().is_empty() {
                 offset = line_end + 1;
                 continue;
@@ -72,8 +69,6 @@ impl Rule for NoTrailingSpaces {
     }
 }
 
-/// Single-pass scan: collect 1-indexed line numbers inside template literals
-/// (always) and inside comments (when ignore_comments is true).
 fn collect_ignored_lines(source: &str, ignore_comments: bool, ignored: &mut HashSet<usize>) {
     let line_starts = build_line_starts(source);
     let bytes = source.as_bytes();
@@ -81,7 +76,6 @@ fn collect_ignored_lines(source: &str, ignore_comments: bool, ignored: &mut Hash
     let mut i = 0;
 
     while i < len {
-        // Skip string literals
         if bytes[i] == b'\'' || bytes[i] == b'"' {
             let q = bytes[i];
             i += 1;
@@ -92,7 +86,6 @@ fn collect_ignored_lines(source: &str, ignore_comments: bool, ignored: &mut Hash
             i += 1;
             continue;
         }
-        // HTML comments
         if i + 3 < len && bytes[i] == b'<' && bytes[i+1] == b'!' && bytes[i+2] == b'-' && bytes[i+3] == b'-' {
             let start_pos = i;
             i += 4;
@@ -106,14 +99,12 @@ fn collect_ignored_lines(source: &str, ignore_comments: bool, ignored: &mut Hash
             }
             continue;
         }
-        // JS line comments
         if i + 1 < len && bytes[i] == b'/' && bytes[i+1] == b'/' {
             let start_pos = i;
             while i < len && bytes[i] != b'\n' { i += 1; }
             if ignore_comments { ignored.insert(line_number_at(&line_starts, start_pos)); }
             continue;
         }
-        // JS block comments
         if i + 1 < len && bytes[i] == b'/' && bytes[i+1] == b'*' {
             let start_pos = i;
             i += 2;
@@ -126,7 +117,6 @@ fn collect_ignored_lines(source: &str, ignore_comments: bool, ignored: &mut Hash
             }
             continue;
         }
-        // Template literals
         if bytes[i] == b'`' {
             let open_pos = i;
             i += 1;
@@ -149,7 +139,6 @@ fn collect_ignored_lines(source: &str, ignore_comments: bool, ignored: &mut Hash
     }
 }
 
-/// Build a sorted list of byte offsets where each line starts (0-indexed by line).
 fn build_line_starts(source: &str) -> Vec<usize> {
     let mut starts = vec![0usize];
     for (i, ch) in source.char_indices() {
@@ -160,7 +149,6 @@ fn build_line_starts(source: &str) -> Vec<usize> {
     starts
 }
 
-/// Return the 1-indexed line number for a given byte offset using the line_starts table.
 fn line_number_at(line_starts: &[usize], offset: usize) -> usize {
     match line_starts.binary_search(&offset) {
         Ok(idx) => idx + 1,

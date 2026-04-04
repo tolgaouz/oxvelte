@@ -7,7 +7,6 @@ const NAV_FUNCTIONS: &[&str] = &["goto", "pushState", "replaceState"];
 
 pub struct NoNavigationWithoutBase;
 
-/// Check if a navigation function should be ignored based on config.
 fn is_nav_ignored(name: &str, ignore_goto: bool, ignore_push_state: bool, ignore_replace_state: bool) -> bool {
     match name {
         "goto" => ignore_goto,
@@ -17,7 +16,6 @@ fn is_nav_ignored(name: &str, ignore_goto: bool, ignore_push_state: bool, ignore
     }
 }
 
-/// Check if a string value is an absolute URI or fragment (should not be flagged).
 fn is_exempt_href(s: &str) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
         || s.starts_with("mailto:") || s.starts_with("tel:")
@@ -31,7 +29,6 @@ impl Rule for NoNavigationWithoutBase {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        // Config options: ignoreGoto, ignorePushState, ignoreReplaceState, ignoreLinks
         let opts = ctx.config.options.as_ref()
             .and_then(|v| v.as_array()).and_then(|arr| arr.first());
         let get_bool = |key: &str| opts.and_then(|v| v.get(key)).and_then(|v| v.as_bool()).unwrap_or(false);
@@ -40,7 +37,6 @@ impl Rule for NoNavigationWithoutBase {
         let ignore_replace_state = get_bool("ignoreReplaceState");
         let ignore_links = get_bool("ignoreLinks");
 
-        // Parse imports to find base and navigation functions
         let imports = if let Some(script) = &ctx.ast.instance {
             parse_imports(&script.content)
         } else {
@@ -55,7 +51,6 @@ impl Rule for NoNavigationWithoutBase {
                 if imported == "*" { format!("{}.base", local) } else { local.clone() }
             });
 
-        // Check script for navigation function calls
         if let Some(script) = &ctx.ast.instance {
             let content = &script.content;
             let mut nav_local_names: Vec<(String, &str)> = Vec::new();
@@ -130,7 +125,6 @@ impl Rule for NoNavigationWithoutBase {
 
         if ignore_links { return; }
 
-        // Check <a> elements for href values that are paths without base
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
                 if el.name != "a" { return; }
@@ -140,7 +134,6 @@ impl Rule for NoNavigationWithoutBase {
                         let region = &ctx.source[span.start as usize..span.end as usize];
                         if let Some(eq_pos) = region.find('=') {
                             let val = region[eq_pos + 1..].trim();
-                            // Plain quoted attribute: href="/path"
                             if (val.starts_with('"') && val.ends_with('"'))
                                 || (val.starts_with('\'') && val.ends_with('\''))
                             {
@@ -152,16 +145,12 @@ impl Rule for NoNavigationWithoutBase {
                                     );
                                 }
                             }
-                            // Expression: href={expr}
                             else if val.starts_with('{') && val.ends_with('}') {
                                 let expr = val[1..val.len()-1].trim();
 
-                                // Check if expression uses base AS A PREFIX
                                 let uses_base = if let Some(ref bname) = base_local {
-                                    // base + '/path' or base+'/path'
                                     expr.starts_with(&format!("{} +", bname))
                                     || expr.starts_with(&format!("{}+", bname))
-                                    // `${base}/path`
                                     || expr.starts_with(&format!("${{{}}}",  bname))
                                     || expr.starts_with(&format!("`${{{}}}", bname))
                                 } else { false };
@@ -172,7 +161,6 @@ impl Rule for NoNavigationWithoutBase {
                                     && expr[1..].find(expr.as_bytes()[0] as char)
                                         .map_or(false, |e| expr[1..e+1].starts_with('/'));
 
-                                // Check for concatenation expressions containing path strings
                                 let has_path_concat = expr.contains("'/'") || expr.contains("\"/\"");
 
                                 if is_path_literal || has_path_concat {

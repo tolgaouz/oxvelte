@@ -12,20 +12,11 @@ use oxc::span::{GetSpan, Span};
 
 pub struct PreferConst;
 
-/// Given an initializer expression source text, extract the rune name
-/// if the expression is a rune call like `$state(0)` or `$derived.by(calc())`.
-///
-/// - `$state(0)` → Some("$state")
-/// - `$derived.by(fn)` → Some("$derived")
-/// - `$props()` → Some("$props")
-/// - `calc()` → None
-/// - `0` → None
 fn extract_rune_name(init: &str) -> Option<&str> {
     let init = init.trim();
     if !init.starts_with('$') {
         return None;
     }
-    // Rune name ends at `(` (direct call) or `.` (member like $derived.by)
     let end = init.find(|c: char| c == '(' || c == '.').unwrap_or(init.len());
     let name = &init[..end];
     if name.len() > 1 && name[1..].chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {

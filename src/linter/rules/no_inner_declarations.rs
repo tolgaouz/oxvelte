@@ -27,8 +27,6 @@ impl Rule for NoInnerDeclarations {
     }
 }
 
-/// Skip over a template literal body (after the opening backtick).
-/// Handles nested template literals inside `${...}` expressions.
 fn skip_template_literal(bytes: &[u8], i: &mut usize) {
     while *i < bytes.len() {
         if bytes[*i] == b'\\' {
@@ -41,7 +39,6 @@ fn skip_template_literal(bytes: &[u8], i: &mut usize) {
         }
         if bytes[*i] == b'$' && *i + 1 < bytes.len() && bytes[*i + 1] == b'{' {
             *i += 2; // skip ${
-            // Scan the expression inside ${...}, handling nested braces and template literals
             let mut depth = 1i32;
             while *i < bytes.len() && depth > 0 {
                 if bytes[*i] == b'\\' {
@@ -87,15 +84,10 @@ fn check_inner_declarations(content: &str, content_offset: usize, ctx: &mut Lint
     let bytes = content.as_bytes();
     let mut i = 0;
 
-    // Track scope: each entry is (depth_at_entry, is_control_flow)
-    // Depth increases on `{`, decreases on `}`.
-    // Control flow blocks: if, for, while, switch, else
-    // Function bodies create new scopes where inner declarations are OK.
     let mut brace_depth = 0i32;
     let mut scope_stack: Vec<(i32, bool)> = Vec::new(); // (depth, is_function_body)
 
     while i < bytes.len() {
-        // Skip single/double-quoted strings
         if bytes[i] == b'\'' || bytes[i] == b'"' {
             let q = bytes[i];
             i += 1;
@@ -107,18 +99,15 @@ fn check_inner_declarations(content: &str, content_offset: usize, ctx: &mut Lint
             if i < bytes.len() { i += 1; }
             continue;
         }
-        // Skip template literals (with proper nesting support)
         if bytes[i] == b'`' {
             i += 1;
             skip_template_literal(bytes, &mut i);
             continue;
         }
-        // Skip line comments
         if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'/' {
             while i < bytes.len() && bytes[i] != b'\n' { i += 1; }
             continue;
         }
-        // Skip block comments
         if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
             i += 2;
             while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') { i += 1; }
@@ -127,7 +116,6 @@ fn check_inner_declarations(content: &str, content_offset: usize, ctx: &mut Lint
         }
 
         if bytes[i] == b'{' {
-            // Detect arrow function body: `=> {`
             let before = content[..i].trim_end();
             if before.ends_with("=>") {
                 scope_stack.push((brace_depth, true)); // arrow function body
@@ -138,7 +126,6 @@ fn check_inner_declarations(content: &str, content_offset: usize, ctx: &mut Lint
         }
         if bytes[i] == b'}' {
             brace_depth -= 1;
-            // Pop scope if we're leaving a tracked scope
             while let Some(&(depth, _)) = scope_stack.last() {
                 if depth >= brace_depth {
                     scope_stack.pop();
@@ -150,7 +137,6 @@ fn check_inner_declarations(content: &str, content_offset: usize, ctx: &mut Lint
             continue;
         }
 
-        // Skip non-ASCII bytes (multi-byte UTF-8 characters can't be JS keywords)
         if !bytes[i].is_ascii() {
             i += 1;
             continue;
@@ -158,7 +144,6 @@ fn check_inner_declarations(content: &str, content_offset: usize, ctx: &mut Lint
 
         let rest = &content[i..];
 
-        // Detect control flow keywords that create blocks
         let kw_word_start = i == 0 || {
             let prev = bytes[i - 1];
             !prev.is_ascii_alphanumeric() && prev != b'_' && prev != b'$' && prev != b'.'
@@ -173,9 +158,7 @@ fn check_inner_declarations(content: &str, content_offset: usize, ctx: &mut Lint
             scope_stack.push((brace_depth, false));
         }
 
-        // Detect function keyword (creates new scope)
         if kw_word_start && (rest.starts_with("function ") || rest.starts_with("function(")) {
-            // Check if this is a function DECLARATION (not expression)
             let before = content[..i].trim_end();
             let effective_before = if before.ends_with("async") {
                 before[..before.len()-5].trim_end()
@@ -195,7 +178,6 @@ fn check_inner_declarations(content: &str, content_offset: usize, ctx: &mut Lint
                 || effective_before.is_empty();
 
             if !is_expression {
-                // Only flag if inside control flow at the program/module level
                 let in_control_flow = !scope_stack.is_empty()
                     && !scope_stack.iter().any(|&(_, is_fn)| is_fn);
 
@@ -212,9 +194,7 @@ fn check_inner_declarations(content: &str, content_offset: usize, ctx: &mut Lint
                 }
             }
 
-            // Either way, the next `{` is a function body (new scope)
             scope_stack.push((brace_depth, true));
-            // Skip past TS return type annotations that may contain `{}`
             let fn_start = i + 8; // skip "function"
             if let Some(paren_start) = content[fn_start..].find('(') {
                 let mut j = fn_start + paren_start + 1;
