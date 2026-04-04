@@ -122,20 +122,12 @@ fn extract_simple_string_literal(s: &str) -> Option<&str> {
 fn strip_leading_js_comments(s: &str) -> &str {
     let mut rest = s.trim_start();
     loop {
-        if rest.starts_with("//") {
-            if let Some(nl) = rest.find('\n') {
-                rest = rest[nl + 1..].trim_start();
-            } else {
-                return "";
-            }
-        } else if rest.starts_with("/*") {
-            if let Some(end) = rest.find("*/") {
-                rest = rest[end + 2..].trim_start();
-            } else {
-                return "";
-            }
+        if let Some(nl) = rest.starts_with("//").then(|| rest.find('\n')).flatten() {
+            rest = rest[nl + 1..].trim_start();
+        } else if let Some(end) = rest.starts_with("/*").then(|| rest.find("*/")).flatten() {
+            rest = rest[end + 2..].trim_start();
         } else {
-            return rest;
+            return if rest.starts_with("//") || rest.starts_with("/*") { "" } else { rest };
         }
     }
 }
