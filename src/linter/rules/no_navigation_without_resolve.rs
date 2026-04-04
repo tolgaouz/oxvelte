@@ -185,22 +185,16 @@ impl Rule for NoNavigationWithoutResolve {
 
                 let el_source = &ctx.source[el.span.start as usize..el.span.end as usize];
                 let has_rel = el.attributes.iter().any(|a| {
-                    match a {
-                        Attribute::NormalAttribute { name, value, .. } => {
-                            if name == "rel" {
-                                return match value {
-                                    AttributeValue::Static(v) => v.contains("external"),
-                                    AttributeValue::Expression(e) => e.contains("external") || e.trim() == "rel",
-                                    _ => false,
-                                };
-                            }
-                            if name == "rel" || (matches!(value, AttributeValue::Expression(e) if e.trim() == "rel")) {
-                                return true;
-                            }
-                            false
+                    if let Attribute::NormalAttribute { name, value, .. } = a {
+                        if name == "rel" {
+                            return match value {
+                                AttributeValue::Static(v) => v.contains("external"),
+                                AttributeValue::Expression(e) => e.contains("external") || e.trim() == "rel",
+                                _ => false,
+                            };
                         }
-                        _ => false,
                     }
+                    false
                 });
                 let has_external = has_rel || el_source.contains("{rel}");
                 if has_external { return; }
@@ -220,18 +214,8 @@ impl Rule for NoNavigationWithoutResolve {
 
                         if let AttributeValue::Expression(expr) = value {
                             let e = expr.trim();
-                            if (e.starts_with("resolve") || e.starts_with("asset")) && e.ends_with(')') && !e.contains('+') {
-                                continue;
-                            }
-                        }
-                        if region.contains("resolve(") && !region.contains('+') { continue; }
-                        if has_resolve && region.contains("$") { continue; }
-                        if let AttributeValue::Expression(expr) = value {
-                            let e = expr.trim();
+                            if (e.starts_with("resolve") || e.starts_with("asset")) && e.ends_with(')') && !e.contains('+') { continue; }
                             if e.contains('(') && e.ends_with(')') && !e.contains('+') { continue; }
-                        }
-                        if let AttributeValue::Expression(expr) = value {
-                            let e = expr.trim();
                             if e.starts_with("'http") || e.starts_with("\"http")
                                 || e.starts_with("'#") || e.starts_with("\"#")
                                 || e.starts_with("'mailto:") || e.starts_with("\"mailto:")
@@ -240,17 +224,14 @@ impl Rule for NoNavigationWithoutResolve {
                                 || (e.starts_with('`') && e.contains("://"))
                                 || e.contains("://")
                                 || e == "undefined" || e == "null"
-                                {
-                                continue;
-                            }
-                        }
-                        if let AttributeValue::Expression(expr) = value {
-                            let e = expr.trim();
+                            { continue; }
                             if e.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
                                 let script_content = ctx.ast.instance.as_ref().map(|s| s.content.as_str()).unwrap_or("");
                                 if is_value_safe(e, script_content, 0) { continue; }
                             }
                         }
+                        if region.contains("resolve(") && !region.contains('+') { continue; }
+                        if has_resolve && region.contains("$") { continue; }
 
                         ctx.diagnostic(
                             "Unexpected href link without resolve().",
