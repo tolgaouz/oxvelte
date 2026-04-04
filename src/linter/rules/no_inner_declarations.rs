@@ -29,52 +29,37 @@ impl Rule for NoInnerDeclarations {
 
 fn skip_template_literal(bytes: &[u8], i: &mut usize) {
     while *i < bytes.len() {
-        if bytes[*i] == b'\\' {
-            *i += 2;
-            continue;
-        }
-        if bytes[*i] == b'`' {
-            *i += 1; // consume closing backtick
-            return;
-        }
-        if bytes[*i] == b'$' && *i + 1 < bytes.len() && bytes[*i + 1] == b'{' {
-            *i += 2; // skip ${
-            let mut depth = 1i32;
-            while *i < bytes.len() && depth > 0 {
-                if bytes[*i] == b'\\' {
-                    *i += 1;
-                } else if bytes[*i] == b'{' {
-                    depth += 1;
-                } else if bytes[*i] == b'}' {
-                    depth -= 1;
-                    if depth == 0 {
-                        *i += 1; // consume closing }
-                        break;
+        match bytes[*i] {
+            b'\\' => { *i += 2; continue; }
+            b'`' => { *i += 1; return; }
+            b'$' if *i + 1 < bytes.len() && bytes[*i + 1] == b'{' => {
+                *i += 2;
+                let mut depth = 1i32;
+                while *i < bytes.len() && depth > 0 {
+                    match bytes[*i] {
+                        b'\\' => *i += 1,
+                        b'{' => depth += 1,
+                        b'}' => { depth -= 1; if depth == 0 { *i += 1; break; } }
+                        b'`' => { *i += 1; skip_template_literal(bytes, i); continue; }
+                        b'\'' | b'"' => {
+                            let q = bytes[*i]; *i += 1;
+                            while *i < bytes.len() { if bytes[*i] == b'\\' { *i += 1; } else if bytes[*i] == q { break; } *i += 1; }
+                        }
+                        b'/' if *i + 1 < bytes.len() && bytes[*i + 1] == b'/' => {
+                            while *i < bytes.len() && bytes[*i] != b'\n' { *i += 1; } continue;
+                        }
+                        b'/' if *i + 1 < bytes.len() && bytes[*i + 1] == b'*' => {
+                            *i += 2;
+                            while *i + 1 < bytes.len() && !(bytes[*i] == b'*' && bytes[*i + 1] == b'/') { *i += 1; }
+                            if *i + 1 < bytes.len() { *i += 2; } continue;
+                        }
+                        _ => {}
                     }
-                } else if bytes[*i] == b'`' {
-                    *i += 1; // skip opening backtick
-                    skip_template_literal(bytes, i); // recurse for nested template
-                    continue;
-                } else if bytes[*i] == b'\'' || bytes[*i] == b'"' {
-                    let q = bytes[*i];
                     *i += 1;
-                    while *i < bytes.len() {
-                        if bytes[*i] == b'\\' { *i += 1; }
-                        else if bytes[*i] == q { break; }
-                        *i += 1;
-                    }
-                } else if *i + 1 < bytes.len() && bytes[*i] == b'/' && bytes[*i + 1] == b'/' {
-                    while *i < bytes.len() && bytes[*i] != b'\n' { *i += 1; }
-                    continue;
-                } else if *i + 1 < bytes.len() && bytes[*i] == b'/' && bytes[*i + 1] == b'*' {
-                    *i += 2;
-                    while *i + 1 < bytes.len() && !(bytes[*i] == b'*' && bytes[*i + 1] == b'/') { *i += 1; }
-                    if *i + 1 < bytes.len() { *i += 2; }
-                    continue;
                 }
-                *i += 1;
+                continue;
             }
-            continue;
+            _ => {}
         }
         *i += 1;
     }
