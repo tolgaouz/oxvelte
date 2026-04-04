@@ -1,14 +1,14 @@
 //! `svelte/consistent-selector-style` — enforce consistent style selector usage
 //! (e.g. prefer class selectors over element selectors).
 
-use crate::linter::{LintContext, Rule};
+use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::{TemplateNode, Attribute, AttributeValue};
 use oxc::span::Span;
 use std::collections::{HashMap, HashSet};
 
 pub struct ConsistentSelectorStyle;
 
-fn collect_template_info(html: &[TemplateNode]) -> (
+fn collect_template_info(html: &crate::ast::Fragment) -> (
     HashMap<String, (usize, HashSet<String>)>,
     HashMap<String, String>,
     HashMap<String, usize>,
@@ -16,7 +16,7 @@ fn collect_template_info(html: &[TemplateNode]) -> (
     let mut class_usage: HashMap<String, (usize, HashSet<String>)> = HashMap::new();
     let mut id_usage: HashMap<String, String> = HashMap::new();
     let mut element_usage: HashMap<String, usize> = HashMap::new();
-    walk_template_nodes_slice(html, &mut |node| {
+    walk_template_nodes(html, &mut |node| {
         if let TemplateNode::Element(el) = node {
             *element_usage.entry(el.name.clone()).or_insert(0) += 1;
             let is_component = el.name.starts_with(|c: char| c.is_uppercase()) || el.name.contains('.');
@@ -65,9 +65,9 @@ fn class_is_in_iteration_or_component(html: &[TemplateNode], class_name: &str) -
     check(html, class_name, false)
 }
 
-fn class_has_directive(html: &[TemplateNode], class_name: &str) -> bool {
+fn class_has_directive(html: &crate::ast::Fragment, class_name: &str) -> bool {
     let mut found = false;
-    walk_template_nodes_slice(html, &mut |node| {
+    walk_template_nodes(html, &mut |node| {
         if let TemplateNode::Element(el) = node {
             for attr in &el.attributes {
                 if let Attribute::Directive { kind: crate::ast::DirectiveKind::Class, name, .. } = attr {
@@ -81,34 +81,6 @@ fn class_has_directive(html: &[TemplateNode], class_name: &str) -> bool {
     found
 }
 
-fn walk_template_nodes_slice(nodes: &[TemplateNode], f: &mut impl FnMut(&TemplateNode)) {
-    for node in nodes {
-        f(node);
-        match node {
-            TemplateNode::Element(el) => walk_template_nodes_slice(&el.children, f),
-            TemplateNode::IfBlock(ib) => {
-                walk_template_nodes_slice(&ib.consequent.nodes, f);
-                if let Some(alt) = &ib.alternate {
-                    f(alt);
-                }
-            }
-            TemplateNode::EachBlock(each) => {
-                walk_template_nodes_slice(&each.body.nodes, f);
-                if let Some(alt) = &each.fallback {
-                    walk_template_nodes_slice(&alt.nodes, f);
-                }
-            }
-            TemplateNode::AwaitBlock(ab) => {
-                if let Some(p) = &ab.pending { walk_template_nodes_slice(&p.nodes, f); }
-                if let Some(t) = &ab.then { walk_template_nodes_slice(&t.nodes, f); }
-                if let Some(c) = &ab.catch { walk_template_nodes_slice(&c.nodes, f); }
-            }
-            TemplateNode::KeyBlock(kb) => walk_template_nodes_slice(&kb.body.nodes, f),
-            TemplateNode::SnippetBlock(sb) => walk_template_nodes_slice(&sb.body.nodes, f),
-            _ => {}
-        }
-    }
-}
 
 impl Rule for ConsistentSelectorStyle {
     fn name(&self) -> &'static str {
@@ -152,8 +124,8 @@ impl Rule for ConsistentSelectorStyle {
         let css = &style.content;
         let base = style.span.start as usize;
 
-        let (class_usage, id_usage, element_usage) = collect_template_info(&ctx.ast.html.nodes);
-        let html_nodes = &ctx.ast.html.nodes;
+        let (class_usage, id_usage, element_usage) = collect_template_info(&ctx.ast.html);
+        let html = &ctx.ast.html;
 
         const ELEMENT_SELECTORS: &[&str] = &[
             "div", "span", "p", "a", "ul", "ol", "li", "h1", "h2", "h3",
@@ -172,8 +144,8 @@ impl Rule for ConsistentSelectorStyle {
                 .unwrap_or((0, HashSet::new()));
             if count == 0 { return None; }
             let can_be_id = count <= 1
-                && !class_is_in_iteration_or_component(html_nodes, class_name)
-                && !class_has_directive(html_nodes, class_name);
+                && !class_is_in_iteration_or_component(&html.nodes, class_name)
+                && !class_has_directive(html, class_name);
             let can_be_type = if element_types.len() == 1 {
                 let the_type = element_types.iter().next().unwrap();
                 let total_of_type = element_usage.get(the_type).copied().unwrap_or(0);
