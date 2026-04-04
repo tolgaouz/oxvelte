@@ -199,9 +199,7 @@ fn extract_destructured_props(before_props: &str) -> HashSet<String> {
                         '{' | '(' | '[' | '<' => d += 1,
                         '}' | ')' | ']' => { d -= 1; if d < 0 { d = 0; } }
                         '>' => {
-                            if i > 0 && pbytes[i - 1] == b'=' { } else {
-                                d -= 1; if d < 0 { d = 0; }
-                            }
+                            if !(i > 0 && pbytes[i - 1] == b'=') { d -= 1; if d < 0 { d = 0; } }
                         }
                         ':' | '=' if d == 0 => { name_end = i; break; }
                         _ => {}
@@ -227,10 +225,7 @@ fn split_at_depth0(s: &str, sep: char) -> Vec<&str> {
             '{' | '(' | '[' | '<' => depth += 1,
             '}' | ')' | ']' => { depth -= 1; if depth < 0 { depth = 0; } }
             '>' => {
-                if i > 0 && bytes[i - 1] == b'=' { } else {
-                    depth -= 1;
-                    if depth < 0 { depth = 0; }
-                }
+                if !(i > 0 && bytes[i - 1] == b'=') { depth -= 1; if depth < 0 { depth = 0; } }
             }
             c if c == sep && depth == 0 => {
                 parts.push(&s[start..i]);
@@ -445,9 +440,7 @@ fn extract_props_from_block(content: &str, brace_start: usize, props: &mut Vec<(
             b'{' | b'(' | b'<' | b'[' => depth += 1,
             b'}' | b')' | b']' => { depth -= 1; if depth < 0 { depth = 0; } }
             b'>' => {
-                if i > 0 && block_bytes[i - 1] == b'=' { } else {
-                    depth -= 1; if depth < 0 { depth = 0; }
-                }
+                if !(i > 0 && block_bytes[i - 1] == b'=') { depth -= 1; if depth < 0 { depth = 0; } }
             }
             b';' | b'\n' if depth == 0 => {
                 let segment = &block_ref[line_start..i];
