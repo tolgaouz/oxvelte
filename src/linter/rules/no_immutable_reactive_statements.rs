@@ -57,14 +57,9 @@ impl Rule for NoImmutableReactiveStatements {
                     if !prop_names.contains(n) && !let_names.contains(n) {
                         const_names.insert(n);
                     }
-                } else if trimmed.starts_with("function ") || trimmed.starts_with("export function ") {
-                    immutable_names.insert(n);
-                } else if trimmed.starts_with("export class ") || trimmed.starts_with("class ") {
-                    immutable_names.insert(n);
-                } else if trimmed.starts_with("type ") || trimmed.starts_with("export type ")
-                    || trimmed.starts_with("interface ") || trimmed.starts_with("export interface ")
-                    || trimmed.starts_with("enum ") || trimmed.starts_with("export enum ")
-                {
+                } else if ["function ", "export function ", "class ", "export class ",
+                    "type ", "export type ", "interface ", "export interface ",
+                    "enum ", "export enum "].iter().any(|p| trimmed.starts_with(p)) {
                     immutable_names.insert(n);
                 } else if trimmed.starts_with("import ") {
                     for imp in extract_import_names(trimmed) {
@@ -298,25 +293,14 @@ impl Rule for NoImmutableReactiveStatements {
 
 fn collect_reactive_stmts(content: &str) -> Vec<(usize, &str)> {
     let mut stmts = Vec::new();
-    let lines: Vec<&str> = content.lines().collect();
-    let mut line_offsets: Vec<usize> = Vec::with_capacity(lines.len());
     let mut off = 0;
-    for line in &lines {
-        line_offsets.push(off);
-        off += line.len() + 1; // +1 for newline
-    }
-
-    let mut i = 0;
-    while i < lines.len() {
-        let trimmed = lines[i].trim();
-        if trimmed.starts_with("$:") {
-            let start_offset = line_offsets[i] + (lines[i].len() - lines[i].trim_start().len());
-            // Find the end of this statement (may span multiple lines)
+    for line in content.lines() {
+        if line.trim().starts_with("$:") {
+            let start_offset = off + (line.len() - line.trim_start().len());
             let stmt_end = find_statement_end(content, start_offset);
-            let full = &content[start_offset..stmt_end];
-            stmts.push((start_offset, full));
+            stmts.push((start_offset, &content[start_offset..stmt_end]));
         }
-        i += 1;
+        off += line.len() + 1;
     }
     stmts
 }
@@ -666,11 +650,8 @@ fn collect_local_names(expr: &str) -> HashSet<String> {
 }
 
 fn extract_param_names(params: &str, names: &mut HashSet<String>) {
-    for param in params.split(',') {
-        let p = param.trim();
-        if p.starts_with('{') || p.starts_with('[') || p.starts_with("...") {
-            continue;
-        }
+    for p in params.split(',').map(str::trim) {
+        if matches!(p.as_bytes().first(), Some(b'{' | b'[' | b'.')) { continue; }
         let name = p.split(|c: char| c == ':' || c == '=').next().unwrap_or("").trim();
         if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
             names.insert(name.to_string());
@@ -860,27 +841,20 @@ fn check_immutability_ast(content: &str, is_ts: bool, text_immutable: &HashSet<&
 }
 
 fn collect_each_and_const_names(fragment: &crate::ast::Fragment) -> (HashSet<String>, HashSet<String>) {
-    let mut each_names = HashSet::new();
-    let mut const_names = HashSet::new();
-    walk_template_nodes(fragment, &mut |node| {
-        match node {
-            TemplateNode::EachBlock(each) => {
-                let expr = each.expression.trim();
-                if expr.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') && !expr.is_empty() {
-                    each_names.insert(expr.to_string());
-                }
-            }
-            TemplateNode::ConstTag(ct) => {
-                let decl = ct.declaration.trim();
-                if let Some(eq) = decl.find('=') {
-                    let lhs = decl[..eq].trim();
-                    if lhs.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') && !lhs.is_empty() {
-                        const_names.insert(lhs.to_string());
-                    }
-                }
-            }
-            _ => {}
+    let (mut each_names, mut const_names) = (HashSet::new(), HashSet::new());
+    let is_ident = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$');
+    walk_template_nodes(fragment, &mut |node| match node {
+        TemplateNode::EachBlock(each) => {
+            let e = each.expression.trim();
+            if is_ident(e) { each_names.insert(e.to_string()); }
         }
+        TemplateNode::ConstTag(ct) => {
+            if let Some(eq) = ct.declaration.find('=') {
+                let lhs = ct.declaration[..eq].trim();
+                if is_ident(lhs) { const_names.insert(lhs.to_string()); }
+            }
+        }
+        _ => {}
     });
     (each_names, const_names)
 }
