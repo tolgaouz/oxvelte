@@ -154,18 +154,12 @@ impl Rule for NoNavigationWithoutResolve {
                 if el.name != "a" { return; }
 
                 let el_source = &ctx.source[el.span.start as usize..el.span.end as usize];
-                let has_rel = el.attributes.iter().any(|a| {
-                    if let Attribute::NormalAttribute { name, value, .. } = a {
-                        if name == "rel" {
-                            return match value {
-                                AttributeValue::Static(v) => v.contains("external"),
-                                AttributeValue::Expression(e) => e.contains("external") || e.trim() == "rel",
-                                _ => false,
-                            };
-                        }
-                    }
-                    false
-                });
+                let has_rel = el.attributes.iter().any(|a| matches!(a,
+                    Attribute::NormalAttribute { name, value, .. } if name == "rel" && match value {
+                        AttributeValue::Static(v) => v.contains("external"),
+                        AttributeValue::Expression(e) => e.contains("external") || e.trim() == "rel",
+                        _ => false,
+                    }));
                 let has_external = has_rel || el_source.contains("{rel}");
                 if has_external { return; }
 
@@ -224,10 +218,7 @@ fn is_value_safe(var_name: &str, script_content: &str, depth: usize) -> bool {
             if init.is_empty() { continue; }
             if init == "null" || init == "undefined" { return true; }
             if (init.contains("resolve") || init.contains("asset")) && !init.contains('+') { return true; }
-            if init.starts_with("'http") || init.starts_with("\"http")
-                || init.starts_with("'//") || init.starts_with("\"//")
-                || init.starts_with("'mailto:") || init.starts_with("'tel:") { return true; }
-            if init.starts_with("'#") || init.starts_with("\"#") { return true; }
+            if ["'http", "\"http", "'//", "\"//", "'mailto:", "'tel:", "'#", "\"#"].iter().any(|p| init.starts_with(p)) { return true; }
             if init.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
                 return is_value_safe(init, script_content, depth + 1);
             }
