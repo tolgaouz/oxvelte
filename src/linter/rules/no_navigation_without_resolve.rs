@@ -127,10 +127,8 @@ impl Rule for NoNavigationWithoutResolve {
                     };
                     if should_flag {
                         let source_pos = base + gt + 1 + abs;
-                        ctx.diagnostic(
-                            format!("Unexpected {}() call without resolve().", orig_name),
-                            Span::new(source_pos as u32, (source_pos + search_pattern.len()) as u32),
-                        );
+                        ctx.diagnostic(format!("Unexpected {}() call without resolve().", orig_name),
+                            Span::new(source_pos as u32, (source_pos + search_pattern.len()) as u32));
                     }
 
                     search_from = abs + search_pattern.len();
@@ -193,10 +191,8 @@ impl Rule for NoNavigationWithoutResolve {
                         if region.contains("resolve(") && !region.contains('+') { continue; }
                         if has_resolve && region.contains("$") { continue; }
 
-                        ctx.diagnostic(
-                            "Unexpected href link without resolve().",
-                            *span,
-                        );
+                        ctx.diagnostic("Unexpected href link without resolve().",
+                            *span);
                     }
                 }
             }

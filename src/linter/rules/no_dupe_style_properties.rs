@@ -32,16 +32,12 @@ impl Rule for NoDupeStyleProperties {
                         } => {
                             if let Some(first_span) = first_seen.get(name) {
                                 if reported.insert(first_span.start) {
-                                    ctx.diagnostic(
-                                        format!("Duplicate property '{}'.", name),
-                                        *first_span,
-                                    );
+                                    ctx.diagnostic(format!("Duplicate property '{}'.", name),
+                                        *first_span);
                                 }
                                 if reported.insert(span.start) {
-                                    ctx.diagnostic(
-                                        format!("Duplicate property '{}'.", name),
-                                        *span,
-                                    );
+                                    ctx.diagnostic(format!("Duplicate property '{}'.", name),
+                                        *span);
                                 }
                             } else {
                                 first_seen.insert(name.clone(), *span);

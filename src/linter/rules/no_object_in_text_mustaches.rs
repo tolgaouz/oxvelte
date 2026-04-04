@@ -22,10 +22,8 @@ impl Rule for NoObjectInTextMustaches {
                     let expr = tag.expression.trim();
                     let kind = detect_expression_kind(expr);
                     if let Some(label) = kind {
-                        ctx.diagnostic(
-                            format!("Unexpected {} in text mustache interpolation.", label),
-                            tag.span,
-                        );
+                        ctx.diagnostic(format!("Unexpected {} in text mustache interpolation.", label),
+                            tag.span);
                     }
                 }
                 TemplateNode::Element(el) => {
@@ -35,10 +33,8 @@ impl Rule for NoObjectInTextMustaches {
                                 if let AttributeValuePart::Expression(expr) = part {
                                     let trimmed = expr.trim();
                                     if let Some(label) = detect_expression_kind(trimmed) {
-                                        ctx.diagnostic(
-                                            format!("Unexpected {} in text mustache interpolation.", label),
-                                            *span,
-                                        );
+                                        ctx.diagnostic(format!("Unexpected {} in text mustache interpolation.", label),
+                                            *span);
                                     }
                                 }
                             }

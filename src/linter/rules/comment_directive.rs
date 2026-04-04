@@ -26,10 +26,8 @@ impl Rule for CommentDirective {
                 if let Some(rest) = text.strip_prefix("svelte-ignore") {
                     let rest = rest.trim();
                     if rest.is_empty() {
-                        ctx.diagnostic(
-                            "`svelte-ignore` comment must specify at least one rule name.",
-                            comment.span,
-                        );
+                        ctx.diagnostic("`svelte-ignore` comment must specify at least one rule name.",
+                            comment.span);
                     }
                 }
             }

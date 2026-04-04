@@ -80,10 +80,8 @@ impl Rule for ButtonHasType {
                     }
                     None => {
                         if el.attributes.iter().any(|a| matches!(a, Attribute::Spread { .. })) { return; }
-                        ctx.diagnostic(
-                            "Missing an explicit type attribute for button.",
-                            el.span,
-                        );
+                        ctx.diagnostic("Missing an explicit type attribute for button.",
+                            el.span);
                     }
                     _ => {}
                 }
