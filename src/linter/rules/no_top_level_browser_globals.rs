@@ -168,24 +168,15 @@ impl Rule for NoTopLevelBrowserGlobals {
                 let line_end = content[byte_offset..].find('\n').map(|p| byte_offset + p).unwrap_or(content.len());
                 let line = &content[line_start..line_end];
 
-                if line.trim_start().starts_with("import ") { continue; }
-                if line.trim_start().starts_with("//") { continue; }
-                if line.contains("import.meta") { continue; }
+                let lt = line.trim_start();
+                if lt.starts_with("import ") || lt.starts_with("//") || line.contains("import.meta") { continue; }
+                if line.contains(&format!("typeof {} !== ", global)) || line.contains(&format!("typeof {} != ", global)) { continue; }
 
-                if line.contains("typeof") {
-                    let has_valid_typeof = line.contains(&format!("typeof {} !== ", global))
-                        || line.contains(&format!("typeof {} != ", global));
-                    if has_valid_typeof { continue; }
-                }
-
-                if line.contains(&format!("globalThis.{}", global)) {
+                let gt_pat = format!("globalThis.{}", global);
+                if let Some(gt_pos) = line.find(&gt_pat) {
                     if line.contains(&format!("globalThis.{}?.", global)) { continue; }
-                    let gt_pattern = format!("globalThis.{}", global);
-                    if let Some(gt_pos) = line.find(&gt_pattern) {
-                        let after_gt = &line[gt_pos + gt_pattern.len()..].trim_start();
-                        if after_gt.starts_with("&&") { continue; }
-                        if after_gt.starts_with("!==") || after_gt.starts_with("!=") { continue; }
-                    }
+                    let after = line[gt_pos + gt_pat.len()..].trim_start();
+                    if after.starts_with("&&") || after.starts_with("!==") || after.starts_with("!=") { continue; }
                 }
 
                 let has_browser = line.contains("browser") || line.contains("BROWSER");
