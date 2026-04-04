@@ -67,20 +67,12 @@ fn class_is_in_iteration_or_component(html: &[TemplateNode], class_name: &str) -
 
 fn class_has_directive(html: &crate::ast::Fragment, class_name: &str) -> bool {
     let mut found = false;
-    walk_template_nodes(html, &mut |node| {
-        if let TemplateNode::Element(el) = node {
-            for attr in &el.attributes {
-                if let Attribute::Directive { kind: crate::ast::DirectiveKind::Class, name, .. } = attr {
-                    if name == class_name {
-                        found = true;
-                    }
-                }
-            }
-        }
+    walk_template_nodes(html, &mut |node| if let TemplateNode::Element(el) = node {
+        found |= el.attributes.iter().any(|a| matches!(a,
+            Attribute::Directive { kind: crate::ast::DirectiveKind::Class, name, .. } if name == class_name));
     });
     found
 }
-
 
 impl Rule for ConsistentSelectorStyle {
     fn name(&self) -> &'static str {
@@ -329,34 +321,19 @@ fn flag_selectors_in_text(
     let mut pos = 0usize;
     while pos < bytes.len() {
         match bytes[pos] {
-            b'.' => {
-                let dot_pos = pos;
+            b'.' | b'#' => {
+                let prefix_pos = pos;
+                let is_class = bytes[pos] == b'.';
                 pos += 1;
-                while pos < bytes.len() && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'-' || bytes[pos] == b'_') {
-                    pos += 1;
-                }
-                if pos > dot_pos + 1 {
-                    let class_name = &text[dot_pos + 1..pos];
-                    if let Some(suggested) = check_class(class_name) {
+                while pos < bytes.len() && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'-' || bytes[pos] == b'_') { pos += 1; }
+                if pos > prefix_pos + 1 {
+                    let name = &text[prefix_pos + 1..pos];
+                    let suggested = if is_class { check_class(name) } else { check_id(name) };
+                    if let Some(suggested) = suggested {
+                        let kind = if is_class { "class" } else { "ID" };
                         ctx.diagnostic(
-                            format!("Selector should select by {} instead of class", suggested),
-                            Span::new((base_offset + dot_pos) as u32, (base_offset + pos) as u32),
-                        );
-                    }
-                }
-            }
-            b'#' => {
-                let hash_pos = pos;
-                pos += 1;
-                while pos < bytes.len() && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'-' || bytes[pos] == b'_') {
-                    pos += 1;
-                }
-                if pos > hash_pos + 1 {
-                    let id_name = &text[hash_pos + 1..pos];
-                    if let Some(suggested) = check_id(id_name) {
-                        ctx.diagnostic(
-                            format!("Selector should select by {} instead of ID", suggested),
-                            Span::new((base_offset + hash_pos) as u32, (base_offset + pos) as u32),
+                            format!("Selector should select by {} instead of {}", suggested, kind),
+                            Span::new((base_offset + prefix_pos) as u32, (base_offset + pos) as u32),
                         );
                     }
                 }
