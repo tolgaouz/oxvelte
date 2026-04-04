@@ -106,61 +106,38 @@ impl Rule for NoNavigationWithoutResolve {
                     let rest = &content[abs + search_pattern.len()..];
                     let trimmed = rest.trim_start();
 
-                    if trimmed.starts_with('\'') || trimmed.starts_with('"') || trimmed.starts_with('`') {
+                    let should_flag = if trimmed.starts_with('\'') || trimmed.starts_with('"') || trimmed.starts_with('`') {
                         let quote = trimmed.as_bytes()[0];
                         let inner = &trimmed[1..];
                         let is_empty = inner.starts_with(quote as char);
                         let is_absolute_uri = inner.find(quote as char)
                             .map_or(false, |end| is_absolute_url(&inner[..end]));
-
-                        if !is_empty && !is_absolute_uri {
+                        if is_empty || is_absolute_uri { false }
+                        else {
                             let call_text = &content[abs + search_pattern.len()..];
                             let call_body = &call_text[..find_closing_paren(call_text)];
-
-                            let uses_resolve = if let Some(ref rname) = resolve_local {
-                                call_body.contains(rname)
-                            } else { false };
-
-                            if !uses_resolve {
-                                let source_pos = base + gt + 1 + abs;
-                                ctx.diagnostic(
-                                    format!(
-                                        "Unexpected {}() call without resolve().",
-                                        orig_name
-                                    ),
-                                    Span::new(source_pos as u32, (source_pos + search_pattern.len()) as u32),
-                                );
-                            }
+                            !resolve_local.as_ref().is_some_and(|r| call_body.contains(r.as_str()))
                         }
                     } else if trimmed.starts_with("resolve") || trimmed.starts_with("asset")
-                        || resolve_local.as_ref().map_or(false, |r| trimmed.starts_with(r.as_str())) {
+                        || resolve_local.as_ref().is_some_and(|r| trimmed.starts_with(r.as_str())) {
                         let call_text = &content[abs + search_pattern.len()..];
                         let call_body = &call_text[..find_closing_paren(call_text)];
                         let mut d = 0i32;
-                        let has_concat = call_body.chars().any(|ch| {
-                            match ch {
-                                '(' | '[' | '{' => { d += 1; false }
-                                ')' | ']' | '}' => { if d > 0 { d -= 1; } false }
-                                '+' if d == 0 => true,
-                                _ => false,
-                            }
-                        });
-                        if has_concat {
-                            let source_pos = base + gt + 1 + abs;
-                            ctx.diagnostic(
-                                format!("Unexpected {}() call without resolve().", orig_name),
-                                Span::new(source_pos as u32, (source_pos + search_pattern.len()) as u32),
-                            );
-                        }
+                        call_body.chars().any(|ch| match ch {
+                            '(' | '[' | '{' => { d += 1; false }
+                            ')' | ']' | '}' => { if d > 0 { d -= 1; } false }
+                            '+' if d == 0 => true, _ => false,
+                        })
                     } else {
                         let var_ident = trimmed.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '$').next().unwrap_or("");
-                        if !var_ident.is_empty() && !is_value_safe(var_ident, content, 0) {
-                            let source_pos = base + gt + 1 + abs;
-                            ctx.diagnostic(
-                                format!("Unexpected {}() call without resolve().", orig_name),
-                                Span::new(source_pos as u32, (source_pos + search_pattern.len()) as u32),
-                            );
-                        }
+                        !var_ident.is_empty() && !is_value_safe(var_ident, content, 0)
+                    };
+                    if should_flag {
+                        let source_pos = base + gt + 1 + abs;
+                        ctx.diagnostic(
+                            format!("Unexpected {}() call without resolve().", orig_name),
+                            Span::new(source_pos as u32, (source_pos + search_pattern.len()) as u32),
+                        );
                     }
 
                     search_from = abs + search_pattern.len();
