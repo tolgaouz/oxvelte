@@ -131,22 +131,10 @@ impl Rule for NoUnknownStyleDirectiveProperty {
             if let TemplateNode::Element(el) = node {
                 for attr in &el.attributes {
                     if let Attribute::Directive { kind: DirectiveKind::StyleDirective, name, span, .. } = attr {
-                        if name.starts_with("--")
-                            || name.starts_with("-moz-")
-                            || name.starts_with("-webkit-")
-                            || name.starts_with("-ms-")
-                            || name.starts_with("-o-")
-                        {
-                            continue;
-                        }
-                        if is_property_ignored(name, &ignore_properties) {
-                            continue;
-                        }
+                        if name.starts_with("--") || ["-moz-", "-webkit-", "-ms-", "-o-"].iter().any(|p| name.starts_with(p)) { continue; }
+                        if is_property_ignored(name, &ignore_properties) { continue; }
                         if !KNOWN_CSS_PROPERTIES.contains(&name.as_str()) {
-                            ctx.diagnostic(
-                                format!("Unexpected unknown style directive property '{}'.", name),
-                                *span,
-                            );
+                            ctx.diagnostic(format!("Unexpected unknown style directive property '{}'.", name), *span);
                         }
                     }
                 }
