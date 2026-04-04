@@ -85,33 +85,16 @@ fn detect_expression_kind(expr: &str) -> Option<&'static str> {
 
 fn is_top_level_arrow(expr: &str) -> bool {
     let s = expr.trim();
-
-    let s = if s.starts_with("async") {
-        let after = &s["async".len()..];
-        if after.starts_with(' ') || after.starts_with('(') {
-            after.trim_start()
-        } else {
-            return false;
-        }
-    } else {
-        s
+    let s = match s.strip_prefix("async") {
+        Some(after) if after.starts_with(' ') || after.starts_with('(') => after.trim_start(),
+        Some(_) => return false,
+        None => s,
     };
-
     if s.starts_with('(') {
-        if let Some(close) = find_matching(s, '(', ')') {
-            let after = s[close + 1..].trim_start();
-            return after.starts_with("=>");
-        }
-    } else {
-        let end = s.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$').unwrap_or(s.len());
-        if end > 0 {
-            let after = s[end..].trim_start();
-            if after.starts_with("=>") {
-                return true;
-            }
-        }
+        return find_matching(s, '(', ')').is_some_and(|close| s[close + 1..].trim_start().starts_with("=>"));
     }
-    false
+    let end = s.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$').unwrap_or(s.len());
+    end > 0 && s[end..].trim_start().starts_with("=>")
 }
 
 fn find_matching(s: &str, open: char, close: char) -> Option<usize> {
