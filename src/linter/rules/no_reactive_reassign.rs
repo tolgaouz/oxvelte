@@ -22,7 +22,6 @@ impl Rule for NoReactiveReassign {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        // Config: { "props": false } — skip checking property mutations on reactive vars
         let check_props = ctx.config.options.as_ref()
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first())
@@ -37,20 +36,14 @@ impl Rule for NoReactiveReassign {
             let tag_text = &source[base..script.span.end as usize];
             let content_offset = tag_text.find('>').map(|p| base + p + 1).unwrap_or(base);
 
-            // Single pass: collect declarations and reactive vars
             let mut reactive_vars = HashSet::new();
             let mut declared_vars = HashSet::new();
 
-            // Track brace depth so only top-level declarations are collected.
-            // Declarations inside functions/blocks (depth > 0) shadow reactive
-            // vars but should not prevent us from tracking the reactive var.
             let mut brace_depth: i32 = 0;
 
             for line in content.lines() {
                 let trimmed = line.trim();
 
-                // Update brace depth (approximate — doesn't handle braces in
-                // strings/comments, but is good enough for declaration scanning).
                 for ch in trimmed.chars() {
                     match ch {
                         '{' => brace_depth += 1,
@@ -59,13 +52,10 @@ impl Rule for NoReactiveReassign {
                     }
                 }
 
-                // Only collect declarations at top level (depth 0, or depth 1
-                // if the brace was opened on this same line for $: statements).
                 let at_top_level = brace_depth == 0
                     || (brace_depth == 1 && trimmed.contains('{') && !trimmed.contains('}'));
 
                 if at_top_level {
-                    // Collect let/var/const declarations (including export let/var/const)
                     let decl_trimmed = trimmed.strip_prefix("export ").unwrap_or(trimmed);
                     for kw in &["let ", "var ", "const "] {
                         if decl_trimmed.starts_with(kw) {
@@ -79,7 +69,6 @@ impl Rule for NoReactiveReassign {
                     }
                 }
 
-                // Collect reactive declarations (always at top level since $: is only valid there)
                 if trimmed.starts_with("$:") {
                     let after = trimmed[2..].trim_start();
                     if let Some(eq_pos) = after.find('=') {
@@ -87,14 +76,12 @@ impl Rule for NoReactiveReassign {
                         if name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
                             && !name.is_empty()
                         {
-                            // Will filter out pre-declared vars after the loop
                             reactive_vars.insert(name.to_string());
                         }
                     }
                 }
             }
 
-            // Remove pre-declared vars from reactive set
             reactive_vars.retain(|v| !declared_vars.contains(v));
 
             if reactive_vars.is_empty() { return; }
@@ -174,10 +161,7 @@ impl Rule for NoReactiveReassign {
                 }
             }
 
-            // Step 2: Look for reassignments of reactive vars inside function bodies
-            // Find function/handler bodies and check for reactiveVar = or reactiveVar++/--
             for var in &reactive_vars {
-                // Look for assignments: var = (not inside $: declarations)
                 let patterns = [
                     format!("{} =", var),
                     format!("{}=", var),
@@ -197,8 +181,6 @@ impl Rule for NoReactiveReassign {
                     while let Some(pos) = content[search_from..].find(pattern.as_str()) {
                         let abs = search_from + pos;
 
-                        // Skip if this is the reactive declaration itself ($: var = ...),
-                        // a new variable declaration (const/let/var), or a comment
                         let line_start = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
                         let line = content[line_start..].trim_start();
                         if line.starts_with("$:") || line.starts_with("//") || line.starts_with("/*")
@@ -208,8 +190,6 @@ impl Rule for NoReactiveReassign {
                             continue;
                         }
 
-                        // Skip if preceded by alphanumeric, underscore, or dot
-                        // (not a word boundary, or a member access like obj.name = ...)
                         if abs > 0 {
                             let prev = content.as_bytes()[abs - 1];
                             if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'.' {
@@ -218,21 +198,16 @@ impl Rule for NoReactiveReassign {
                             }
                         }
 
-                        // Skip if inside brackets: `obj[reactiveVar] = ...`
-                        // (computed property access, not assignment to reactiveVar)
                         if abs > 0 {
-                            // Look backwards to check if this is inside [...] = context
                             let before = &content[..abs];
                             let last_bracket_open = before.rfind('[');
                             let last_bracket_close = before.rfind(']');
                             if let Some(bo) = last_bracket_open {
-                                // If the last `[` is after the last `]`, we're inside brackets
                                 let inside = match last_bracket_close {
                                     Some(bc) => bo > bc,
                                     None => true,
                                 };
                                 if inside {
-                                    // Check that the `]` is right after our var name + whitespace
                                     let after_var = abs + var.len();
                                     let rest = content[after_var..].trim_start();
                                     if rest.starts_with(']') {
@@ -243,7 +218,6 @@ impl Rule for NoReactiveReassign {
                             }
                         }
 
-                        // Skip == (comparison, not assignment)
                         if pattern.ends_with(" =") || pattern.ends_with('=') {
                             let after_eq = abs + pattern.len();
                             if after_eq < content.len() && content.as_bytes()[after_eq] == b'=' {
@@ -252,8 +226,6 @@ impl Rule for NoReactiveReassign {
                             }
                         }
 
-                        // Skip if the variable is shadowed by a local declaration
-                        // or function parameter in the enclosing scope
                         if is_shadowed_in_scope(content, abs, var) {
                             search_from = abs + pattern.len();
                             continue;
@@ -269,7 +241,6 @@ impl Rule for NoReactiveReassign {
                 }
             }
 
-            // Step 2b: Check for mutating method calls on reactive vars (only if props checking enabled)
             if check_props {
             let mutating_methods = MUTATING_METHODS;
             for var in &reactive_vars {
@@ -278,7 +249,6 @@ impl Rule for NoReactiveReassign {
                     let mut search_from = 0;
                     while let Some(pos) = content[search_from..].find(&pattern) {
                         let abs = search_from + pos;
-                        // Word boundary check
                         if abs > 0 {
                             let prev = content.as_bytes()[abs - 1];
                             if prev.is_ascii_alphanumeric() || prev == b'_' {
@@ -286,14 +256,12 @@ impl Rule for NoReactiveReassign {
                                 continue;
                             }
                         }
-                        // Skip if in $: declaration
                         let line_start = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
                         let line = content[line_start..].trim_start();
                         if line.starts_with("$:") {
                             search_from = abs + pattern.len();
                             continue;
                         }
-                        // Skip if shadowed by local declaration
                         if is_shadowed_in_scope(content, abs, var) {
                             search_from = abs + pattern.len();
                             continue;
@@ -306,9 +274,7 @@ impl Rule for NoReactiveReassign {
                         search_from = abs + pattern.len();
                     }
                 }
-                // Also check chained member mutations: var.member.push(, var.member[idx].push(, etc.
                 for method in mutating_methods {
-                    // Search for `var.` followed by member chain then `.method(`
                     let prefix = format!("{}.", var);
                     let mut search_from = 0;
                     while let Some(pos) = content[search_from..].find(prefix.as_str()) {
@@ -320,23 +286,19 @@ impl Rule for NoReactiveReassign {
                                 continue;
                             }
                         }
-                        // Follow member chain: .prop, [idx], ?.prop
                         let mut rest = &content[abs + prefix.len()..];
                         let mut chain_len = prefix.len();
                         let mut has_member = false;
                         loop {
-                            // Consume identifier
                             let end = rest.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(rest.len());
                             if end == 0 { break; }
                             rest = &rest[end..];
                             chain_len += end;
-                            // Check if followed by .method(
                             if rest.starts_with('.') || rest.starts_with("?.") {
                                 let skip = if rest.starts_with("?.") { 2 } else { 1 };
                                 rest = &rest[skip..];
                                 chain_len += skip;
                                 has_member = true;
-                                // Check if the next part is a mutating method
                                 if has_member {
                                     for m in mutating_methods {
                                         if rest.starts_with(*m) {
@@ -369,7 +331,6 @@ impl Rule for NoReactiveReassign {
                     }
                     break; // Only need one pass over methods for the chained check
                 }
-                // Also check member increment/decrement: var.prop++ var.prop-- and var?.prop++ var?.prop--
                 for suffix in &["++", "--"] {
                     let mut search_from = 0;
                     while let Some(pos) = content[search_from..].find(&format!("{}.", var)) {
@@ -400,7 +361,6 @@ impl Rule for NoReactiveReassign {
                         search_from = abs + var.len() + 1;
                     }
                 }
-                // Also check member assignment: var.prop = and var[idx] = and var?.prop =
                 for pattern_base in &[format!("{}.", var), format!("{}?.", var), format!("{}[", var)] {
                     for (pos, _) in content.match_indices(pattern_base.as_str()) {
                         if pos > 0 {
@@ -413,14 +373,12 @@ impl Rule for NoReactiveReassign {
                         if is_shadowed_in_scope(content, pos, var) { continue; }
 
                         let after = &content[pos + pattern_base.len()..];
-                        // Consume initial member access, then follow chained .prop and [idx]
                         let mut rest = if pattern_base.ends_with('[') {
                             after.find(']').map(|p| &after[p+1..]).unwrap_or("")
                         } else {
                             let end = after.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(after.len());
                             &after[end..]
                         };
-                        // Follow chained property/index access: .prop, [idx], ?.prop
                         loop {
                             if rest.starts_with('.') || rest.starts_with("?.") {
                                 let skip = if rest.starts_with("?.") { 2 } else { 1 };
@@ -443,7 +401,6 @@ impl Rule for NoReactiveReassign {
                         }
                     }
                 }
-                // Check for delete var.prop
                 let delete_pattern = format!("delete {}", var);
                 for (pos, _) in content.match_indices(&delete_pattern) {
                     let line_start = content[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
@@ -458,7 +415,6 @@ impl Rule for NoReactiveReassign {
             }
             } // end if check_props (step 2b)
 
-            // Step 2c: Check for destructuring assignments targeting reactive vars
             for var in &reactive_vars {
                 let destructure_patterns = [
                     format!("{} }} =", var),     // { foo: reactiveVar } =
@@ -475,18 +431,11 @@ impl Rule for NoReactiveReassign {
                         if line.starts_with("$:") || line.starts_with("const ")
                             || line.starts_with("let ") || line.starts_with("var ") { continue; }
 
-                        // For `reactiveVar] =` patterns (but not `]] =` nested destructuring),
-                        // verify this is actually a destructuring `[reactiveVar] =`, not
-                        // computed property access `obj[reactiveVar] = value`.
                         if pattern.ends_with("] =") && !pattern.ends_with("]] =") && !pattern.starts_with("...") {
-                            // Find the matching `[` before the var name
                             let before = &content[..pos];
                             if let Some(bracket_pos) = before.rfind('[') {
                                 let between = content[bracket_pos + 1..pos].trim();
-                                // In true destructuring, nothing (or whitespace) is between `[` and the var
-                                // In computed access, the `[` is preceded by an identifier/expression
                                 if between.is_empty() {
-                                    // Check if char before `[` indicates destructuring
                                     let before_bracket = content[..bracket_pos].trim_end();
                                     if !(before_bracket.ends_with('=')
                                         || before_bracket.ends_with(',')
@@ -496,13 +445,9 @@ impl Rule for NoReactiveReassign {
                                         || before_bracket.is_empty()
                                         || before_bracket.ends_with('\n'))
                                     {
-                                        // Preceded by an expression — this is computed property access
                                         continue;
                                     }
                                 } else {
-                                    // Something between `[` and var
-                                    // If it contains `.` without `,`, it's computed access (e.g., `obj[x.prop]`)
-                                    // If it contains `,`, it's destructuring (e.g., `[a, reactiveVar]`)
                                     if !between.contains(',') {
                                         continue; // computed property access
                                     }
@@ -520,7 +465,6 @@ impl Rule for NoReactiveReassign {
                 }
             }
 
-            // Step 2d: Check for for-of/for-in assignment to reactive var members
             for var in &reactive_vars {
                 let for_patterns = [
                     format!("for ({} ", var),
@@ -528,7 +472,6 @@ impl Rule for NoReactiveReassign {
                     format!("for (const {} ", var),
                     format!("for (let {} ", var),
                 ];
-                // Also check for (reactiveValue.key of/in ...)
                 let member_for = if check_props {
                     vec![
                         format!("for ({}.", var),
@@ -552,16 +495,13 @@ impl Rule for NoReactiveReassign {
                 }
             }
 
-            // Step 2d: Check for conditional member assignment: (x ? reactiveVar : y).prop =
             if check_props { for var in &reactive_vars {
                 for line in content.lines() {
                     let trimmed = line.trim();
                     if trimmed.starts_with("$:") { continue; }
-                    // Pattern: (... reactiveVar ...).prop = value
                     if trimmed.contains(&format!("? {} :", var))
                         || trimmed.contains(&format!("? {}", var))
                     {
-                        // Check if the line has a member assignment
                         if let Some(dot_pos) = trimmed.rfind(").") {
                             let after_dot = &trimmed[dot_pos + 2..];
                             let end = after_dot.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(after_dot.len());
@@ -581,17 +521,12 @@ impl Rule for NoReactiveReassign {
             }
             } // end if check_props (conditional member assignment)
 
-            // Step 3: Check template for event handlers, expression props, and bind: directives
             walk_template_nodes(&ctx.ast.html, &mut |node| {
                 if let TemplateNode::Element(el) = node {
                     for attr in &el.attributes {
-                        // Collect spans of expression regions to check for assignments.
-                        // This covers event handlers (on:click), expression attributes
-                        // (prop={() => { ... }}), etc.
                         let expr_span = match attr {
                             Attribute::Directive { kind: DirectiveKind::EventHandler, span, .. } => Some(*span),
                             Attribute::NormalAttribute { span, value, .. } => {
-                                // Only check attributes with expression values
                                 match value {
                                     crate::ast::AttributeValue::Expression(_) => Some(*span),
                                     crate::ast::AttributeValue::Concat(_) => Some(*span),
@@ -603,7 +538,6 @@ impl Rule for NoReactiveReassign {
                         if let Some(span) = expr_span {
                             let region = &ctx.source[span.start as usize..span.end as usize];
                             for var in &reactive_vars {
-                                // Check simple and compound assignments
                                 let pats = [
                                     format!("{} = ", var),
                                     format!("{} += ", var),
@@ -620,7 +554,6 @@ impl Rule for NoReactiveReassign {
                                             let prev = region.as_bytes()[pos - 1];
                                             if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' || prev == b'.' { continue; }
                                         }
-                                        // Skip == (comparison)
                                         if pat.ends_with("= ") {
                                             let eq_pos = pos + pat.len() - 1;
                                             if eq_pos < region.len() && region.as_bytes()[eq_pos] == b'=' { continue; }
@@ -639,27 +572,21 @@ impl Rule for NoReactiveReassign {
                                     }
                                 }
                             }
-                            // Check event handlers for property assignments and mutating
-                            // method calls on reactive vars and their store subscriptions.
                             if check_props {
                                 let mutating_methods = MUTATING_METHODS;
                                 for var in &reactive_vars {
-                                    // Check both var.prop and $var.prop patterns
                                     for prefix in &[var.clone(), format!("${}", var)] {
                                         for pat_start in &[format!("{}.", prefix), format!("{}[", prefix)] {
                                             for (pos, _) in region.match_indices(pat_start.as_str()) {
-                                                // Word boundary check
                                                 if pos > 0 {
                                                     let prev = region.as_bytes()[pos - 1];
                                                     if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' { continue; }
                                                 }
-                                                // String context check
                                                 let before = &region[..pos];
                                                 let single_quotes = before.matches('\'').count();
                                                 let double_quotes = before.matches('"').count();
                                                 if single_quotes % 2 != 0 || double_quotes % 2 != 0 { continue; }
 
-                                                // Follow member chain to find = assignment or mutating method
                                                 let after = &region[pos + pat_start.len()..];
                                                 let mut rest = if pat_start.ends_with('[') {
                                                     after.find(']').map(|p| &after[p+1..]).unwrap_or("")
@@ -671,7 +598,6 @@ impl Rule for NoReactiveReassign {
                                                     if rest.starts_with('.') || rest.starts_with("?.") {
                                                         let skip = if rest.starts_with("?.") { 2 } else { 1 };
                                                         let r = &rest[skip..];
-                                                        // Check if followed by a mutating method
                                                         for m in mutating_methods {
                                                             if r.starts_with(*m) {
                                                                 let abs_pos = span.start as usize + pos;
@@ -709,7 +635,6 @@ impl Rule for NoReactiveReassign {
                             if let Some(open) = region.find('{') {
                                 if let Some(close) = region.find('}') {
                                     let bound_var = region[open+1..close].trim();
-                                    // Check both direct var and var.member
                                     let base_var = bound_var.split('.').next().unwrap_or(bound_var);
                                     let is_member = bound_var.contains('.');
                                     if reactive_vars.contains(bound_var) || (reactive_vars.contains(base_var) && (check_props || !is_member)) {
@@ -720,7 +645,6 @@ impl Rule for NoReactiveReassign {
                                     }
                                 }
                             } else if reactive_vars.contains(name.as_str()) {
-                                // Shorthand binding: bind:varName (no expression)
                                 ctx.diagnostic(
                                     format!("Assignment to reactive value '{}'.", name),
                                     *span,
