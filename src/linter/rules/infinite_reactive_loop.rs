@@ -46,50 +46,37 @@ impl Rule for InfiniteReactiveLoop {
     }
 }
 
-/// Returns (all_vars, implicit_reactive_vars).
-/// `implicit_reactive_vars` are vars only declared via `$:` (no explicit let/var/const).
 fn collect_top_level_vars(content: &str) -> (Vec<String>, std::collections::HashSet<String>) {
     let mut vars = Vec::new();
     let mut implicit_reactive = std::collections::HashSet::new();
     for line in content.lines() {
         let t = line.trim();
-        // Handle `export let` and `export var` in addition to `let` and `var`
         let t = t.strip_prefix("export ").unwrap_or(t);
         for kw in &["let ", "var ", "const "] {
             if let Some(rest) = t.strip_prefix(kw) {
                 extract_declared_names(rest, &mut vars);
             }
         }
-        // Also collect variables declared via $: reactive assignment
-        // (e.g. `$: icon = expr` where there's no prior `let icon`)
-        if t.starts_with("$:") {
-            let after = t[2..].trim_start();
+        if let Some(after) = t.strip_prefix("$:") {
+            let after = after.trim_start();
             if let Some(eq_pos) = after.find('=') {
                 let name = after[..eq_pos].trim();
-                // Skip if it starts with `{` or `[` (destructuring), or contains special chars
+                let post_eq = &after[eq_pos + 1..];
                 if !name.is_empty()
                     && name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
-                    && !name.starts_with('{') && !name.starts_with('[')
+                    && !matches!(name.as_bytes()[0], b'{' | b'[')
+                    && !matches!(post_eq.as_bytes().first(), Some(b'=' | b'>'))
+                    && !vars.contains(&name.to_string())
                 {
-                    // Skip if `=` is followed by `=` (comparison) or preceded by `!` or `>` or `<`
-                    let post_eq = &after[eq_pos + 1..];
-                    if !post_eq.starts_with('=') && !post_eq.starts_with('>') {
-                        if !vars.contains(&name.to_string()) {
-                            vars.push(name.to_string());
-                            implicit_reactive.insert(name.to_string());
-                        }
-                    }
+                    vars.push(name.to_string());
+                    implicit_reactive.insert(name.to_string());
                 }
             }
         }
     }
-    // Remove from implicit set if an explicit declaration exists
-    // (the var was added before the $: line was processed)
     (vars, implicit_reactive)
 }
 
-/// Extract variable names from a declaration's right-hand side.
-/// Handles: simple (`a = 0`), multi (`a = 0, b = 1`), destructured (`{ a, b } = ...`, `[a, b] = ...`).
 fn extract_declared_names(decl: &str, vars: &mut Vec<String>) {
     let trimmed = decl.trim();
     if trimmed.starts_with('{') || trimmed.starts_with('[') {
@@ -169,17 +156,14 @@ fn collect_store_refs(content: &str, vars: &mut Vec<String>) {
 }
 
 fn collect_aliases(content: &str) -> Vec<(String, String)> {
-    let fns = ["setTimeout", "setInterval", "queueMicrotask", "tick"];
+    const FNS: &[&str] = &["setTimeout", "setInterval", "queueMicrotask", "tick"];
     let mut aliases = Vec::new();
     for line in content.lines() {
         let t = line.trim();
         if let Some(rest) = t.strip_prefix("const ") {
             if let Some(eq) = rest.find(" = ") {
-                let alias = &rest[..eq];
                 let val = rest[eq+3..].trim().trim_end_matches(';');
-                for &f in &fns {
-                    if val == f { aliases.push((f.to_string(), alias.to_string())); }
-                }
+                if FNS.contains(&val) { aliases.push((val.to_string(), rest[..eq].to_string())); }
             }
         }
         if t.starts_with("import ") {
@@ -188,10 +172,7 @@ fn collect_aliases(content: &str) -> Vec<(String, String)> {
                     let imp = imp.trim();
                     if let Some(ap) = imp.find(" as ") {
                         let orig = imp[..ap].trim();
-                        let alias = imp[ap+4..].trim();
-                        for &f in &fns {
-                            if orig == f { aliases.push((f.to_string(), alias.to_string())); }
-                        }
+                        if FNS.contains(&orig) { aliases.push((orig.to_string(), imp[ap+4..].trim().to_string())); }
                     }
                 }
             }
@@ -205,18 +186,21 @@ struct FuncInfo {
     assigns: Vec<String>,
     has_await: bool,
     assigns_after_await: Vec<String>,
-    /// Byte positions of assignment lines after await (relative to content start)
     assign_positions_after_await: Vec<(String, usize)>,
-    /// Byte positions of ALL assignment lines (relative to content start)
     all_assign_positions: Vec<(String, usize)>,
-    /// Function names called after await (for transitive propagation)
     calls_after_await: Vec<String>,
-    /// Function names called anywhere in the body
     all_calls: Vec<String>,
-    /// Byte range of the function body within the script content (start, end)
     body_range: (usize, usize),
-    /// Whether the function has assignments inside .then()/.catch() callbacks
     has_then_catch_assigns: bool,
+}
+
+fn merge_var(vec: &mut Vec<String>, val: &str) {
+    if !vec.iter().any(|v| v == val) { vec.push(val.to_string()); }
+}
+
+fn merge_pos(vec: &mut Vec<(String, usize)>, var: &str, pos: usize, body_range: Option<(usize, usize)>) {
+    if let Some((bs, be)) = body_range { if pos >= bs && pos < be { return; } }
+    if !vec.iter().any(|(v, p)| v == var && *p == pos) { vec.push((var.to_string(), pos)); }
 }
 
 fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std::collections::HashSet<String>) -> Vec<FuncInfo> {
@@ -345,8 +329,7 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
             let then_catch_regions = find_then_catch_regions(func_body);
             let timer_regions = find_timer_callback_regions(func_body);
             let mut has_then_catch_assigns = false;
-            let mut all_async_regions: Vec<(usize, usize)> = Vec::new();
-            all_async_regions.extend_from_slice(&then_catch_regions);
+            let mut all_async_regions = then_catch_regions;
             all_async_regions.extend_from_slice(&timer_regions);
             if !all_async_regions.is_empty() {
                 for j in i+1..=end_line {
@@ -378,93 +361,32 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
         i += 1;
     }
 
-    // Propagation pass: if func A calls func B (after await or always), inherit B's assigns.
-    // This handles chains like: backgroundResendVerification → resetTurnstile → turnstileReady = false
-    // Run multiple rounds to handle deeper chains.
+    // Propagation pass: inherit callee assigns transitively. Multiple rounds for chains.
     for _ in 0..4 {
         let snapshot: Vec<(String, Vec<String>, Vec<(String, usize)>, Vec<String>, Vec<(String, usize)>, bool, bool)> = results.iter()
             .map(|fi| (fi.name.clone(), fi.assigns.clone(), fi.all_assign_positions.clone(), fi.assigns_after_await.clone(), fi.assign_positions_after_await.clone(), fi.has_await, fi.has_then_catch_assigns))
             .collect();
 
         for fi in results.iter_mut() {
-            // For calls after await: inherit callee's assigns based on
-            // whether the callee is async:
-            // - If callee has_await: only inherit assigns_after_await
-            //   (callee's pre-await code runs synchronously in same microtask)
-            // - If callee !has_await: inherit ALL assigns
-            //   (entire callee runs in a different microtask)
+            let br = fi.body_range;
             for callee_name in fi.calls_after_await.clone() {
-                if let Some((_, callee_assigns, callee_positions, callee_after_await, callee_after_await_positions, callee_has_await, _)) = snapshot.iter().find(|(n, _, _, _, _, _, _)| n == &callee_name) {
-                    let (vars_to_inherit, positions_to_inherit): (&Vec<String>, &Vec<(String, usize)>) = if *callee_has_await {
-                        (callee_after_await, callee_after_await_positions)
-                    } else {
-                        (callee_assigns, callee_positions)
-                    };
-                    for var in vars_to_inherit {
-                        if !fi.assigns_after_await.contains(var) {
-                            fi.assigns_after_await.push(var.clone());
-                        }
-                    }
-                    for var in callee_assigns {
-                        if !fi.assigns.contains(var) {
-                            fi.assigns.push(var.clone());
-                        }
-                    }
-                    for (var, pos) in positions_to_inherit {
-                        // Skip positions that fall within this function's own body range
-                        // (prevents circular propagation: A→B→C→A leaking A's positions
-                        // back into A's assign_positions_after_await)
-                        let (bs, be) = fi.body_range;
-                        if *pos >= bs && *pos < be { continue; }
-                        if !fi.assign_positions_after_await.iter().any(|(v, p)| v == var && p == pos) {
-                            fi.assign_positions_after_await.push((var.clone(), *pos));
-                        }
-                    }
-                    for (var, pos) in callee_positions {
-                        if !fi.all_assign_positions.iter().any(|(v, p)| v == var && p == pos) {
-                            fi.all_assign_positions.push((var.clone(), *pos));
-                        }
-                    }
+                if let Some((_, ca, cp, caa, caap, cha, _)) = snapshot.iter().find(|(n, ..)| n == &callee_name) {
+                    let (vi, pi) = if *cha { (caa, caap) } else { (ca, cp) };
+                    for v in vi { merge_var(&mut fi.assigns_after_await, v); }
+                    for v in ca { merge_var(&mut fi.assigns, v); }
+                    for (v, p) in pi { merge_pos(&mut fi.assign_positions_after_await, v, *p, Some(br)); }
+                    for (v, p) in cp { merge_pos(&mut fi.all_assign_positions, v, *p, None); }
                 }
             }
-            // For all calls: inherit callee's assigns into our assigns list.
-            // Also inherit callee's async assigns — if callee B has assigns_after_await,
-            // those will eventually execute in a different microtask when A calls B.
-            // This handles chains like: update() → updateMenu() → async callback → await → value = ...
             for callee_name in fi.all_calls.clone() {
-                if let Some((_, callee_assigns, callee_positions, callee_after_await, callee_after_await_positions, callee_has_await, callee_has_then_catch)) = snapshot.iter().find(|(n, _, _, _, _, _, _)| n == &callee_name) {
-                    for var in callee_assigns {
-                        if !fi.assigns.contains(var) {
-                            fi.assigns.push(var.clone());
-                        }
-                    }
-                    for (var, pos) in callee_positions {
-                        if !fi.all_assign_positions.iter().any(|(v, p)| v == var && p == pos) {
-                            fi.all_assign_positions.push((var.clone(), *pos));
-                        }
-                    }
-                    // Propagate callee's async assigns upward:
-                    // If callee has assigns_after_await, calling it will eventually
-                    // trigger those async assignments in a different microtask.
-                    if !callee_after_await.is_empty() {
-                        for var in callee_after_await {
-                            if !fi.assigns_after_await.contains(var) {
-                                fi.assigns_after_await.push(var.clone());
-                            }
-                        }
-                        for (var, pos) in callee_after_await_positions {
-                            let (bs, be) = fi.body_range;
-                            if *pos >= bs && *pos < be { continue; }
-                            if !fi.assign_positions_after_await.iter().any(|(v, p)| v == var && p == pos) {
-                                fi.assign_positions_after_await.push((var.clone(), *pos));
-                            }
-                        }
-                        if *callee_has_await {
-                            fi.has_await = true;
-                        }
-                        if *callee_has_then_catch {
-                            fi.has_then_catch_assigns = true;
-                        }
+                if let Some((_, ca, cp, caa, caap, cha, chtc)) = snapshot.iter().find(|(n, ..)| n == &callee_name) {
+                    for v in ca { merge_var(&mut fi.assigns, v); }
+                    for (v, p) in cp { merge_pos(&mut fi.all_assign_positions, v, *p, None); }
+                    if !caa.is_empty() {
+                        for v in caa { merge_var(&mut fi.assigns_after_await, v); }
+                        for (v, p) in caap { merge_pos(&mut fi.assign_positions_after_await, v, *p, Some(br)); }
+                        fi.has_await |= cha;
+                        fi.has_then_catch_assigns |= chtc;
                     }
                 }
             }
@@ -474,8 +396,6 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
     results
 }
 
-/// Collect variables assigned after an `await` in a function body.
-/// Also returns (var_name, content_offset) pairs for each assignment.
 fn extract_func_name(line: &str) -> Option<String> {
     for prefix in &["const ", "let "] {
         if let Some(rest) = line.strip_prefix(prefix) {
@@ -492,8 +412,6 @@ fn extract_func_name(line: &str) -> Option<String> {
     if !name.is_empty() { Some(name) } else { None }
 }
 
-/// Check if `after` (the text after `= `) is a direct function/arrow expression,
-/// NOT a call expression that happens to contain an arrow (e.g. `debounce(() => ...)`).
 fn is_direct_function_expr(after: &str) -> bool {
     if after.starts_with("function") || after.starts_with("async") {
         return true;
@@ -523,38 +441,22 @@ fn is_direct_function_expr(after: &str) -> bool {
         }
         return false;
     }
-    // Single-param arrow without parens: `x => ...`
     let ident_end = after.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(after.len());
-    if ident_end > 0 {
-        let rest = after[ident_end..].trim_start();
-        if rest.starts_with("=>") {
-            return true;
-        }
-    }
-    false
+    ident_end > 0 && after[ident_end..].trim_start().starts_with("=>")
 }
 
-/// Check if a line is a local variable declaration (const/let/var) for the given variable.
 fn is_local_declaration(line: &str, var: &str) -> bool {
     for kw in &["const ", "let ", "var "] {
-        if let Some(kw_pos) = line.find(kw) {
-            let after_kw = &line[kw_pos + kw.len()..];
-            // Check destructuring: const { x, y } = or const [x, y] =
-            if after_kw.starts_with('{') || after_kw.starts_with('[') {
-                if let Some(close) = after_kw.find(|c: char| c == '}' || c == ']') {
-                    let inside = &after_kw[1..close];
-                    if inside.split(',').any(|part| part.trim() == var) {
-                        return true;
-                    }
-                }
-            } else {
-                // Simple declaration: const var = ... or const var: Type = ...
-                let name_end = after_kw.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
-                    .unwrap_or(after_kw.len());
-                if &after_kw[..name_end] == var {
-                    return true;
-                }
+        let Some(kw_pos) = line.find(kw) else { continue };
+        let after_kw = &line[kw_pos + kw.len()..];
+        if matches!(after_kw.as_bytes().first(), Some(b'{' | b'[')) {
+            if let Some(close) = after_kw.find(|c: char| c == '}' || c == ']') {
+                if after_kw[1..close].split(',').any(|p| p.trim() == var) { return true; }
             }
+        } else {
+            let end = after_kw.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
+                .unwrap_or(after_kw.len());
+            if &after_kw[..end] == var { return true; }
         }
     }
     false
@@ -576,23 +478,15 @@ fn has_assign_with_patterns_inline(line: &str, var: &str) -> bool {
             return true;
         }
     }
-    // Also check for assignment at end of line: `var =` (newline after =)
-    // This handles multi-line assignments where the value is on the next line
+    // Multi-line assignment: `var =\n`
     if let Some(pos) = find_var_op(line, var, " =") {
         let after = pos + var.len() + 2;
-        // Make sure it's not == or =>
-        if after >= line.len() || {
-            let b = line.as_bytes()[after];
-            b != b'=' && b != b'>'
-        } {
-            return true;
-        }
+        if after >= line.len() || !matches!(line.as_bytes()[after], b'=' | b'>') { return true; }
     }
     // Check property/index access
     has_member_assign(line, var, &ops)
 }
 
-/// Fast check for `var` + `op` at a word boundary, without allocation.
 fn find_var_op(line: &str, var: &str, op: &str) -> Option<usize> {
     let mut start = 0;
     while let Some(pos) = line[start..].find(var) {
@@ -662,31 +556,29 @@ fn is_word_start(text: &str, pos: usize) -> bool {
     !(b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b == b'.')
 }
 
-/// Check if an assignment at `assign_pos` is after an await at `await_pos` on the same line,
-/// and the assignment actually executes after the await completes.
 fn is_after_await_same_line(line: &str, await_pos: usize, assign_pos: usize) -> bool {
     assign_pos > await_pos && line[await_pos..assign_pos].contains(',')
 }
 
-/// Find the position of an assignment to `var` in the line.
 fn find_assign_pos(line: &str, var: &str) -> Option<usize> {
-    let ops = [" = ", " += ", " -= "];
-    for op in &ops {
-        let pat = format!("{}{}", var, op);
-        if let Some(pos) = line.find(&pat) {
-            if is_word_start(line, pos) {
-                if *op == " = " && pos + pat.len() < line.len() && line.as_bytes()[pos + pat.len()] == b'=' {
-                    continue;
-                }
-                return Some(pos);
+    for op in &[" = ", " += ", " -= "] {
+        if let Some(pos) = find_var_op(line, var, op) {
+            if *op == " = " {
+                let a = pos + var.len() + 3;
+                if a < line.len() && line.as_bytes()[a] == b'=' { continue; }
             }
+            return Some(pos);
         }
-        let prop_pat = format!("{}.", var);
-        for (pos, _) in line.match_indices(&prop_pat) {
-            if !is_word_start(line, pos) { continue; }
-            let rest = &line[pos + prop_pat.len()..];
-            if rest.contains(op) { return Some(pos); }
+    }
+    // Member access: var.prop op
+    let mut start = 0;
+    while let Some(p) = line[start..].find(var) {
+        let pos = start + p;
+        if is_word_start(line, pos) && line[pos + var.len()..].starts_with('.') {
+            let rest = &line[pos + var.len() + 1..];
+            if [" = ", " += ", " -= "].iter().any(|op| rest.contains(op)) { return Some(pos); }
         }
+        start = pos + 1;
     }
     None
 }
@@ -803,23 +695,9 @@ fn find_stmt_end(content: &str, dollar: usize) -> usize {
                         // Check if the next non-whitespace token is a continuation
                         // (method chain, ternary, logical operator, etc.)
                         let after_ws = nt.trim_start();
-                        let is_continuation = after_ws.starts_with('.')
-                            || after_ws.starts_with('?')
-                            || after_ws.starts_with(':')
-                            || after_ws.starts_with('+')
-                            || after_ws.starts_with('-')
-                            || after_ws.starts_with('*')
-                            || after_ws.starts_with('/')
-                            || after_ws.starts_with('%')
-                            || after_ws.starts_with('&')
-                            || after_ws.starts_with('|')
-                            || after_ws.starts_with('^')
-                            || after_ws.starts_with('<')
-                            || after_ws.starts_with('>')
-                            || after_ws.starts_with('=')
-                            || after_ws.starts_with('!')
-                            || after_ws.starts_with(',')
-                            || after_ws.starts_with('(');
+                        let is_continuation = after_ws.as_bytes().first().is_some_and(|b|
+                            matches!(b, b'.' | b'?' | b':' | b'+' | b'-' | b'*' | b'/'
+                                | b'%' | b'&' | b'|' | b'^' | b'<' | b'>' | b'=' | b'!' | b',' | b'('));
                         if !is_continuation {
                             return abs + 1 + (rest.len() - nt.len());
                         }
@@ -857,24 +735,15 @@ fn find_stmt_end(content: &str, dollar: usize) -> usize {
     content.len()
 }
 
-/// Check if a variable name appears anywhere in the block (read or write) with word boundaries.
 fn block_has_var_ref(block: &str, var: &str) -> bool {
-    for (pos, _) in block.match_indices(var) {
-        if is_word_start(block, pos) {
-            let after = pos + var.len();
-            if after >= block.len() || {
-                let b = block.as_bytes()[after];
-                !b.is_ascii_alphanumeric() && b != b'_' && b != b'$'
-            } {
-                return true;
-            }
+    block.match_indices(var).any(|(pos, _)| {
+        is_word_start(block, pos) && {
+            let a = pos + var.len();
+            a >= block.len() || !matches!(block.as_bytes()[a], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$')
         }
-    }
-    false
+    })
 }
 
-/// Check if a block reads a variable (not just assigns to it).
-/// Compound assignments (+=, -=) count as reads. Only simple `var = expr` is write-only.
 fn block_reads_var(block: &str, var: &str) -> bool {
     for line in block.lines() {
         let t = line.trim();
@@ -891,23 +760,11 @@ fn block_reads_var(block: &str, var: &str) -> bool {
 
         // Single occurrence: check if it's ONLY a simple assignment (write-only)
         // Compound assignments (+=, -=, etc.) are read-modify-write → count as reads
-        let simple_assign = {
-            let pat = format!("{} = ", var);
-            if let Some(pos) = t.find(&pat) {
-                is_word_start(t, pos) && {
-                    let after = &t[pos + pat.len()..];
-                    !after.starts_with('=') // not ==
-                }
-            } else {
-                false
-            }
-        };
-        // Also check var.prop = and var[idx] = as simple writes
-        let member_assign = {
-            let dot_pat = format!("{}.", var);
-            let idx_pat = format!("{}[", var);
-            (t.contains(&dot_pat) || t.contains(&idx_pat)) && has_assign(t, var)
-        };
+        let simple_assign = find_var_op(t, var, " = ").is_some_and(|pos| {
+            let a = pos + var.len() + 3;
+            a >= t.len() || t.as_bytes()[a] != b'='
+        });
+        let member_assign = has_member_assign(t, var, &[" = ", " += ", " -= ", " *= ", " /= "]);
         if simple_assign || member_assign {
             continue; // write-only
         }
@@ -919,38 +776,23 @@ fn block_reads_var(block: &str, var: &str) -> bool {
     false
 }
 
-/// Position-based analysis: check if a byte position in the block is inside a
-/// callback passed to a .then(), .catch(), setTimeout, etc. or after an await.
-/// Uses backward scanning through the raw text.
 fn is_in_async_callback(block: &str, pos: usize, all_triggers: &[String]) -> bool {
     let before = &block[..pos.min(block.len())];
-    // Scan backwards tracking paren depth to find the enclosing function call
-    let mut paren_depth = 0i32;
+    let mut pd = 0i32;
     let bytes = before.as_bytes();
     let mut i = bytes.len();
     while i > 0 {
         i -= 1;
         match bytes[i] {
-            b')' => paren_depth += 1,
+            b')' => pd += 1,
+            b'(' if pd > 0 => pd -= 1,
             b'(' => {
-                if paren_depth > 0 {
-                    paren_depth -= 1;
-                } else {
-                    // Unmatched ( - check what precedes it
-                    let before_paren = before[..i].trim_end();
-                    // .then()/.catch() detection is handled by find_then_catch_regions
-                    // (with nested reset logic) — don't duplicate it here.
-                    // trigger functions
-                    for trigger in all_triggers {
-                        if before_paren.ends_with(trigger.as_str()) {
-                            let tlen = trigger.len();
-                            let start = before_paren.len() - tlen;
-                            if start == 0 || {
-                                let b = before_paren.as_bytes()[start - 1];
-                                !b.is_ascii_alphanumeric() && b != b'_' && b != b'$'
-                            } {
-                                return true;
-                            }
+                let bp = before[..i].trim_end();
+                for trigger in all_triggers {
+                    if bp.ends_with(trigger.as_str()) {
+                        let s = bp.len() - trigger.len();
+                        if s == 0 || !matches!(bp.as_bytes()[s-1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$') {
+                            return true;
                         }
                     }
                 }
@@ -961,8 +803,6 @@ fn is_in_async_callback(block: &str, pos: usize, all_triggers: &[String]) -> boo
     false
 }
 
-/// Check if there's an `await` before `pos` in the block at the same scope depth,
-/// on a PRECEDING line. Uses brace-depth tracking to ignore awaits in nested functions.
 fn has_await_on_prev_line(block: &str, line_start_pos: usize) -> bool {
     let before = &block[..line_start_pos.min(block.len())];
     if !before.contains("async ") && !before.contains("async(") { return false; }
@@ -1014,7 +854,6 @@ fn has_await_on_prev_line(block: &str, line_start_pos: usize) -> bool {
     false
 }
 
-/// Skip past a string literal starting at `bytes[start]`. Returns position after closing quote.
 fn skip_string_raw(bytes: &[u8], start: usize) -> usize {
     let q = bytes[start];
     let mut j = start + 1;
@@ -1026,7 +865,6 @@ fn skip_string_raw(bytes: &[u8], start: usize) -> usize {
     j
 }
 
-/// Skip past a comment starting at `bytes[i]`. Returns Some(end) or None if not a comment.
 fn skip_comment_raw(bytes: &[u8], i: usize) -> Option<usize> {
     if i + 1 >= bytes.len() || bytes[i] != b'/' { return None; }
     if bytes[i + 1] == b'/' {
@@ -1042,7 +880,6 @@ fn skip_comment_raw(bytes: &[u8], i: usize) -> Option<usize> {
     None
 }
 
-/// Find matching `}` from `bytes[start]` (which must be `{`), skipping strings/comments.
 fn skip_brace_body(bytes: &[u8], start: usize) -> usize {
     let mut i = start + 1;
     let mut depth = 1i32;
@@ -1059,9 +896,6 @@ fn skip_brace_body(bytes: &[u8], start: usize) -> usize {
     i
 }
 
-/// Scan callback args starting after opening `(` at `bytes[after]`.
-/// Collects (body_start, body_end) for arrow/function callback bodies.
-/// If `first_only`, stops after finding the first callback.
 fn scan_callback_args(bytes: &[u8], after: usize, first_only: bool) -> Vec<(usize, usize)> {
     let mut regions = Vec::new();
     let mut i = after;
@@ -1111,7 +945,6 @@ fn scan_callback_args(bytes: &[u8], after: usize, first_only: bool) -> Vec<(usiz
     regions
 }
 
-/// Find byte ranges of callback bodies inside setTimeout/setInterval/queueMicrotask calls.
 fn find_timer_callback_regions(block: &str) -> Vec<(usize, usize)> {
     let mut regions = Vec::new();
     let bytes = block.as_bytes();
@@ -1132,7 +965,6 @@ fn find_timer_callback_regions(block: &str) -> Vec<(usize, usize)> {
     regions
 }
 
-/// Check if `pos` is in an "effective" then/catch async context.
 fn is_in_effective_then_catch(regions: &[(usize, usize)], pos: usize) -> bool {
     let innermost = match regions.iter()
         .filter(|(s, e)| pos >= *s && pos < *e)
@@ -1143,7 +975,6 @@ fn is_in_effective_then_catch(regions: &[(usize, usize)], pos: usize) -> bool {
     !regions.iter().any(|(s, e)| *s > innermost.0 && *e < innermost.1 && *e <= pos)
 }
 
-/// Find byte ranges of .then() and .catch() callback bodies in the block.
 fn find_then_catch_regions(block: &str) -> Vec<(usize, usize)> {
     let mut regions = Vec::new();
     let bytes = block.as_bytes();
@@ -1158,9 +989,6 @@ fn find_then_catch_regions(block: &str) -> Vec<(usize, usize)> {
     regions
 }
 
-/// Recursively report at intermediate function call sites within a function body.
-/// The vendor uses recursive AST traversal to find all call sites in the chain;
-/// we emulate this by walking through the function's callees and their callees.
 fn report_intermediate_calls(
     ctx: &mut LintContext,
     fi: &FuncInfo,
@@ -1240,13 +1068,9 @@ fn analyze_block(
     aliases: &[(String, String)],
     func_info: &[FuncInfo],
 ) {
-    let trigger_fns = ["setTimeout", "setInterval", "queueMicrotask", "tick"];
-    let mut all_triggers: Vec<String> = trigger_fns.iter().map(|s| s.to_string()).collect();
-    for (orig, alias) in aliases {
-        if trigger_fns.contains(&orig.as_str()) {
-            all_triggers.push(alias.clone());
-        }
-    }
+    let mut all_triggers: Vec<String> = ["setTimeout", "setInterval", "queueMicrotask", "tick"]
+        .iter().map(|s| s.to_string()).collect();
+    for (_, alias) in aliases { all_triggers.push(alias.clone()); }
 
     // Check if tick is locally redefined in the script (not just the block)
     // For tick02 test: `function tick(fn) { fn(); }` means tick is not an async trigger
@@ -1255,21 +1079,12 @@ fn analyze_block(
     let local_names: Vec<String> = block.lines()
         .filter_map(|line| {
             let t = line.trim();
-            for kw in &["let ", "const ", "var "] {
-                if let Some(rest) = t.strip_prefix(kw) {
-                    let name: String = rest.chars()
-                        .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
-                        .collect();
-                    if !name.is_empty() { return Some(name); }
-                }
-            }
-            if let Some(rest) = t.strip_prefix("function ") {
-                let name: String = rest.chars()
-                    .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
-                    .collect();
-                if !name.is_empty() { return Some(name); }
-            }
-            None
+            let rest = t.strip_prefix("let ").or_else(|| t.strip_prefix("const "))
+                .or_else(|| t.strip_prefix("var ")).or_else(|| t.strip_prefix("function "))?;
+            let name: String = rest.chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
+                .collect();
+            if !name.is_empty() { Some(name) } else { None }
         })
         .collect();
 
