@@ -393,44 +393,25 @@ fn has_word_boundary_match(text: &str, word: &str) -> bool {
 fn is_store_type(type_text: &str) -> bool {
     const STORE_TYPES: &[&str] = &["Writable", "Readable", "Derived"];
     let text = type_text.trim();
-    for st in STORE_TYPES {
-        if text.starts_with(st) || text.contains(&format!("| {}", st)) || text.contains(&format!("{} |", st))
-            || text.contains(&format!("| {}<", st)) || text.starts_with(&format!("{}<", st)) {
-            return true;
-        }
-    }
-    false
+    STORE_TYPES.iter().any(|st| text.starts_with(st) || text.contains(&format!("| {}", st))
+        || text.contains(&format!("{} |", st)) || text.contains(&format!("| {}<", st))
+        || text.starts_with(&format!("{}<", st)))
 }
 
 fn resolve_module_file(dir: &std::path::Path, module: &str) -> Option<String> {
-    for ext in &["", ".ts", ".js", ".d.ts"] {
-        let path = dir.join(format!("{}{}", module, ext));
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            return Some(content);
-        }
-    }
-    None
+    ["", ".ts", ".js", ".d.ts"].iter()
+        .find_map(|ext| std::fs::read_to_string(dir.join(format!("{}{}", module, ext))).ok())
 }
 
 fn detect_store_exports(content: &str) -> HashSet<String> {
     let mut stores = HashSet::new();
     let imports = crate::linter::parse_imports(content);
 
-    let mut factory_names: HashSet<String> = HashSet::new();
+    let (mut factory_names, mut store_type_names) = (HashSet::new(), HashSet::new());
     for (local, imported, module) in &imports {
-        if module == "svelte/store" && STORE_FACTORIES.contains(&imported.as_str()) {
-            factory_names.insert(local.clone());
-        }
-    }
-
-    let mut store_type_names: HashSet<String> = HashSet::new();
-    for (local, imported, module) in &imports {
-        if module == "svelte/store" {
-            match imported.as_str() {
-                "Writable" | "Readable" | "Derived" => { store_type_names.insert(local.clone()); }
-                _ => {}
-            }
-        }
+        if module != "svelte/store" { continue; }
+        if STORE_FACTORIES.contains(&imported.as_str()) { factory_names.insert(local.clone()); }
+        if matches!(imported.as_str(), "Writable" | "Readable" | "Derived") { store_type_names.insert(local.clone()); }
     }
 
     for line in content.lines() {
