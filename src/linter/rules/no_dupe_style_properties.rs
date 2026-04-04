@@ -66,35 +66,20 @@ fn check_style_value(
     ctx: &mut LintContext<'_>,
 ) {
     let attr_text = &ctx.source[attr_span.start as usize..attr_span.end as usize];
-
+    let mut all_props: Vec<String> = Vec::new();
     match value {
-        AttributeValue::Static(s) => {
-            for prop in collect_props_from_css_text(s) {
-                report_or_record(prop, first_seen, reported, attr_text, attr_span, ctx);
+        AttributeValue::Static(s) => all_props.extend(collect_props_from_css_text(s)),
+        AttributeValue::Concat(parts) => for part in parts {
+            match part {
+                AttributeValuePart::Static(s) => all_props.extend(collect_props_from_css_text(s)),
+                AttributeValuePart::Expression(e) => all_props.extend(extract_props_from_expression(e)),
             }
-        }
-        AttributeValue::Concat(parts) => {
-            for part in parts {
-                match part {
-                    AttributeValuePart::Static(s) => {
-                        for prop in collect_props_from_css_text(s) {
-                            report_or_record(prop, first_seen, reported, attr_text, attr_span, ctx);
-                        }
-                    }
-                    AttributeValuePart::Expression(expr) => {
-                        for prop in extract_props_from_expression(expr) {
-                            report_or_record(prop, first_seen, reported, attr_text, attr_span, ctx);
-                        }
-                    }
-                }
-            }
-        }
-        AttributeValue::Expression(expr) => {
-            for prop in extract_props_from_expression(expr) {
-                report_or_record(prop, first_seen, reported, attr_text, attr_span, ctx);
-            }
-        }
+        },
+        AttributeValue::Expression(e) => all_props.extend(extract_props_from_expression(e)),
         _ => {}
+    }
+    for prop in all_props {
+        report_or_record(prop, first_seen, reported, attr_text, attr_span, ctx);
     }
 }
 
