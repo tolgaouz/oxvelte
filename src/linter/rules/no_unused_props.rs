@@ -80,12 +80,7 @@ impl Rule for NoUnusedProps {
                 return;
             }
             for (prop_name, prop_offset) in &all_props {
-                let dot_access = format!("{}.{}", var_name, prop_name);
-                let bracket_access = format!("{}['{}']", var_name, prop_name);
-                let bracket_access2 = format!("{}[\"{}\"]", var_name, prop_name);
-                if full_source.contains(&dot_access)
-                    || full_source.contains(&bracket_access)
-                    || full_source.contains(&bracket_access2) {
+                if has_prop_access(full_source, var_name, prop_name) {
                     let allow_nested = get_option_bool(&ctx.config.options, "allowUnusedNestedProperties");
                     if !allow_nested {
                         check_nested_properties(content, content_offset, full_source, var_name, prop_name, ctx);
@@ -164,6 +159,12 @@ impl Rule for NoUnusedProps {
             );
         }
     }
+}
+
+fn has_prop_access(source: &str, base: &str, prop: &str) -> bool {
+    source.contains(&format!("{}.{}", base, prop))
+        || source.contains(&format!("{}['{}']", base, prop))
+        || source.contains(&format!("{}[\"{}\"]", base, prop))
 }
 
 fn extract_destructured_props(before_props: &str) -> HashSet<String> {
@@ -301,7 +302,7 @@ fn extract_type_properties_with_file(content: &str, type_name: &str, file_path: 
             let type_end = find_type_end(rhs);
             let type_expr = &rhs[..type_end];
 
-            let parts = split_intersection(type_expr);
+            let parts = split_at_depth0(type_expr, '&');
             for part in &parts {
                 let part = part.trim();
                 if part.is_empty() { continue; }
@@ -338,32 +339,21 @@ fn find_type_end(s: &str) -> usize {
     s.len()
 }
 
-fn split_intersection(s: &str) -> Vec<&str> { split_at_depth0(s, '&') }
-
 fn resolve_imported_type_properties(content: &str, type_name: &str, file_path: &str) -> Vec<(String, usize)> {
     for line in content.lines() {
         let trimmed = line.trim();
-        if !trimmed.starts_with("import") { continue; }
-        if !trimmed.contains(type_name) { continue; }
-        let module = if let Some(from_pos) = trimmed.find("from ") {
-            let after_from = &trimmed[from_pos + 5..];
-            let after_from = after_from.trim().trim_end_matches(';');
-            after_from.trim_matches('\'').trim_matches('"')
-        } else { continue };
-
+        if !trimmed.starts_with("import") || !trimmed.contains(type_name) { continue; }
+        let Some(from_pos) = trimmed.find("from ") else { continue };
+        let module = trimmed[from_pos + 5..].trim().trim_end_matches(';').trim_matches('\'').trim_matches('"');
         if !module.starts_with('.') { continue; }
         let dir = std::path::Path::new(file_path).parent().unwrap_or(std::path::Path::new("."));
         for ext in &["", ".ts", ".d.ts"] {
-            let resolved = dir.join(format!("{}{}", module, ext));
-            if let Ok(imported_content) = std::fs::read_to_string(&resolved) {
+            if let Ok(imported_content) = std::fs::read_to_string(dir.join(format!("{}{}", module, ext))) {
                 let base_props = extract_type_properties_with_file(&imported_content, type_name, None);
                 if !base_props.is_empty() {
-                    return base_props.into_iter().map(|(name, _)| {
-                        let offset = content.find(&format!("extends {}", type_name))
-                            .or_else(|| content.find(type_name))
-                            .unwrap_or(0);
-                        (name, offset)
-                    }).collect();
+                    let offset = content.find(&format!("extends {}", type_name))
+                        .or_else(|| content.find(type_name)).unwrap_or(0);
+                    return base_props.into_iter().map(|(name, _)| (name, offset)).collect();
                 }
             }
         }
@@ -461,17 +451,12 @@ fn strip_block_comments(s: &str) -> String {
     while i < bytes.len() {
         if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
             i += 2;
-            while i + 1 < bytes.len() {
-                if bytes[i] == b'*' && bytes[i + 1] == b'/' { i += 2; break; }
-                if bytes[i] == b'\n' {
-                    result.push('\n');
-                }
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                if bytes[i] == b'\n' { result.push('\n'); }
                 i += 1;
             }
-        } else {
-            result.push(bytes[i] as char);
-            i += 1;
-        }
+            if i + 1 < bytes.len() { i += 2; }
+        } else { result.push(bytes[i] as char); i += 1; }
     }
     result
 }
@@ -505,12 +490,7 @@ fn check_nested_properties(
 
             let access_prefix = format!("{}.{}", var_name, prop_name);
             for (sub_name, sub_offset) in &nested_props {
-                let dot_access = format!("{}.{}", access_prefix, sub_name);
-                let bracket_access = format!("{}['{}']", access_prefix, sub_name);
-                let bracket_access2 = format!("{}[\"{}\"]", access_prefix, sub_name);
-                if full_source.contains(&dot_access)
-                    || full_source.contains(&bracket_access)
-                    || full_source.contains(&bracket_access2) { continue; }
+                if has_prop_access(full_source, &access_prefix, sub_name) { continue; }
                 let src_pos = content_offset + sub_offset;
                 ctx.diagnostic(
                     format!("'{}' in '{}' is an unused property.", sub_name, prop_name),
