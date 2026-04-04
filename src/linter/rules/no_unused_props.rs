@@ -123,17 +123,10 @@ impl Rule for NoUnusedProps {
             }
         }
 
-        let has_index_sig = if let Some(ref tn) = type_name {
-            let patterns = [format!("interface {} ", tn), format!("type {} ", tn)];
-            patterns.iter().any(|p| {
-                if let Some(start) = content.find(p.as_str()) {
-                    if let Some(brace) = content[start..].find('{') {
-                        let block = &content[start + brace..];
-                        block.contains("[key:")
-                    } else { false }
-                } else { false }
-            })
-        } else { false };
+        let has_index_sig = type_name.as_ref().is_some_and(|tn| {
+            [format!("interface {} ", tn), format!("type {} ", tn)].iter().any(|p|
+                content.find(p.as_str()).and_then(|s| content[s..].find('{').map(|b| content[s + b..].contains("[key:"))).unwrap_or(false))
+        });
 
         if has_index_sig && !has_rest {
             let decl_line_start = content[..props_call].rfind('\n').map(|p| p + 1).unwrap_or(0);
@@ -273,17 +266,12 @@ fn extract_type_properties_with_file(content: &str, type_name: &str, file_path: 
         if let Some(brace_rel) = content[start..].find('{') {
             let before_brace = &content[start..start + brace_rel];
             if let Some(ext_pos) = before_brace.find("extends ") {
-                let extends_part = before_brace[ext_pos + 8..].trim();
-                for base in extends_part.split(',') {
-                    let base_name = base.trim();
-                    if base_name.is_empty() { continue; }
-                    let base_props = extract_type_properties_with_file(content, base_name, None);
-                    if !base_props.is_empty() {
-                        props.extend(base_props);
-                    } else if let Some(fp) = file_path {
-                        let imported_props = resolve_imported_type_properties(content, base_name, fp);
-                        props.extend(imported_props);
-                    }
+                for base in before_brace[ext_pos + 8..].trim().split(',') {
+                    let bn = base.trim();
+                    if bn.is_empty() { continue; }
+                    let bp = extract_type_properties_with_file(content, bn, None);
+                    if !bp.is_empty() { props.extend(bp); }
+                    else if let Some(fp) = file_path { props.extend(resolve_imported_type_properties(content, bn, fp)); }
                 }
             }
             extract_props_from_block(content, start + brace_rel, &mut props);
@@ -299,23 +287,15 @@ fn extract_type_properties_with_file(content: &str, type_name: &str, file_path: 
         let rhs = content[rhs_start..].trim_start();
 
         if rhs.contains('&') {
-            let type_end = find_type_end(rhs);
-            let type_expr = &rhs[..type_end];
-
-            let parts = split_at_depth0(type_expr, '&');
-            for part in &parts {
+            for part in &split_at_depth0(&rhs[..find_type_end(rhs)], '&') {
                 let part = part.trim();
                 if part.is_empty() { continue; }
                 if part.starts_with('{') {
-                    let block_start = rhs_start + (content[rhs_start..].find(part).unwrap_or(0));
-                    extract_props_from_block(content, block_start, &mut props);
+                    extract_props_from_block(content, rhs_start + content[rhs_start..].find(part).unwrap_or(0), &mut props);
                 } else {
-                    let ref_name = part.split(|c: char| !c.is_alphanumeric() && c != '_').next().unwrap_or("");
-                    if !ref_name.is_empty() && ref_name != type_name {
-                        let ref_props = extract_type_properties_with_file(content, ref_name, file_path);
-                        if !ref_props.is_empty() {
-                            props.extend(ref_props);
-                        }
+                    let rn = part.split(|c: char| !c.is_alphanumeric() && c != '_').next().unwrap_or("");
+                    if !rn.is_empty() && rn != type_name {
+                        props.extend(extract_type_properties_with_file(content, rn, file_path));
                     }
                 }
             }
@@ -471,33 +451,19 @@ fn extract_option_patterns(options: &Option<serde_json::Value>, key: &str) -> Ve
         .unwrap_or_default()
 }
 
-fn check_nested_properties(
-    content: &str, content_offset: usize, full_source: &str,
-    var_name: &str, prop_name: &str, ctx: &mut LintContext<'_>,
-) {
-    let prop_pattern = format!("{}: {{", prop_name);
-    let prop_pattern_opt = format!("{}?: {{", prop_name);
-
-    let prop_pos = content.find(&prop_pattern)
-        .or_else(|| content.find(&prop_pattern_opt));
-
-    if let Some(pos) = prop_pos {
-        let brace_start = content[pos..].find('{').map(|p| pos + p);
-        if let Some(brace_start) = brace_start {
-            let mut nested_props = Vec::new();
-            extract_props_from_block(content, brace_start, &mut nested_props);
-            if nested_props.is_empty() { return; }
-
-            let access_prefix = format!("{}.{}", var_name, prop_name);
-            for (sub_name, sub_offset) in &nested_props {
-                if has_prop_access(full_source, &access_prefix, sub_name) { continue; }
-                let src_pos = content_offset + sub_offset;
-                ctx.diagnostic(
-                    format!("'{}' in '{}' is an unused property.", sub_name, prop_name),
-                    oxc::span::Span::new(src_pos as u32, (src_pos + sub_name.len()) as u32),
-                );
-            }
-        }
+fn check_nested_properties(content: &str, content_offset: usize, full_source: &str, var_name: &str, prop_name: &str, ctx: &mut LintContext<'_>) {
+    let Some(pos) = content.find(&format!("{}: {{", prop_name))
+        .or_else(|| content.find(&format!("{}?: {{", prop_name))) else { return };
+    let Some(bs) = content[pos..].find('{').map(|p| pos + p) else { return };
+    let mut nested = Vec::new();
+    extract_props_from_block(content, bs, &mut nested);
+    if nested.is_empty() { return; }
+    let prefix = format!("{}.{}", var_name, prop_name);
+    for (sub_name, sub_offset) in &nested {
+        if has_prop_access(full_source, &prefix, sub_name) { continue; }
+        let sp = content_offset + sub_offset;
+        ctx.diagnostic(format!("'{}' in '{}' is an unused property.", sub_name, prop_name),
+            oxc::span::Span::new(sp as u32, (sp + sub_name.len()) as u32));
     }
 }
 
