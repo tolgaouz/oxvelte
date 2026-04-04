@@ -373,25 +373,16 @@ fn extract_func_name(line: &str) -> Option<String> {
 }
 
 fn is_direct_function_expr(after: &str) -> bool {
-    if after.starts_with("function") || after.starts_with("async") {
-        return true;
-    }
+    if after.starts_with("function") || after.starts_with("async") { return true; }
     if after.starts_with('(') {
         let mut depth = 0i32;
         for (i, ch) in after.char_indices() {
             match ch {
                 '(' => depth += 1,
-                ')' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        let rest = after[i + 1..].trim_start();
-                        if rest.starts_with("=>") { return true; }
-                        if rest.starts_with(':') && rest.contains("=>") {
-                            return true;
-                        }
-                        return false;
-                    }
-                }
+                ')' => { depth -= 1; if depth == 0 {
+                    let rest = after[i + 1..].trim_start();
+                    return rest.starts_with("=>") || (rest.starts_with(':') && rest.contains("=>"));
+                }}
                 _ => {}
             }
         }
@@ -641,34 +632,22 @@ fn block_has_var_ref(block: &str, var: &str) -> bool {
 fn block_reads_var(block: &str, var: &str) -> bool {
     for line in block.lines() {
         let t = line.trim();
-        if t.is_empty() || t.starts_with("//") || t.starts_with("$:") { continue; }
-        if !t.contains(var) { continue; }
-
-        let count = t.match_indices(var)
-            .filter(|(pos, _)| is_word_start(t, *pos))
-            .count();
+        if t.is_empty() || t.starts_with("//") || t.starts_with("$:") || !t.contains(var) { continue; }
+        let count = t.match_indices(var).filter(|(pos, _)| is_word_start(t, *pos)).count();
         if count == 0 { continue; }
-
         if count > 1 { return true; }
-
-        let simple_assign = find_var_op(t, var, " = ").is_some_and(|pos| {
-            let a = pos + var.len() + 3;
-            a >= t.len() || t.as_bytes()[a] != b'='
-        });
-        let member_assign = has_member_assign(t, var, &[" = ", " += ", " -= ", " *= ", " /= "]);
-        if simple_assign || member_assign {
-            continue; // write-only
-        }
-
-        return true;
+        let write_only = find_var_op(t, var, " = ").is_some_and(|pos| {
+            pos + var.len() + 3 >= t.len() || t.as_bytes()[pos + var.len() + 3] != b'='
+        }) || has_member_assign(t, var, &[" = ", " += ", " -= ", " *= ", " /= "]);
+        if !write_only { return true; }
     }
     false
 }
 
 fn is_in_async_callback(block: &str, pos: usize, all_triggers: &[String]) -> bool {
     let before = &block[..pos.min(block.len())];
-    let mut pd = 0i32;
     let bytes = before.as_bytes();
+    let mut pd = 0i32;
     let mut i = bytes.len();
     while i > 0 {
         i -= 1;
@@ -677,14 +656,10 @@ fn is_in_async_callback(block: &str, pos: usize, all_triggers: &[String]) -> boo
             b'(' if pd > 0 => pd -= 1,
             b'(' => {
                 let bp = before[..i].trim_end();
-                for trigger in all_triggers {
-                    if bp.ends_with(trigger.as_str()) {
-                        let s = bp.len() - trigger.len();
-                        if s == 0 || !matches!(bp.as_bytes()[s-1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$') {
-                            return true;
-                        }
-                    }
-                }
+                if all_triggers.iter().any(|t| bp.ends_with(t.as_str()) && {
+                    let s = bp.len() - t.len();
+                    s == 0 || !matches!(bp.as_bytes()[s-1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$')
+                }) { return true; }
             }
             _ => {}
         }
@@ -696,11 +671,8 @@ fn has_await_on_prev_line(block: &str, line_start_pos: usize) -> bool {
     let before = &block[..line_start_pos.min(block.len())];
     if !before.contains("async ") && !before.contains("async(") { return false; }
     let bytes = before.as_bytes();
-    let mut depth = 0i32;
-    let mut in_str = false;
-    let mut sch = b'"';
-    let mut async_body_depth = 0i32;
-    let mut await_positions = Vec::new();
+    let (mut depth, mut in_str, mut sch, mut abd) = (0i32, false, b'"', 0i32);
+    let mut min_await_depth = i32::MAX;
     for i in 0..bytes.len() {
         if in_str {
             if bytes[i] == sch && (i == 0 || bytes[i-1] != b'\\') { in_str = false; }
@@ -712,15 +684,11 @@ fn has_await_on_prev_line(block: &str, line_start_pos: usize) -> bool {
             b'}' => depth -= 1,
             _ => {}
         }
-        if i + 6 <= bytes.len() && &before[i..i+6] == "async " {
-            async_body_depth = depth + 1;
-        }
-        if depth >= async_body_depth && i + 6 <= bytes.len() && &before[i..i+6] == "await "
-            && (i == 0 || !bytes[i-1].is_ascii_alphanumeric()) {
-            await_positions.push(depth);
-        }
+        if i + 6 <= bytes.len() && &before[i..i+6] == "async " { abd = depth + 1; }
+        if depth >= abd && i + 6 <= bytes.len() && &before[i..i+6] == "await "
+            && (i == 0 || !bytes[i-1].is_ascii_alphanumeric()) { min_await_depth = min_await_depth.min(depth); }
     }
-    await_positions.iter().any(|&d| d <= depth)
+    min_await_depth <= depth
 }
 
 fn skip_string_raw(bytes: &[u8], start: usize) -> usize {
@@ -855,45 +823,24 @@ fn report_call_in_body(ctx: &mut LintContext, body: &str, body_offset: usize, ca
     }
 }
 
-fn report_intermediate_calls(
-    ctx: &mut LintContext,
-    fi: &FuncInfo,
-    func_info: &[FuncInfo],
-    pos_var: &str,
-    base: usize,
-) {
+fn report_intermediate_calls(ctx: &mut LintContext, fi: &FuncInfo, func_info: &[FuncInfo], pos_var: &str, base: usize) {
     let (body_start, body_end) = fi.body_range;
     if body_end > ctx.source.len().saturating_sub(base) { return; }
     let body = &ctx.source[base + body_start..base + body_end];
-
     let mut reported = std::collections::HashSet::new();
-    let mut stack: Vec<&str> = Vec::new();
-    for callee_name in fi.all_calls.iter().chain(fi.calls_after_await.iter()) {
-        if !stack.contains(&callee_name.as_str()) {
-            stack.push(callee_name.as_str());
-        }
-    }
-
+    let mut stack: Vec<&str> = fi.all_calls.iter().chain(fi.calls_after_await.iter())
+        .map(|s| s.as_str()).collect::<std::collections::HashSet<_>>().into_iter().collect();
     while let Some(callee_name) = stack.pop() {
-        if reported.contains(callee_name) { continue; }
-        let callee_fi = match func_info.iter().find(|cf| cf.name == callee_name) {
-            Some(cf) => cf,
-            None => continue,
-        };
+        if !reported.insert(callee_name) { continue; }
+        let Some(callee_fi) = func_info.iter().find(|cf| cf.name == callee_name) else { continue };
         if !callee_fi.assigns.contains(&pos_var.to_string()) { continue; }
-
         report_call_in_body(ctx, body, base + body_start, callee_name, pos_var);
-        reported.insert(callee_name);
-
         let (cb_start, cb_end) = callee_fi.body_range;
         if cb_end <= ctx.source.len().saturating_sub(base) {
             let callee_body = &ctx.source[base + cb_start..base + cb_end];
             for deeper_callee in callee_fi.all_calls.iter() {
                 if reported.contains(deeper_callee.as_str()) { continue; }
-                let deeper_fi = match func_info.iter().find(|cf| cf.name == *deeper_callee) {
-                    Some(cf) => cf,
-                    None => continue,
-                };
+                let Some(deeper_fi) = func_info.iter().find(|cf| cf.name == *deeper_callee) else { continue };
                 if !deeper_fi.assigns.contains(&pos_var.to_string()) { continue; }
                 report_call_in_body(ctx, callee_body, base + cb_start, deeper_callee, pos_var);
                 reported.insert(deeper_callee.as_str());
@@ -968,14 +915,15 @@ fn analyze_block(
     for l in &lines { line_offsets.push(off); off += l.len() + 1; }
 
     let mut reported_funcs: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let s = |p: usize| Span::new(p as u32, p as u32 + 1);
+    let fmsg = |v: &str| format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", v);
+    const LOOP_MSG: &str = "Possibly it may occur an infinite reactive loop.";
 
     for (idx, line) in lines.iter().enumerate() {
         let t = line.trim();
         if t.is_empty() || t.starts_with("//") { continue; }
         let is_dollar_line = t.starts_with("$:");
-
         let line_byte_start = line_offsets[idx];
-
         let in_callback = is_in_async_callback(block, line_byte_start, &all_triggers);
         let after_await = has_await_on_prev_line(block, line_byte_start);
         let in_then_catch = is_in_effective_then_catch(&async_callback_regions, line_byte_start);
@@ -983,60 +931,32 @@ fn analyze_block(
         let line_overlaps_then_catch = async_callback_regions.iter()
             .any(|&(start, end)| start < line_end && end > line_byte_start);
         let in_async_ctx = in_callback || after_await || in_then_catch;
+        let line_base = base + block_start + line_offsets[idx] + line.len() - t.len();
 
         if in_async_ctx && !is_dollar_line {
             for var in top_vars {
-                if local_names.contains(var) { continue; }
-                if !tracked_vars.contains(var.as_str()) { continue; }
-                if !has_assign(t, var) { continue; }
-
-                let indent = line.len() - t.len();
-                let abs = base + block_start + line_offsets[idx] + indent;
-                ctx.diagnostic(
-                    format!("Possibly it may occur an infinite reactive loop because `{}` is updated in an async callback.", var),
-                    Span::new(abs as u32, abs as u32 + 1),
-                );
+                if local_names.contains(var) || !tracked_vars.contains(var.as_str()) || !has_assign(t, var) { continue; }
+                ctx.diagnostic(format!("Possibly it may occur an infinite reactive loop because `{}` is updated in an async callback.", var), s(line_base));
             }
 
             for fi in func_info {
-                if fi.assigns.is_empty() { continue; }
-                if local_names.contains(&fi.name) { continue; }
-                if reported_funcs.contains(&fi.name) { continue; }
+                if fi.assigns.is_empty() || local_names.contains(&fi.name) || reported_funcs.contains(&fi.name) { continue; }
                 let call_pat = format!("{}(", fi.name);
                 if !t.contains(&call_pat) { continue; }
-
                 for av in &fi.assigns {
                     if tracked_vars.contains(av.as_str()) && block_has_var_ref(block, av) {
-                        let indent = line.len() - t.len();
-                        let call_col = t.find(&call_pat).unwrap_or(0);
-                        let abs = base + block_start + line_offsets[idx] + indent + call_col;
-                        ctx.diagnostic(
-                            format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", av),
-                            Span::new(abs as u32, abs as u32 + 1),
-                        );
-                        for (pos_var, pos_offset) in &fi.all_assign_positions {
-                            if pos_var == av {
-                                let abs = base + pos_offset;
-                                ctx.diagnostic(
-                                    "Possibly it may occur an infinite reactive loop.".to_string(),
-                                    Span::new(abs as u32, abs as u32 + 1),
-                                );
-                            }
+                        ctx.diagnostic(fmsg(av), s(line_base + t.find(&call_pat).unwrap_or(0)));
+                        for (pv, po) in &fi.all_assign_positions {
+                            if pv == av { ctx.diagnostic(LOOP_MSG.to_string(), s(base + po)); }
                         }
                         if after_await {
-                            let (body_start, body_end) = fi.body_range;
-                            if body_end <= ctx.source.len().saturating_sub(base) {
-                                let body = &ctx.source[base + body_start..base + body_end];
-                                let assign_pat = format!("{} = ", av);
-                                for (pos, _) in body.match_indices(&assign_pat) {
-                                    if is_word_start(body, pos) {
-                                        let after_eq = pos + assign_pat.len();
-                                        if after_eq < body.len() && body.as_bytes()[after_eq] == b'=' { continue; }
-                                        let abs_pos = base + body_start + pos;
-                                        ctx.diagnostic(
-                                            "Possibly it may occur an infinite reactive loop.".to_string(),
-                                            Span::new(abs_pos as u32, abs_pos as u32 + 1),
-                                        );
+                            let (bs, be) = fi.body_range;
+                            if be <= ctx.source.len().saturating_sub(base) {
+                                let body = &ctx.source[base + bs..base + be];
+                                let ap = format!("{} = ", av);
+                                for (pos, _) in body.match_indices(&ap) {
+                                    if is_word_start(body, pos) && !(pos + ap.len() < body.len() && body.as_bytes()[pos + ap.len()] == b'=') {
+                                        ctx.diagnostic(LOOP_MSG.to_string(), s(base + bs + pos));
                                     }
                                 }
                             }
@@ -1051,32 +971,16 @@ fn analyze_block(
         if !in_async_ctx {
             for fi in func_info {
                 if !fi.has_await && !fi.has_then_catch_assigns { continue; }
-                if fi.assigns_after_await.is_empty() { continue; }
-                if local_names.contains(&fi.name) { continue; }
-                if reported_funcs.contains(&fi.name) { continue; }
+                if fi.assigns_after_await.is_empty() || local_names.contains(&fi.name) || reported_funcs.contains(&fi.name) { continue; }
                 let call_pat = format!("{}(", fi.name);
                 if !t.contains(&call_pat) { continue; }
                 if let Some(cp) = t.find(&call_pat) {
-                    if cp > 0 {
-                        let prev = t.as_bytes()[cp - 1];
-                        if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' { continue; }
-                    }
+                    if !is_word_start(t, cp) { continue; }
                 }
-
                 for (pos_var, pos_offset) in &fi.assign_positions_after_await {
                     if tracked_vars.contains(pos_var.as_str()) && block_has_var_ref(block, pos_var) {
-                        let indent = line.len() - t.len();
-                        let call_col = t.find(&call_pat).unwrap_or(0);
-                        let abs = base + block_start + line_offsets[idx] + indent + call_col;
-                        ctx.diagnostic(
-                            format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", pos_var),
-                            Span::new(abs as u32, abs as u32 + 1),
-                        );
-                        let abs = base + pos_offset;
-                        ctx.diagnostic(
-                            format!("Possibly it may occur an infinite reactive loop because `{}` is updated here.", pos_var),
-                            Span::new(abs as u32, abs as u32 + 1),
-                        );
+                        ctx.diagnostic(fmsg(pos_var), s(line_base + t.find(&call_pat).unwrap_or(0)));
+                        ctx.diagnostic(format!("Possibly it may occur an infinite reactive loop because `{}` is updated here.", pos_var), s(base + pos_offset));
                         report_intermediate_calls(ctx, fi, func_info, pos_var, base);
                     }
                 }
@@ -1086,18 +990,11 @@ fn analyze_block(
 
         if !in_async_ctx && line_overlaps_then_catch {
             for var in top_vars {
-                if local_names.contains(var) { continue; }
-                if !has_assign(t, var) { continue; }
+                if local_names.contains(var) || !has_assign(t, var) { continue; }
                 if let Some(assign_pos) = find_assign_pos(t, var) {
-                    let indent = line.len() - t.len();
-                    let abs_pos_in_block = line_byte_start + indent + assign_pos;
-                    let in_region = is_in_effective_then_catch(&async_callback_regions, abs_pos_in_block);
-                    if in_region {
-                        let abs = base + block_start + abs_pos_in_block;
-                        ctx.diagnostic(
-                            "Possibly it may occur an infinite reactive loop.".to_string(),
-                            Span::new(abs as u32, abs as u32 + 1),
-                        );
+                    let abs_in_block = line_byte_start + line.len() - t.len() + assign_pos;
+                    if is_in_effective_then_catch(&async_callback_regions, abs_in_block) {
+                        ctx.diagnostic(LOOP_MSG.to_string(), s(base + block_start + abs_in_block));
                     }
                 }
             }
@@ -1105,20 +1002,11 @@ fn analyze_block(
 
         if t.contains("await ") {
             for fi in func_info {
-                if fi.assigns.is_empty() { continue; }
-                if local_names.contains(&fi.name) { continue; }
-                let await_call = format!("await {}(", fi.name);
-                if !t.contains(&await_call) { continue; }
-
+                if fi.assigns.is_empty() || local_names.contains(&fi.name) { continue; }
+                if !t.contains(&format!("await {}(", fi.name)) { continue; }
                 for av in &fi.assigns {
                     if block_reads_var(block, av) {
-                        let indent = line.len() - t.len();
-                        let call_col = t.find(&format!("{}(", fi.name)).unwrap_or(0);
-                        let abs = base + block_start + line_offsets[idx] + indent + call_col;
-                        ctx.diagnostic(
-                            format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", av),
-                            Span::new(abs as u32, abs as u32 + 1),
-                        );
+                        ctx.diagnostic(fmsg(av), s(line_base + t.find(&format!("{}(", fi.name)).unwrap_or(0)));
                         break;
                     }
                 }
@@ -1126,20 +1014,11 @@ fn analyze_block(
 
             if !in_async_ctx {
                 for var in top_vars {
-                    if local_names.contains(var) { continue; }
-                    if !has_assign(t, var) { continue; }
-
+                    if local_names.contains(var) || !has_assign(t, var) { continue; }
                     if let Some(assign_pos) = find_assign_pos(t, var) {
                         if let Some(await_pos) = t.find("await ") {
-                            let across = assign_pos < await_pos
-                                || (assign_pos > await_pos && t[await_pos..assign_pos].contains(','));
-                            if across {
-                                let indent = line.len() - t.len();
-                                let abs = base + block_start + line_offsets[idx] + indent + assign_pos;
-                                ctx.diagnostic(
-                                    format!("Possibly it may occur an infinite reactive loop because `{}` is updated across an await boundary.", var),
-                                    Span::new(abs as u32, abs as u32 + 1),
-                                );
+                            if assign_pos < await_pos || (assign_pos > await_pos && t[await_pos..assign_pos].contains(',')) {
+                                ctx.diagnostic(format!("Possibly it may occur an infinite reactive loop because `{}` is updated across an await boundary.", var), s(line_base + assign_pos));
                             }
                         }
                     }
