@@ -161,21 +161,9 @@ impl Rule for NoReactiveReassign {
                 }
             }
 
+            let suffixes: &[&str] = &[" =", "=", "++", "--", " +=", " -=", " *=", " /=", " %=", " &&=", " ||=", " ??="];
             for var in &reactive_vars {
-                let patterns = [
-                    format!("{} =", var),
-                    format!("{}=", var),
-                    format!("{}++", var),
-                    format!("{}--", var),
-                    format!("{} +=", var),
-                    format!("{} -=", var),
-                    format!("{} *=", var),
-                    format!("{} /=", var),
-                    format!("{} %=", var),
-                    format!("{} &&=", var),
-                    format!("{} ||=", var),
-                    format!("{} ??=", var),
-                ];
+                let patterns: Vec<String> = suffixes.iter().map(|s| format!("{}{}", var, s)).collect();
                 for pattern in &patterns {
                     let mut search_from = 0;
                     while let Some(pos) = content[search_from..].find(pattern.as_str()) {
@@ -519,17 +507,9 @@ impl Rule for NoReactiveReassign {
                         };
                         if let Some(span) = expr_span {
                             let region = &ctx.source[span.start as usize..span.end as usize];
+                            let tmpl_suffixes: &[&str] = &[" = ", " += ", " -= ", " *= ", " /= ", " %= ", "++", "--"];
                             for var in &reactive_vars {
-                                let pats = [
-                                    format!("{} = ", var),
-                                    format!("{} += ", var),
-                                    format!("{} -= ", var),
-                                    format!("{} *= ", var),
-                                    format!("{} /= ", var),
-                                    format!("{} %= ", var),
-                                    format!("{}++", var),
-                                    format!("{}--", var),
-                                ];
+                                let pats: Vec<String> = tmpl_suffixes.iter().map(|s| format!("{}{}", var, s)).collect();
                                 'next_var: for pat in &pats {
                                     for (pos, _) in region.match_indices(pat.as_str()) {
                                         if pos > 0 {
