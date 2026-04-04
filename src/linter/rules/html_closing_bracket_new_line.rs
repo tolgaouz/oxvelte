@@ -88,11 +88,9 @@ impl Rule for HtmlClosingBracketNewLine {
                 let close_line_breaks = close_before_bracket.chars().filter(|&c| c == '\n').count();
                 if close_line_breaks > 0 {
                     let abs_pos = span.start + close_start as u32;
-                    ctx.diagnostic(
-                        format!("Expected no line breaks before closing bracket, but {} line break{} found.",
+                    ctx.diagnostic(format!("Expected no line breaks before closing bracket, but {} line break{} found.",
                             close_line_breaks, if close_line_breaks != 1 { "s" } else { "" }),
-                        oxc::span::Span::new(abs_pos, abs_pos + close_name_end as u32 + 1),
-                    );
+                        oxc::span::Span::new(abs_pos, abs_pos + close_name_end as u32 + 1));
                 }
             }
 
@@ -113,11 +111,9 @@ impl Rule for HtmlClosingBracketNewLine {
                 ctx.diagnostic(msg, oxc::span::Span::new(abs_pos, abs_pos + bracket_len));
             } else if !expect_newline && line_breaks > 0 {
                 let abs_pos = span.start + bracket_start as u32;
-                ctx.diagnostic(
-                    format!("Expected no line breaks before closing bracket, but {} line break{} found.",
+                ctx.diagnostic(format!("Expected no line breaks before closing bracket, but {} line break{} found.",
                         line_breaks, if line_breaks != 1 { "s" } else { "" }),
-                    oxc::span::Span::new(abs_pos, abs_pos + bracket_len),
-                );
+                    oxc::span::Span::new(abs_pos, abs_pos + bracket_len));
             }
         });
     }

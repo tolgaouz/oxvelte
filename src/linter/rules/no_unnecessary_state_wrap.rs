@@ -80,10 +80,8 @@ impl Rule for NoUnnecessaryStateWrap {
                     if should_flag {
                         if let Some(gt) = source[tag_start..script.span.end as usize].find('>') {
                             let source_pos = tag_start + gt + 1 + abs_pos;
-                            ctx.diagnostic(
-                                format!("{} is already reactive, $state wrapping is unnecessary.", original),
-                                oxc::span::Span::new(source_pos as u32, (source_pos + 7) as u32),
-                            );
+                            ctx.diagnostic(format!("{} is already reactive, $state wrapping is unnecessary.", original),
+                                oxc::span::Span::new(source_pos as u32, (source_pos + 7) as u32));
                         }
                     }
                 }

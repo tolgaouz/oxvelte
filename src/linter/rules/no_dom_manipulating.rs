@@ -68,10 +68,8 @@ impl Rule for NoDomManipulating {
                     if is_method || is_prop {
                         let source_pos = content_offset + abs;
                         let end = source_pos + prefix.len() + after.find('(').or_else(|| after.find('=')).unwrap_or(4);
-                        ctx.diagnostic(
-                            "Don't manipulate the DOM directly. The Svelte runtime can get confused if there is a difference between the actual DOM and the DOM expected by the Svelte runtime.",
-                            oxc::span::Span::new(source_pos as u32, end as u32),
-                        );
+                        ctx.diagnostic("Don't manipulate the DOM directly. The Svelte runtime can get confused if there is a difference between the actual DOM and the DOM expected by the Svelte runtime.",
+                            oxc::span::Span::new(source_pos as u32, end as u32));
                     }
                     search_from = abs + prefix.len();
                 }

@@ -292,10 +292,8 @@ fn flag_selectors_in_text(
                     let suggested = if is_class { check_class(name) } else { check_id(name) };
                     if let Some(suggested) = suggested {
                         let kind = if is_class { "class" } else { "ID" };
-                        ctx.diagnostic(
-                            format!("Selector should select by {} instead of {}", suggested, kind),
-                            Span::new((base_offset + prefix_pos) as u32, (base_offset + pos) as u32),
-                        );
+                        ctx.diagnostic(format!("Selector should select by {} instead of {}", suggested, kind),
+                            Span::new((base_offset + prefix_pos) as u32, (base_offset + pos) as u32));
                     }
                 }
             }
@@ -330,10 +328,8 @@ fn flag_selectors_in_text(
                 let name = &text[start..pos];
                 if element_selectors.contains(&name) {
                     if let Some(suggested) = check_type(name) {
-                        ctx.diagnostic(
-                            format!("Selector should select by {} instead of element type", suggested),
-                            Span::new((base_offset + start) as u32, (base_offset + pos) as u32),
-                        );
+                        ctx.diagnostic(format!("Selector should select by {} instead of element type", suggested),
+                            Span::new((base_offset + start) as u32, (base_offset + pos) as u32));
                     }
                 }
             }

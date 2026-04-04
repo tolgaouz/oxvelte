@@ -30,10 +30,8 @@ impl Rule for RequireEventPrefix {
         for (prop_name, prop_offset) in &fn_props {
             if !prop_name.starts_with("on") {
                 let src_pos = content_offset + prop_offset;
-                ctx.diagnostic(
-                    "Component event name must start with \"on\".",
-                    oxc::span::Span::new(src_pos as u32, (src_pos + prop_name.len()) as u32),
-                );
+                ctx.diagnostic("Component event name must start with \"on\".",
+                    oxc::span::Span::new(src_pos as u32, (src_pos + prop_name.len()) as u32));
             }
         }
     }
