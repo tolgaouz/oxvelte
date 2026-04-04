@@ -171,7 +171,7 @@ impl PreferSvelteReactivity {
                 None => {
                     if let Some(var_name) = &var_name_fallback {
                         if var_name.starts_with('$') { continue; }
-                        if has_mutation_pattern(ctx.source, var_name, builtin) {
+                        if check_mutation_in(ctx.source, var_name, builtin, None) {
                             let abs = content_offset + new_expr.span.start as usize;
                             let end = content_offset + new_expr.span.end as usize;
                             ctx.diagnostic(mutable_class_msg(builtin), Span::new(abs as u32, end as u32));
@@ -193,14 +193,14 @@ impl PreferSvelteReactivity {
                 && scoping.symbol_scope_id(symbol_id) == scoping.root_scope_id()
             {
                 let var_name = scoping.symbol_name(symbol_id);
-                let mut found = is_mutated_in_template(ctx.source, content, var_name, builtin);
+                let mut found = check_mutation_in(ctx.source, var_name, builtin, Some(content));
                 if !found {
                     for ref_id in scoping.get_resolved_references(symbol_id) {
                         if !ref_id.is_read() { continue; }
                         let (downstream_sym, _) = find_target_symbol_or_name(nodes, scoping, ref_id.node_id());
                         if let Some(ds) = downstream_sym {
                             let ds_name = scoping.symbol_name(ds);
-                            if is_mutated_in_template(ctx.source, content, ds_name, builtin) {
+                            if check_mutation_in(ctx.source, ds_name, builtin, Some(content)) {
                                 found = true;
                                 break;
                             }
@@ -250,41 +250,18 @@ fn is_directly_mutated(
     builtin: &BuiltinClass,
 ) -> bool {
     use oxc::ast::AstKind;
-
     let mut current = new_expr_id;
-    loop {
-        let parent_id = nodes.parent_id(current);
-        match nodes.kind(parent_id) {
-            AstKind::ParenthesizedExpression(_)
-            | AstKind::LogicalExpression(_)
-            | AstKind::ConditionalExpression(_) => {
-                current = parent_id;
-                continue;
-            }
-            _ => break,
-        }
+    while matches!(nodes.kind(nodes.parent_id(current)),
+        AstKind::ParenthesizedExpression(_) | AstKind::LogicalExpression(_) | AstKind::ConditionalExpression(_)) {
+        current = nodes.parent_id(current);
     }
-
     let parent_id = nodes.parent_id(current);
-    let method_name = match nodes.kind(parent_id) {
-        AstKind::StaticMemberExpression(member) => Some(member.property.name.as_str()),
-        _ => None,
-    };
-    if let Some(name) = method_name {
-        if builtin.mutating_methods.contains(&name) {
-            let grandparent_id = nodes.parent_id(parent_id);
-            if matches!(nodes.kind(grandparent_id), AstKind::CallExpression(_)) {
-                return true;
-            }
-        }
-        if builtin.mutating_props.contains(&name) {
-            let grandparent_id = nodes.parent_id(parent_id);
-            if matches!(nodes.kind(grandparent_id), AstKind::AssignmentExpression(_)) {
-                return true;
-            }
-        }
-    }
-    false
+    if let AstKind::StaticMemberExpression(member) = nodes.kind(parent_id) {
+        let prop = member.property.name.as_str();
+        let gp = nodes.parent_id(parent_id);
+        (builtin.mutating_methods.contains(&prop) && matches!(nodes.kind(gp), AstKind::CallExpression(_)))
+            || (builtin.mutating_props.contains(&prop) && matches!(nodes.kind(gp), AstKind::AssignmentExpression(_)))
+    } else { false }
 }
 
 fn is_inside_state_call(
@@ -358,27 +335,16 @@ fn is_symbol_mutated(
 ) -> bool {
     use oxc::ast::AstKind;
     use oxc::span::GetSpan;
-
     for reference in scoping.get_resolved_references(symbol_id) {
         if !reference.is_read() { continue; }
-
         let parent_id = nodes.parent_id(reference.node_id());
         if let AstKind::StaticMemberExpression(member) = nodes.kind(parent_id) {
             let prop = member.property.name.as_str();
-
-            if builtin.mutating_methods.contains(&prop) {
-                let gp = nodes.parent_id(parent_id);
-                if matches!(nodes.kind(gp), AstKind::CallExpression(_)) {
-                    return true;
-                }
-            }
-
+            let gp = nodes.parent_id(parent_id);
+            if builtin.mutating_methods.contains(&prop) && matches!(nodes.kind(gp), AstKind::CallExpression(_)) { return true; }
             if builtin.mutating_props.contains(&prop) {
-                let gp = nodes.parent_id(parent_id);
                 if let AstKind::AssignmentExpression(assign) = nodes.kind(gp) {
-                    if member.span.start == assign.left.span().start {
-                        return true;
-                    }
+                    if member.span.start == assign.left.span().start { return true; }
                 }
             }
         }
@@ -432,35 +398,18 @@ fn is_transitively_mutated(
     false
 }
 
-fn has_mutation_pattern(text: &str, var_name: &str, builtin: &BuiltinClass) -> bool {
+fn check_mutation_in(text: &str, var_name: &str, builtin: &BuiltinClass, exclude: Option<&str>) -> bool {
     for method in builtin.mutating_methods {
         let pat = format!("{}.{}(", var_name, method);
-        if find_word_boundary_pos(text, &pat).is_some() { return true; }
+        if find_word_boundary_pos(text, &pat).is_some() {
+            if exclude.is_none_or(|ex| find_word_boundary_pos(ex, &pat).is_none()) { return true; }
+        }
     }
     for prop in builtin.mutating_props {
         let pat = format!("{}.{} =", var_name, prop);
         if let Some(pos) = find_word_boundary_pos(text, &pat) {
-            if !text[pos + pat.len()..].starts_with('=') { return true; }
-        }
-    }
-    false
-}
-
-fn is_mutated_in_template(
-    source: &str, script_content: &str, var_name: &str, builtin: &BuiltinClass,
-) -> bool {
-    for method in builtin.mutating_methods {
-        let pat = format!("{}.{}(", var_name, method);
-        if find_word_boundary_pos(source, &pat).is_some() && find_word_boundary_pos(script_content, &pat).is_none() {
-            return true;
-        }
-    }
-    for prop in builtin.mutating_props {
-        let pat = format!("{}.{} =", var_name, prop);
-        if let Some(pos) = find_word_boundary_pos(source, &pat) {
-            if !source[pos + pat.len()..].starts_with('=') && find_word_boundary_pos(script_content, &pat).is_none() {
-                return true;
-            }
+            if !text[pos + pat.len()..].starts_with('=')
+                && exclude.is_none_or(|ex| find_word_boundary_pos(ex, &pat).is_none()) { return true; }
         }
     }
     false
@@ -469,15 +418,11 @@ fn is_mutated_in_template(
 fn find_word_boundary_pos(content: &str, pat: &str) -> Option<usize> {
     let mut start = 0;
     while let Some(pos) = content[start..].find(pat) {
-        let abs_pos = start + pos;
-        if abs_pos == 0 {
-            return Some(abs_pos);
+        let abs = start + pos;
+        if abs == 0 || !matches!(content.as_bytes()[abs - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$') {
+            return Some(abs);
         }
-        let prev = content.as_bytes()[abs_pos - 1];
-        if !prev.is_ascii_alphanumeric() && prev != b'_' && prev != b'$' {
-            return Some(abs_pos);
-        }
-        start = abs_pos + 1;
+        start = abs + 1;
     }
     None
 }
