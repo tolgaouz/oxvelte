@@ -324,93 +324,47 @@ fn collect_reactive_stmts(content: &str) -> Vec<(usize, &str)> {
 fn find_statement_end(content: &str, start: usize) -> usize {
     let bytes = content.as_bytes();
     let mut i = start;
-    if i + 2 <= bytes.len() && &content[i..i+2] == "$:" {
-        i += 2;
-    }
-    let after = content[i..].trim_start();
-    i = content.len() - after.len();
-
-    let mut depth_brace = 0i32;
-    let mut depth_paren = 0i32;
-    let mut depth_bracket = 0i32;
-
+    if i + 2 <= bytes.len() && &content[i..i+2] == "$:" { i += 2; }
+    i = content.len() - content[i..].trim_start().len();
+    let mut db = 0i32;
+    let mut dp = 0i32;
+    let mut dk = 0i32;
     while i < bytes.len() {
         match bytes[i] {
-            // Skip // line comments (treat as transparent — don't end statement)
             b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
-                // Skip to end of line AND past the newline
                 while i < bytes.len() && bytes[i] != b'\n' { i += 1; }
-                if i < bytes.len() { i += 1; } // skip the \n itself
-                continue;
-            }
-            b'\'' | b'"' => {
-                let q = bytes[i];
-                i += 1;
-                while i < bytes.len() && bytes[i] != q {
-                    if bytes[i] == b'\\' { i += 1; }
-                    i += 1;
-                }
                 if i < bytes.len() { i += 1; }
                 continue;
             }
-            b'`' => {
-                i += 1;
-                while i < bytes.len() && bytes[i] != b'`' {
-                    if bytes[i] == b'\\' { i += 1; }
-                    else if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-                        i += 2;
-                        let mut d = 1;
-                        while i < bytes.len() && d > 0 {
-                            if bytes[i] == b'{' { d += 1; }
-                            if bytes[i] == b'}' { d -= 1; }
-                            if d > 0 { i += 1; }
-                        }
-                    }
-                    i += 1;
-                }
-                if i < bytes.len() { i += 1; }
-                continue;
-            }
-            b'{' => depth_brace += 1,
+            b'\'' | b'"' => { i = skip_simple_string(bytes, i); continue; }
+            b'`' => { let (end, _) = skip_template_literal(bytes, i); i = end; continue; }
+            b'{' => db += 1,
             b'}' => {
-                depth_brace -= 1;
-                if depth_brace < 0 { return i; }
-                // After closing a top-level block, check if it continues
-                // with member access (e.g., `{ ... }[key]` or `{ ... }.prop`)
-                if depth_brace == 0 && depth_paren == 0 && depth_bracket == 0 {
+                db -= 1;
+                if db < 0 { return i; }
+                if db == 0 && dp == 0 && dk == 0 {
                     let mut j = i + 1;
                     while j < bytes.len() && matches!(bytes[j], b' ' | b'\t') { j += 1; }
-                    if j < bytes.len() && matches!(bytes[j], b'[' | b'.' | b'(') {
-                        i += 1; continue;
-                    }
+                    if j < bytes.len() && matches!(bytes[j], b'[' | b'.' | b'(') { i += 1; continue; }
                     return j;
                 }
             }
-            b'(' => depth_paren += 1,
-            b')' => depth_paren -= 1,
-            b'[' => depth_bracket += 1,
-            b']' => depth_bracket -= 1,
-            b';' if depth_brace == 0 && depth_paren == 0 && depth_bracket == 0 => {
-                return i + 1;
-            }
-            b'\n' if depth_brace == 0 && depth_paren == 0 && depth_bracket == 0 => {
-                let before_nl = content[start..i].trim_end();
-                let after_nl = content[i + 1..].trim_start();
-                let ends_with_assign = before_nl.ends_with('=')
-                    && !before_nl.ends_with("==");
-                let continues = before_nl.ends_with('?') || before_nl.ends_with(':')
-                    || before_nl.ends_with("||") || before_nl.ends_with("&&")
-                    || before_nl.ends_with('+') || before_nl.ends_with('-')
-                    || before_nl.ends_with(',') || before_nl.ends_with('\\')
-                    || before_nl.ends_with("??")
-                    || ends_with_assign
-                    || after_nl.starts_with('?') || after_nl.starts_with(':')
-                    || after_nl.starts_with("||") || after_nl.starts_with("&&")
-                    || after_nl.starts_with("??")
-                    || after_nl.starts_with('.') || after_nl.starts_with("?.");
-                if continues {
-                    i += 1;
-                    continue;
+            b'(' => dp += 1,
+            b')' => dp -= 1,
+            b'[' => dk += 1,
+            b']' => dk -= 1,
+            b';' if db == 0 && dp == 0 && dk == 0 => return i + 1,
+            b'\n' if db == 0 && dp == 0 && dk == 0 => {
+                let before = content[start..i].trim_end();
+                let after = content[i + 1..].trim_start();
+                let ea = before.ends_with('=') && !before.ends_with("==");
+                if before.ends_with('?') || before.ends_with(':') || before.ends_with("||")
+                    || before.ends_with("&&") || before.ends_with('+') || before.ends_with('-')
+                    || before.ends_with(',') || before.ends_with('\\') || before.ends_with("??")
+                    || ea || after.starts_with('?') || after.starts_with(':')
+                    || after.starts_with("||") || after.starts_with("&&") || after.starts_with("??")
+                    || after.starts_with('.') || after.starts_with("?.") {
+                    i += 1; continue;
                 }
                 return i;
             }
@@ -635,32 +589,20 @@ fn extract_assignment_targets(expr: &str) -> HashSet<&str> {
     let mut targets = HashSet::new();
     let bytes = expr.as_bytes();
     let mut i = 0;
-    let mut in_str = false;
-    let mut str_ch = 0u8;
     let mut depth = 0i32;
-
     while i < bytes.len() {
-        if in_str {
-            if bytes[i] == b'\\' { i += 2; continue; }
-            if bytes[i] == str_ch { in_str = false; }
-            i += 1;
-            continue;
-        }
         match bytes[i] {
-            b'\'' | b'"' | b'`' => { in_str = true; str_ch = bytes[i]; i += 1; }
+            b'\'' | b'"' => { i = skip_simple_string(bytes, i); continue; }
+            b'`' => { let (end, _) = skip_template_literal(bytes, i); i = end; continue; }
             b'{' | b'(' | b'[' => { depth += 1; i += 1; }
             b'}' | b')' | b']' => { depth -= 1; i += 1; }
             b'=' if i + 1 < bytes.len() && bytes[i + 1] != b'=' && bytes[i + 1] != b'>' => {
                 let mut j = i;
                 while j > 0 && bytes[j - 1].is_ascii_whitespace() { j -= 1; }
                 let end = j;
-                while j > 0 && (bytes[j - 1].is_ascii_alphanumeric() || bytes[j - 1] == b'_' || bytes[j - 1] == b'$') {
-                    j -= 1;
-                }
-                if j < end {
-                    if j == 0 || (bytes[j - 1] != b'.' && !bytes[j - 1].is_ascii_alphanumeric() && bytes[j - 1] != b'_') {
-                        targets.insert(&expr[j..end]);
-                    }
+                while j > 0 && (bytes[j - 1].is_ascii_alphanumeric() || bytes[j - 1] == b'_' || bytes[j - 1] == b'$') { j -= 1; }
+                if j < end && (j == 0 || (bytes[j - 1] != b'.' && !bytes[j - 1].is_ascii_alphanumeric() && bytes[j - 1] != b'_')) {
+                    targets.insert(&expr[j..end]);
                 }
                 i += 1;
             }
@@ -674,85 +616,50 @@ fn collect_local_names(expr: &str) -> HashSet<String> {
     let mut names = HashSet::new();
     let bytes = expr.as_bytes();
     let mut i = 0;
-
     while i < bytes.len() {
-        if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
-            let q = bytes[i];
-            i += 1;
-            while i < bytes.len() {
-                if bytes[i] == b'\\' { i += 2; continue; }
-                if bytes[i] == q { break; }
-                if q == b'`' && bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-                    i += 2;
-                    let mut d = 1;
-                    while i < bytes.len() && d > 0 {
-                        if bytes[i] == b'{' { d += 1; }
-                        if bytes[i] == b'}' { d -= 1; }
-                        if d > 0 { i += 1; }
+        match bytes[i] {
+            b'\'' | b'"' => { i = skip_simple_string(bytes, i); continue; }
+            b'`' => { let (end, _) = skip_template_literal(bytes, i); i = end; continue; }
+            b'=' if i + 1 < bytes.len() && bytes[i + 1] == b'>' => {
+                let mut j = i;
+                while j > 0 && bytes[j - 1].is_ascii_whitespace() { j -= 1; }
+                if j > 0 && bytes[j - 1] == b')' {
+                    let mut depth = 1;
+                    let mut k = j - 2;
+                    while depth > 0 {
+                        match bytes[k] { b')' => depth += 1, b'(' => depth -= 1, _ => {} }
+                        if depth > 0 { if k == 0 { break; } k -= 1; }
                     }
+                    extract_param_names(&expr[k + 1..j - 1], &mut names);
+                } else {
+                    let end = j;
+                    while j > 0 && (bytes[j - 1].is_ascii_alphanumeric() || bytes[j - 1] == b'_' || bytes[j - 1] == b'$') { j -= 1; }
+                    if j < end { names.insert(expr[j..end].to_string()); }
                 }
-                i += 1;
+                i += 2; continue;
             }
-            if i < bytes.len() { i += 1; }
-            continue;
+            _ => {}
         }
-
-        if bytes[i] == b'=' && i + 1 < bytes.len() && bytes[i + 1] == b'>' {
-            let mut j = i;
-            while j > 0 && bytes[j - 1].is_ascii_whitespace() { j -= 1; }
-            if j > 0 && bytes[j - 1] == b')' {
-                let mut depth = 1;
-                let mut k = j - 2;
-                while depth > 0 {
-                    if bytes[k] == b')' { depth += 1; }
-                    if bytes[k] == b'(' { depth -= 1; }
-                    if depth > 0 { if k == 0 { break; } k -= 1; }
-                }
-                let params = &expr[k + 1..j - 1];
-                extract_param_names(params, &mut names);
-            } else {
-                let end = j;
-                while j > 0 && (bytes[j - 1].is_ascii_alphanumeric() || bytes[j - 1] == b'_' || bytes[j - 1] == b'$') {
-                    j -= 1;
-                }
-                if j < end {
-                    names.insert(expr[j..end].to_string());
-                }
-            }
-            i += 2;
-            continue;
-        }
-
         if i + 8 < bytes.len() && expr.is_char_boundary(i) && expr.is_char_boundary(i + 8) && &expr[i..i + 8] == "function" {
-            let after = i + 8;
-            let rest = expr[after..].trim_start();
+            let rest = expr[i + 8..].trim_start();
             let offset = expr.len() - rest.len();
             if let Some(open) = rest.find('(') {
                 if let Some(close) = rest[open..].find(')') {
-                    let params = &rest[open + 1..open + close];
-                    extract_param_names(params, &mut names);
-                    i = offset + open + close + 1;
-                    continue;
+                    extract_param_names(&rest[open + 1..open + close], &mut names);
+                    i = offset + open + close + 1; continue;
                 }
             }
         }
-
         for kw in &["const ", "let ", "var "] {
-            if i + kw.len() <= bytes.len() && expr.is_char_boundary(i) && expr.is_char_boundary(i + kw.len()) && &expr[i..i + kw.len()] == *kw {
-                if i == 0 || !bytes[i - 1].is_ascii_alphanumeric() {
-                    let rest = expr[i + kw.len()..].trim_start();
-                    let rest_offset = expr.len() - rest.len();
-                    let end = rest.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
-                        .unwrap_or(rest.len());
-                    if end > 0 {
-                        names.insert(rest[..end].to_string());
-                    }
-                    i = rest_offset + end;
-                    break;
-                }
+            if i + kw.len() <= bytes.len() && expr.is_char_boundary(i) && expr.is_char_boundary(i + kw.len())
+                && &expr[i..i + kw.len()] == *kw && (i == 0 || !bytes[i - 1].is_ascii_alphanumeric()) {
+                let rest = expr[i + kw.len()..].trim_start();
+                let rest_offset = expr.len() - rest.len();
+                let end = rest.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$').unwrap_or(rest.len());
+                if end > 0 { names.insert(rest[..end].to_string()); }
+                i = rest_offset + end; break;
             }
         }
-
         i += 1;
     }
     names
@@ -771,85 +678,91 @@ fn extract_param_names(params: &str, names: &mut HashSet<String>) {
     }
 }
 
+fn skip_template_literal(bytes: &[u8], mut i: usize) -> (usize, Vec<(usize, usize)>) {
+    let mut interpolations = Vec::new();
+    i += 1;
+    while i < bytes.len() && bytes[i] != b'`' {
+        if bytes[i] == b'\\' { i += 2; continue; }
+        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+            i += 2;
+            let start = i;
+            let mut d = 1;
+            while i < bytes.len() && d > 0 {
+                match bytes[i] { b'{' => d += 1, b'}' => d -= 1, _ => {} }
+                if d > 0 { i += 1; }
+            }
+            interpolations.push((start, i));
+            if i < bytes.len() { i += 1; }
+            continue;
+        }
+        i += 1;
+    }
+    if i < bytes.len() { i += 1; }
+    (i, interpolations)
+}
+
+fn is_js_keyword_or_builtin(id: &str) -> bool {
+    matches!(id, "true" | "false" | "null" | "undefined" | "new" | "typeof"
+        | "if" | "else" | "return" | "const" | "let" | "var" | "function"
+        | "class" | "this" | "console" | "Math" | "JSON" | "Object" | "Array"
+        | "String" | "Number" | "Boolean" | "Date" | "Error" | "Promise"
+        | "Map" | "Set" | "RegExp" | "Symbol" | "BigInt" | "Infinity" | "NaN"
+        | "void" | "delete" | "instanceof" | "in" | "of" | "switch" | "case"
+        | "break" | "continue" | "throw" | "try" | "catch" | "finally"
+        | "for" | "while" | "do" | "async" | "await" | "yield"
+        | "satisfies" | "as" | "super" | "with" | "debugger"
+        | "default" | "export" | "from")
+}
+
+fn skip_simple_string(bytes: &[u8], i: usize) -> usize {
+    let q = bytes[i];
+    let mut j = i + 1;
+    while j < bytes.len() && bytes[j] != q {
+        if bytes[j] == b'\\' { j += 1; }
+        j += 1;
+    }
+    if j < bytes.len() { j + 1 } else { j }
+}
+
 fn extract_identifiers(expr: &str) -> Vec<String> {
     let mut ids = Vec::new();
     let bytes = expr.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
-            while i < bytes.len() && bytes[i] != b'\n' { i += 1; }
-            continue;
-        }
-        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-            i += 2;
-            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') { i += 1; }
-            if i + 1 < bytes.len() { i += 2; }
-            continue;
-        }
-        if bytes[i] == b'\'' || bytes[i] == b'"' {
-            let q = bytes[i]; i += 1;
-            while i < bytes.len() && bytes[i] != q {
-                if bytes[i] == b'\\' { i += 1; }
-                i += 1;
+        match bytes[i] {
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
+                while i < bytes.len() && bytes[i] != b'\n' { i += 1; }
             }
-            if i < bytes.len() { i += 1; }
-            continue;
-        }
-        if bytes[i] == b'`' {
-            i += 1;
-            while i < bytes.len() && bytes[i] != b'`' {
-                if bytes[i] == b'\\' { i += 2; continue; }
-                if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-                    i += 2;
-                    let mut depth = 1;
-                    let start = i;
-                    while i < bytes.len() && depth > 0 {
-                        if bytes[i] == b'{' { depth += 1; }
-                        if bytes[i] == b'}' { depth -= 1; }
-                        if depth > 0 { i += 1; }
-                    }
-                    ids.extend(extract_identifiers(&expr[start..i]));
-                    if i < bytes.len() { i += 1; }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
+                i += 2;
+                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') { i += 1; }
+                if i + 1 < bytes.len() { i += 2; }
+            }
+            b'\'' | b'"' => { i = skip_simple_string(bytes, i); }
+            b'`' => {
+                let (end, interps) = skip_template_literal(bytes, i);
+                for (s, e) in interps { ids.extend(extract_identifiers(&expr[s..e])); }
+                i = end;
+            }
+            b if b.is_ascii_alphabetic() || b == b'_' || b == b'$' => {
+                if i > 0 && bytes[i - 1] == b'.' && !(i >= 3 && bytes[i - 2] == b'.' && bytes[i - 3] == b'.') {
+                    while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') { i += 1; }
                     continue;
                 }
-                i += 1;
-            }
-            if i < bytes.len() { i += 1; }
-            continue;
-        }
-        if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' || bytes[i] == b'$' {
-            if i > 0 && bytes[i - 1] == b'.'
-                && !(i >= 3 && bytes[i - 2] == b'.' && bytes[i - 3] == b'.') {
-                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') {
-                    i += 1;
+                let start = i;
+                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') { i += 1; }
+                let id = &expr[start..i];
+                if !is_js_keyword_or_builtin(id) {
+                    let next = expr[i..].trim_start();
+                    let is_obj_key = next.starts_with(':') && !next.starts_with("::") && {
+                        let b = expr[..start].trim_end();
+                        b.ends_with('{') || b.ends_with(',') || b.ends_with('\n')
+                    };
+                    if !is_obj_key { ids.push(id.to_string()); }
                 }
-                continue;
             }
-            let start = i;
-            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') {
-                i += 1;
-            }
-            let id = &expr[start..i];
-            if !matches!(id, "true" | "false" | "null" | "undefined" | "new" | "typeof"
-                | "if" | "else" | "return" | "const" | "let" | "var" | "function"
-                | "class" | "this" | "console" | "Math" | "JSON" | "Object" | "Array"
-                | "String" | "Number" | "Boolean" | "Date" | "Error" | "Promise"
-                | "Map" | "Set" | "RegExp" | "Symbol" | "BigInt" | "Infinity" | "NaN"
-                | "void" | "delete" | "instanceof" | "in" | "of" | "switch" | "case"
-                | "break" | "continue" | "throw" | "try" | "catch" | "finally"
-                | "for" | "while" | "do" | "async" | "await" | "yield"
-                | "satisfies" | "as" | "super" | "with" | "debugger"
-                | "default" | "export" | "from") {
-                let next = expr[i..].trim_start();
-                let is_obj_key = next.starts_with(':') && !next.starts_with("::") && {
-                    let b = expr[..start].trim_end();
-                    b.ends_with('{') || b.ends_with(',') || b.ends_with('\n')
-                };
-                if !is_obj_key { ids.push(id.to_string()); }
-            }
-            continue;
+            _ => { i += 1; }
         }
-        i += 1;
     }
     ids
 }
