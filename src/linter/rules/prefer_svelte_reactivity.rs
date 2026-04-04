@@ -77,8 +77,6 @@ impl Rule for PreferSvelteReactivity {
             let content = &script.content;
             if content.trim().is_empty() { continue; }
 
-            // For .svelte.js/.svelte.ts modules (synthetic AST), content_offset is 0
-            // since there's no <script> tag wrapper.
             let content_offset = if ctx.is_svelte_module {
                 0
             } else {
@@ -93,9 +91,6 @@ impl Rule for PreferSvelteReactivity {
             self.check_script(ctx, content, content_offset, is_ts, ctx.is_svelte_module);
         }
 
-        // Scan template (non-script) regions for chained mutations on new built-in
-        // instances, e.g. `{@const d = new Date(x).setHours(0)}` or
-        // `{new Date().setMonth(m)}` in template expressions / event handlers.
         if !ctx.is_svelte_module {
             detect_chained_new_in_template(ctx);
         }
@@ -128,17 +123,9 @@ impl PreferSvelteReactivity {
         let scoping = semantic.scoping();
         let nodes = semantic.nodes();
 
-        // Collect shadowed class names (imported from packages)
         let shadowed = collect_shadowed_classes(content);
-
-        // The vendor's ReferenceTracker has a side-effect: due to
-        // variableStack and lazy generator evaluation, only the FIRST
-        // `new Set()` (in source order) per mutable variable is flagged.
-        // We replicate this by tracking which symbols have already been
-        // reported.
         let mut flagged_symbols = std::collections::HashSet::<SymbolId>::new();
 
-        // For each NewExpression of a built-in class, check if the value is mutated.
         for ast_node in nodes.iter() {
             let AstKind::NewExpression(new_expr) = ast_node.kind() else { continue };
             let Expression::Identifier(callee) = &new_expr.callee else { continue };
@@ -147,27 +134,17 @@ impl PreferSvelteReactivity {
             let Some(builtin) = BUILTIN_CLASSES.iter().find(|b| b.name == class_name) else { continue };
             if shadowed.contains(&class_name.to_string()) { continue; }
 
-            // Check callee is unresolved (global built-in, not locally imported)
             if scoping.has_binding(callee.reference_id()) { continue; }
-
-            // URL/URLSearchParams: not in ECMAScript globals. Skip when not at
-            // root scope (the vendor only finds these with browser globals, and
-            // even then only at module scope level in practice).
             if class_name == "URL" || class_name == "URLSearchParams" {
                 if ast_node.scope_id() != scoping.root_scope_id() {
                     continue;
                 }
             }
 
-            // Skip if new Class() is inside a $state() call — $state already
-            // provides reactivity, so SvelteMap/SvelteSet isn't needed.
             let new_node_id = callee.node_id.get();
             let new_node_id = nodes.parent_id(new_node_id); // up to NewExpression
             if is_inside_state_call(nodes, new_node_id) { continue; }
 
-            // In .svelte.[js|ts] modules, exported `new Set()`/`new Map()` etc.
-            // are always flagged regardless of mutation (the vendor checks
-            // ExportNamedDeclaration/ExportDefaultDeclaration).
             if is_svelte_module && is_inside_export(nodes, new_node_id) {
                 let abs = content_offset + new_expr.span.start as usize;
                 let end = content_offset + new_expr.span.end as usize;
@@ -178,8 +155,6 @@ impl PreferSvelteReactivity {
                 continue;
             }
 
-            // Check for chained method calls: `new Date().setHours(...)`.
-            // The parent of NewExpression is MemberExpression, then CallExpression.
             if is_directly_mutated(nodes, new_node_id, builtin) {
                 let abs = content_offset + new_expr.span.start as usize;
                 let end = content_offset + new_expr.span.end as usize;
@@ -190,17 +165,10 @@ impl PreferSvelteReactivity {
                 continue;
             }
 
-            // Walk up ancestors to find the assigned variable's SymbolId.
-            // Handles both declarations (let x = new Set()) and reassignments
-            // (x = new Set()).
             let (symbol_id, var_name_fallback) = find_target_symbol_or_name(nodes, scoping, new_node_id);
             let symbol_id = match symbol_id {
                 Some(sid) => sid,
                 None => {
-                    // No symbol — e.g. implicit $: reactive declaration.
-                    // Fall back to name-based mutation check.
-                    // Skip $-prefixed store subscriptions — the Set/Map inside
-                    // a writable store is not directly mutable.
                     if let Some(var_name) = &var_name_fallback {
                         if var_name.starts_with('$') { continue; }
                         if has_mutation_pattern(ctx.source, var_name, builtin) {
@@ -213,29 +181,19 @@ impl PreferSvelteReactivity {
                 }
             };
 
-            // Only flag the first instance per mutable variable (matches
-            // vendor ReferenceTracker variableStack behavior).
             if flagged_symbols.contains(&symbol_id) { continue; }
-
-            // Check if any reference to this symbol is a mutating usage.
             let is_mut = is_symbol_mutated(scoping, nodes, symbol_id, builtin);
-
-            // Check transitive flow: if the value flows to another variable
-            // (e.g., `const today = new Date(); let viewDate = today;`)
-            // and THAT variable is mutated.
             let is_transitive_mut = if !is_mut {
                 is_transitively_mutated(scoping, nodes, symbol_id, builtin)
             } else {
                 false
             };
 
-            // For root-scope variables, also check template for mutations
             let is_template_mut = if !is_mut && !is_transitive_mut
                 && scoping.symbol_scope_id(symbol_id) == scoping.root_scope_id()
             {
                 let var_name = scoping.symbol_name(symbol_id);
                 let mut found = is_mutated_in_template(ctx.source, content, var_name, builtin);
-                // Also check transitive flow targets in template
                 if !found {
                     for ref_id in scoping.get_resolved_references(symbol_id) {
                         if !ref_id.is_read() { continue; }
@@ -267,15 +225,10 @@ impl PreferSvelteReactivity {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 fn mutable_class_msg(builtin: &BuiltinClass) -> String {
     format!("Found a mutable instance of the built-in {} class. Use {} instead.", builtin.name, builtin.svelte_name)
 }
 
-/// Check if a NewExpression is inside an export declaration.
 fn is_inside_export(
     nodes: &oxc::semantic::AstNodes,
     node_id: oxc::semantic::NodeId,
@@ -291,9 +244,6 @@ fn is_inside_export(
     false
 }
 
-/// Check if a NewExpression has a direct chained mutating method call,
-/// e.g. `new Date().setHours(...)`, `new Set([1]).add(2)`, or
-/// `(expr ?? new Set()).add(value)`.
 fn is_directly_mutated(
     nodes: &oxc::semantic::AstNodes,
     new_expr_id: oxc::semantic::NodeId,
@@ -301,9 +251,6 @@ fn is_directly_mutated(
 ) -> bool {
     use oxc::ast::AstKind;
 
-    // Walk up through transparent wrapper nodes (LogicalExpression,
-    // ParenthesizedExpression, ConditionalExpression) to find the
-    // effective parent — e.g. `(expr ?? new Set()).add(value)`.
     let mut current = new_expr_id;
     loop {
         let parent_id = nodes.parent_id(current);
@@ -325,13 +272,11 @@ fn is_directly_mutated(
     };
     if let Some(name) = method_name {
         if builtin.mutating_methods.contains(&name) {
-            // Grandparent should be CallExpression (calling the method)
             let grandparent_id = nodes.parent_id(parent_id);
             if matches!(nodes.kind(grandparent_id), AstKind::CallExpression(_)) {
                 return true;
             }
         }
-        // For URL: check property assignment `new URL(...).pathname = ...`
         if builtin.mutating_props.contains(&name) {
             let grandparent_id = nodes.parent_id(parent_id);
             if matches!(nodes.kind(grandparent_id), AstKind::AssignmentExpression(_)) {
@@ -342,7 +287,6 @@ fn is_directly_mutated(
     false
 }
 
-/// Check if a NewExpression is inside a `$state(...)` call.
 fn is_inside_state_call(
     nodes: &oxc::semantic::AstNodes,
     new_expr_id: oxc::semantic::NodeId,
@@ -367,12 +311,6 @@ fn is_inside_state_call(
     false
 }
 
-/// Walk up ancestors from a NewExpression to find the SymbolId of the
-/// assigned variable. Handles both declarations (`let x = new Set()`)
-/// and reassignments (`x = new Set()`).
-/// Returns (Option<SymbolId>, Option<variable_name>) — if the symbol
-/// cannot be resolved (e.g. implicit `$:` declarations), the variable
-/// name is returned as a fallback.
 fn find_target_symbol_or_name(
     nodes: &oxc::semantic::AstNodes,
     scoping: &oxc::semantic::Scoping,
@@ -399,7 +337,6 @@ fn find_target_symbol_or_name(
                 }
                 return (None, None);
             }
-            // Pass-through nodes
             AstKind::ParenthesizedExpression(_)
             | AstKind::ExpressionStatement(_)
             | AstKind::LabeledStatement(_)
@@ -413,7 +350,6 @@ fn find_target_symbol_or_name(
     (None, None)
 }
 
-/// Check if any read reference to the symbol is a mutating usage.
 fn is_symbol_mutated(
     scoping: &oxc::semantic::Scoping,
     nodes: &oxc::semantic::AstNodes,
@@ -450,9 +386,6 @@ fn is_symbol_mutated(
     false
 }
 
-/// Check if the value of a symbol transitively flows to another variable that
-/// is mutated. Handles patterns like:
-///   const today = new Date(); let viewDate = currentDate ?? today; viewDate.setDate(1);
 fn is_transitively_mutated(
     scoping: &oxc::semantic::Scoping,
     nodes: &oxc::semantic::AstNodes,
@@ -462,13 +395,8 @@ fn is_transitively_mutated(
     use oxc::ast::AstKind;
     use oxc::ast::ast::BindingPattern;
 
-    // For each READ reference to the symbol, check if it flows into another
-    // variable (via assignment or initialization), and if THAT variable is mutated.
     for reference in scoping.get_resolved_references(symbol_id) {
         if !reference.is_read() { continue; }
-
-        // Walk up from the reference to find if it's part of an initializer
-        // for another variable (e.g., `let viewDate = currentDate ?? today`)
         let ref_node = reference.node_id();
         for ancestor_id in nodes.ancestor_ids(ref_node) {
             match nodes.kind(ancestor_id) {
@@ -493,7 +421,6 @@ fn is_transitively_mutated(
                     }
                     break;
                 }
-                // Pass through wrapper expressions
                 AstKind::ParenthesizedExpression(_)
                 | AstKind::LogicalExpression(_)
                 | AstKind::ConditionalExpression(_)
@@ -505,7 +432,6 @@ fn is_transitively_mutated(
     false
 }
 
-/// Check if a variable has mutating method/property patterns in the given text.
 fn has_mutation_pattern(text: &str, var_name: &str, builtin: &BuiltinClass) -> bool {
     for method in builtin.mutating_methods {
         let pat = format!("{}.{}(", var_name, method);
@@ -520,7 +446,6 @@ fn has_mutation_pattern(text: &str, var_name: &str, builtin: &BuiltinClass) -> b
     false
 }
 
-/// Check if a variable is mutated in the template (outside script blocks).
 fn is_mutated_in_template(
     source: &str, script_content: &str, var_name: &str, builtin: &BuiltinClass,
 ) -> bool {
@@ -557,7 +482,6 @@ fn find_word_boundary_pos(content: &str, pat: &str) -> Option<usize> {
     None
 }
 
-/// Collect class names that are imported from packages (shadowing built-ins).
 fn collect_shadowed_classes(content: &str) -> Vec<String> {
     let mut shadowed = Vec::new();
     for line in content.lines() {
@@ -578,23 +502,11 @@ fn collect_shadowed_classes(content: &str) -> Vec<String> {
     shadowed
 }
 
-/// Scan template (non-script) regions for `new ClassName(...).<mutatingMethod>(`.
-/// This catches patterns like `{@const d = new Date(x).setHours(0)}` and
-/// `{new Date().setSeconds(0, 0)}` in template expressions and event handlers.
 fn detect_chained_new_in_template(ctx: &mut LintContext) {
     let source = ctx.source;
-
-    // Collect script byte ranges to skip
-    let mut script_ranges: Vec<(usize, usize)> = Vec::new();
-    for script in [&ctx.ast.instance, &ctx.ast.module].into_iter().flatten() {
-        script_ranges.push((script.span.start as usize, script.span.end as usize));
-    }
-
-    // Collect shadowed class names from script imports
-    let mut shadowed = Vec::new();
-    for script in [&ctx.ast.instance, &ctx.ast.module].into_iter().flatten() {
-        shadowed.extend(collect_shadowed_classes(&script.content));
-    }
+    let scripts: Vec<_> = [&ctx.ast.instance, &ctx.ast.module].into_iter().flatten().collect();
+    let script_ranges: Vec<_> = scripts.iter().map(|s| (s.span.start as usize, s.span.end as usize)).collect();
+    let shadowed: Vec<_> = scripts.iter().flat_map(|s| collect_shadowed_classes(&s.content)).collect();
 
     for builtin in BUILTIN_CLASSES {
         if shadowed.iter().any(|s| s == builtin.name) { continue; }
@@ -605,7 +517,6 @@ fn detect_chained_new_in_template(ctx: &mut LintContext) {
         while let Some(rel) = source[search..].find(&new_pat) {
             let abs = search + rel;
 
-            // Word boundary check
             if abs > 0 {
                 let prev = source.as_bytes()[abs - 1];
                 if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' {
@@ -614,20 +525,17 @@ fn detect_chained_new_in_template(ctx: &mut LintContext) {
                 }
             }
 
-            // Skip if inside a script block
             if script_ranges.iter().any(|&(s, e)| abs >= s && abs < e) {
                 search = abs + new_pat.len();
                 continue;
             }
 
-            // Find matching `)` for the constructor call
-            let paren_start = abs + new_pat.len() - 1; // position of `(`
+            let paren_start = abs + new_pat.len() - 1;
             let close = match find_matching_paren(source, paren_start) {
                 Some(p) => p,
                 None => { search = abs + 1; continue; }
             };
 
-            // Check if followed by `.mutatingMethod(`
             let after = &source[close + 1..];
             let mut found_chained = false;
             if after.starts_with('.') {
@@ -642,13 +550,8 @@ fn detect_chained_new_in_template(ctx: &mut LintContext) {
                 }
             }
 
-            // Also check: `varName = new Class(...)` where varName is later
-            // mutated in the same handler body.
-            // Skip URL/URLSearchParams — the vendor only flags these at root
-            // scope, and template handlers are never root scope.
             if !found_chained && builtin.name != "URL" && builtin.name != "URLSearchParams" {
                 if let Some(var_name) = extract_assigned_var(source, abs) {
-                    // Find the enclosing handler body (brace scope)
                     if let Some((scope_start, scope_end)) = find_enclosing_brace_scope(source, abs) {
                         let scope_text = &source[scope_start..scope_end];
                         if has_mutating_call_in_scope(scope_text, &var_name, builtin) {
@@ -658,24 +561,19 @@ fn detect_chained_new_in_template(ctx: &mut LintContext) {
                 }
             }
 
-            // Advance past "new " but not past args so nested `new Date()` are found
             search = abs + 4;
         }
     }
 }
 
-/// Extract the variable name from `varName = new Class(...)` or
-/// `const/let varName = new Class(...)` by looking backwards from `new_pos`.
 fn extract_assigned_var(source: &str, new_pos: usize) -> Option<String> {
     let before = &source[..new_pos];
     let trimmed = before.trim_end();
     if !trimmed.ends_with('=') { return None; }
     let before_eq = trimmed[..trimmed.len() - 1].trim_end();
-    // Check not `==` or `=>`
     if before_eq.ends_with('=') || before_eq.ends_with('!') || before_eq.ends_with('>') || before_eq.ends_with('<') {
         return None;
     }
-    // Extract identifier going backwards
     let bytes = before_eq.as_bytes();
     let mut end = bytes.len();
     while end > 0 && (bytes[end - 1].is_ascii_alphanumeric() || bytes[end - 1] == b'_' || bytes[end - 1] == b'$') {
@@ -683,17 +581,14 @@ fn extract_assigned_var(source: &str, new_pos: usize) -> Option<String> {
     }
     let var_name = &before_eq[end..];
     if var_name.is_empty() { return None; }
-    // Skip keywords
     if matches!(var_name, "return" | "const" | "let" | "var" | "new" | "typeof" | "void" | "delete") {
         return None;
     }
     Some(var_name.to_string())
 }
 
-/// Find the enclosing brace scope `{ ... }` around a position.
 fn find_enclosing_brace_scope(source: &str, pos: usize) -> Option<(usize, usize)> {
     let bytes = source.as_bytes();
-    // Search backwards for opening brace
     let mut depth = 0i32;
     let mut i = pos;
     let mut scope_start = None;
@@ -712,8 +607,6 @@ fn find_enclosing_brace_scope(source: &str, pos: usize) -> Option<(usize, usize)
         }
     }
     let scope_start = scope_start?;
-
-    // Search forward for closing brace
     depth = 1;
     let mut j = scope_start + 1;
     while j < bytes.len() && depth > 0 {
@@ -730,14 +623,12 @@ fn find_enclosing_brace_scope(source: &str, pos: usize) -> Option<(usize, usize)
     None
 }
 
-/// Check if `varName.mutatingMethod(` appears in the scope text.
 fn has_mutating_call_in_scope(scope_text: &str, var_name: &str, builtin: &BuiltinClass) -> bool {
     for method in builtin.mutating_methods {
         let pat = format!("{}.{}(", var_name, method);
         if scope_text.contains(&pat) { return true; }
     }
     for prop in builtin.mutating_props {
-        // Check varName.prop =
         let pat = format!("{}.{}", var_name, prop);
         for (pos, _) in scope_text.match_indices(&pat) {
             let after = &scope_text[pos + pat.len()..];
@@ -750,7 +641,6 @@ fn has_mutating_call_in_scope(scope_text: &str, var_name: &str, builtin: &Builti
     false
 }
 
-/// Find the matching closing paren for an opening paren at `pos`.
 fn find_matching_paren(source: &str, pos: usize) -> Option<usize> {
     let bytes = source.as_bytes();
     if bytes.get(pos) != Some(&b'(') { return None; }
