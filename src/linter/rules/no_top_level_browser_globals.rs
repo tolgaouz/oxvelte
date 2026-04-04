@@ -47,7 +47,6 @@ fn is_in_ssr_block(content: &str, pos: usize) -> bool {
     if before_brace.ends_with("else") || before_brace.ends_with("else ") {
         let before_else = before_brace.trim_end().strip_suffix("else").unwrap_or(before_brace).trim_end();
         if before_else.ends_with('}') {
-            let close_pos = before_else.len() - 1;
             let mut d = 0i32;
             let mut if_open = None;
             for (i, b) in before_else.bytes().enumerate().rev() {
@@ -67,12 +66,10 @@ fn is_in_ssr_block(content: &str, pos: usize) -> bool {
                         let cond = &before_if_block[ps+1..before_if_block.len()-1];
                         let cond_t = cond.trim();
                         let is_positive_browser = (cond_t.starts_with("globalThis.")
-                            && !cond_t.contains("=== undefined") && !cond_t.contains("== undefined")
-                            && !cond_t.contains("=== null") && !cond_t.contains("== null"))
+                            && !["=== undefined", "== undefined", "=== null", "== null"].iter().any(|p| cond_t.contains(p)))
                             || cond_t == "browser" || cond_t == "BROWSER"
                             || cond_t.ends_with(".BROWSER") || cond_t.ends_with(".browser")
-                            || (cond_t.contains("typeof") && cond_t.contains("!==") && cond_t.contains("undefined"))
-                            || (cond_t.contains("typeof") && cond_t.contains("!=") && cond_t.contains("undefined"));
+                            || (cond_t.contains("typeof") && (cond_t.contains("!==") || cond_t.contains("!=")) && cond_t.contains("undefined"));
                         if is_positive_browser {
                             let kw = before_if_block[..ps].trim_end();
                             if kw.ends_with("if") { return true; }
@@ -143,7 +140,6 @@ impl Rule for NoTopLevelBrowserGlobals {
         let script = match &ctx.ast.instance { Some(s) => s, None => return };
         if script.module { return; }
         let content = &script.content;
-        let bytes = content.as_bytes();
         let base = script.span.start as usize;
         let source = ctx.source;
         let tag_text = &source[base..script.span.end as usize];
@@ -224,11 +220,9 @@ fn check_template_nodes(nodes: &[TemplateNode], ctx: &mut LintContext<'_>, in_br
             TemplateNode::IfBlock(block) => {
                 let cond = block.test.trim();
 
-                let is_browser_guard = cond == "browser" || cond == "BROWSER"
-                    || cond.ends_with(".browser") || cond.ends_with(".BROWSER")
+                let is_browser_guard = cond.contains("browser") || cond.contains("BROWSER")
                     || cond.starts_with("typeof window") || cond.starts_with("typeof document")
-                    || cond.starts_with("globalThis.")
-                    || cond.contains("browser") || cond.contains("BROWSER");
+                    || cond.starts_with("globalThis.");
                 let is_negated = cond.starts_with('!');
 
                 let cons_browser = in_browser_ctx || (is_browser_guard && !is_negated);
