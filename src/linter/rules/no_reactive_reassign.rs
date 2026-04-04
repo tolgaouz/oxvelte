@@ -193,27 +193,12 @@ impl Rule for NoReactiveReassign {
                         if abs > 0 {
                             let prev = content.as_bytes()[abs - 1];
                             if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'.' {
-                                search_from = abs + pattern.len();
-                                continue;
+                                search_from = abs + pattern.len(); continue;
                             }
-                        }
-
-                        if abs > 0 {
-                            let before = &content[..abs];
-                            let last_bracket_open = before.rfind('[');
-                            let last_bracket_close = before.rfind(']');
-                            if let Some(bo) = last_bracket_open {
-                                let inside = match last_bracket_close {
-                                    Some(bc) => bo > bc,
-                                    None => true,
-                                };
-                                if inside {
-                                    let after_var = abs + var.len();
-                                    let rest = content[after_var..].trim_start();
-                                    if rest.starts_with(']') {
-                                        search_from = abs + pattern.len();
-                                        continue;
-                                    }
+                            if let Some(bo) = content[..abs].rfind('[') {
+                                let inside = content[..abs].rfind(']').map_or(true, |bc| bo > bc);
+                                if inside && content[abs + var.len()..].trim_start().starts_with(']') {
+                                    search_from = abs + pattern.len(); continue;
                                 }
                             }
                         }
@@ -299,19 +284,16 @@ impl Rule for NoReactiveReassign {
                                 rest = &rest[skip..];
                                 chain_len += skip;
                                 has_member = true;
-                                if has_member {
-                                    for m in mutating_methods {
-                                        if rest.starts_with(*m) {
-                                            let line_start = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
-                                            let line = content[line_start..].trim_start();
-                                            if !line.starts_with("$:") && !is_shadowed_in_scope(content, abs, var) {
-                                                let source_pos = content_offset + abs;
-                                                let end_pos = source_pos + chain_len + m.len() - 1;
-                                                ctx.diagnostic(
-                                                    format!("Assignment to property of reactive value '{}'.", var),
-                                                    oxc::span::Span::new(source_pos as u32, end_pos as u32),
-                                                );
-                                            }
+                                for m in mutating_methods {
+                                    if rest.starts_with(*m) {
+                                        let line_start = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
+                                        let line = content[line_start..].trim_start();
+                                        if !line.starts_with("$:") && !is_shadowed_in_scope(content, abs, var) {
+                                            let sp = content_offset + abs;
+                                            ctx.diagnostic(
+                                                format!("Assignment to property of reactive value '{}'.", var),
+                                                oxc::span::Span::new(sp as u32, (sp + chain_len + m.len() - 1) as u32),
+                                            );
                                         }
                                     }
                                 }
