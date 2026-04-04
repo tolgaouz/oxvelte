@@ -338,24 +338,7 @@ fn find_type_end(s: &str) -> usize {
     s.len()
 }
 
-fn split_intersection(s: &str) -> Vec<&str> {
-    let mut parts = Vec::new();
-    let mut depth = 0i32;
-    let mut start = 0;
-    for (i, c) in s.char_indices() {
-        match c {
-            '{' | '(' | '<' => depth += 1,
-            '}' | ')' | '>' => { depth -= 1; if depth < 0 { depth = 0; } }
-            '&' if depth == 0 => {
-                parts.push(&s[start..i]);
-                start = i + 1;
-            }
-            _ => {}
-        }
-    }
-    parts.push(&s[start..]);
-    parts
-}
+fn split_intersection(s: &str) -> Vec<&str> { split_at_depth0(s, '&') }
 
 fn resolve_imported_type_properties(content: &str, type_name: &str, file_path: &str) -> Vec<(String, usize)> {
     for line in content.lines() {
