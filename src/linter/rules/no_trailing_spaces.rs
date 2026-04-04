@@ -51,16 +51,9 @@ impl Rule for NoTrailingSpaces {
             if !ignored_lines.contains(&line_num) {
                 let trimmed = line.trim_end();
                 if trimmed.len() < line.len() {
-                    let trailing_start = line_start + trimmed.len();
-                    let trailing_end = line_end;
-                    ctx.diagnostic_with_fix(
-                        "Trailing spaces not allowed.",
-                        Span::new(trailing_start as u32, trailing_end as u32),
-                        Fix {
-                            span: Span::new(trailing_start as u32, trailing_end as u32),
-                            replacement: String::new(),
-                        },
-                    );
+                    let span = Span::new((line_start + trimmed.len()) as u32, line_end as u32);
+                    ctx.diagnostic_with_fix("Trailing spaces not allowed.", span,
+                        Fix { span, replacement: String::new() });
                 }
             }
 
@@ -140,13 +133,7 @@ fn collect_ignored_lines(source: &str, ignore_comments: bool, ignored: &mut Hash
 }
 
 fn build_line_starts(source: &str) -> Vec<usize> {
-    let mut starts = vec![0usize];
-    for (i, ch) in source.char_indices() {
-        if ch == '\n' {
-            starts.push(i + 1);
-        }
-    }
-    starts
+    std::iter::once(0).chain(source.match_indices('\n').map(|(i, _)| i + 1)).collect()
 }
 
 fn line_number_at(line_starts: &[usize], offset: usize) -> usize {
