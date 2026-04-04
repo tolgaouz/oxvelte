@@ -65,31 +65,7 @@ impl Rule for HtmlQuotes {
                                         }
                                     }
                                     AttributeValue::Expression(_) => {
-                                        if dynamic_quoted {
-                                            if !val_part.starts_with(prefer_char) {
-                                                ctx.diagnostic(
-                                                    expected_msg,
-                                                    *span,
-                                                );
-                                            }
-                                        } else {
-                                            let is_quoted = val_part.starts_with('"') || val_part.starts_with('\'');
-                                            if is_quoted {
-                                                ctx.diagnostic(
-                                                    unexpected_msg,
-                                                    *span,
-                                                );
-                                            } else if avoid_invalid_unquoted {
-                                                if val_part.contains('>') || val_part.contains('<')
-                                                    || val_part.contains('=') || val_part.contains('`')
-                                                {
-                                                    ctx.diagnostic(
-                                                        expected_msg,
-                                                        *span,
-                                                    );
-                                                }
-                                            }
-                                        }
+                                        check_dynamic_quotes(val_part, dynamic_quoted, avoid_invalid_unquoted, prefer_char, expected_msg, unexpected_msg, *span, ctx);
                                     }
                                     _ => {}
                                 }
@@ -102,31 +78,7 @@ impl Rule for HtmlQuotes {
                             let attr_src = &ctx.source[start..end];
                             if let Some(eq_pos) = attr_src.find('=') {
                                 let val_part = attr_src[eq_pos + 1..].trim();
-                                if dynamic_quoted {
-                                    if val_part.starts_with('{') && !val_part.starts_with(prefer_char) {
-                                        ctx.diagnostic(
-                                            expected_msg,
-                                            *span,
-                                        );
-                                    }
-                                } else {
-                                    let is_quoted = val_part.starts_with('"') || val_part.starts_with('\'');
-                                    if is_quoted {
-                                        ctx.diagnostic(
-                                            unexpected_msg,
-                                            *span,
-                                        );
-                                    } else if avoid_invalid_unquoted {
-                                        if val_part.contains('>') || val_part.contains('<')
-                                            || val_part.contains('=') || val_part.contains('`')
-                                        {
-                                            ctx.diagnostic(
-                                                expected_msg,
-                                                *span,
-                                            );
-                                        }
-                                    }
-                                }
+                                check_dynamic_quotes(val_part, dynamic_quoted, avoid_invalid_unquoted, prefer_char, expected_msg, unexpected_msg, *span, ctx);
                             }
                         }
                         _ => {}
@@ -134,5 +86,24 @@ impl Rule for HtmlQuotes {
                 }
             }
         });
+    }
+}
+
+fn check_dynamic_quotes(
+    val_part: &str, dynamic_quoted: bool, avoid_invalid_unquoted: bool,
+    prefer_char: char, expected_msg: &str, unexpected_msg: &str,
+    span: Span, ctx: &mut LintContext,
+) {
+    if dynamic_quoted {
+        if !val_part.starts_with(prefer_char) {
+            ctx.diagnostic(expected_msg, span);
+        }
+    } else {
+        if val_part.starts_with('"') || val_part.starts_with('\'') {
+            ctx.diagnostic(unexpected_msg, span);
+        } else if avoid_invalid_unquoted
+            && (val_part.contains('>') || val_part.contains('<') || val_part.contains('=') || val_part.contains('`')) {
+            ctx.diagnostic(expected_msg, span);
+        }
     }
 }
