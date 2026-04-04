@@ -76,12 +76,8 @@ impl Rule for NoNavigationWithoutBase {
                     let mut search_from = 0;
                     while let Some(pos) = content[search_from..].find(&search_pattern) {
                         let abs = search_from + pos;
-                        if abs > 0 {
-                            let prev = content.as_bytes()[abs - 1];
-                            if prev.is_ascii_alphanumeric() || prev == b'_' {
-                                search_from = abs + search_pattern.len();
-                                continue;
-                            }
+                        if abs > 0 && matches!(content.as_bytes()[abs - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_') {
+                            search_from = abs + search_pattern.len(); continue;
                         }
                         let rest = &content[abs + search_pattern.len()..];
                         let trimmed = rest.trim_start();
@@ -102,11 +98,9 @@ impl Rule for NoNavigationWithoutBase {
                                 } else { false };
 
                                 if !uses_base {
-                                    let source_pos = script_base + gt + 1 + abs;
-                                    ctx.diagnostic(
-                                        format!("Found a {}() call with a url that isn't prefixed with the base path.", orig_name),
-                                        oxc::span::Span::new(source_pos as u32, (source_pos + search_pattern.len()) as u32),
-                                    );
+                                    let sp = script_base + gt + 1 + abs;
+                                    ctx.diagnostic(format!("Found a {}() call with a url that isn't prefixed with the base path.", orig_name),
+                                        oxc::span::Span::new(sp as u32, (sp + search_pattern.len()) as u32));
                                 }
                             }
                         }
@@ -154,10 +148,7 @@ impl Rule for NoNavigationWithoutBase {
                                 let has_path_concat = expr.contains("'/'") || expr.contains("\"/\"");
 
                                 if is_path_literal || has_path_concat {
-                                    ctx.diagnostic(
-                                        "Found a link with a url that isn't prefixed with the base path.",
-                                        *span,
-                                    );
+                                    ctx.diagnostic("Found a link with a url that isn't prefixed with the base path.", *span);
                                 }
                             }
                         }
