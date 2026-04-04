@@ -20,14 +20,11 @@ impl Rule for NoUnusedClassName {
             .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
             .unwrap_or_default();
 
-        let mut allowed_plain: HashSet<String> = HashSet::new();
-        let mut allowed_patterns: Vec<String> = Vec::new();
+        let (mut allowed_plain, mut allowed_patterns) = (HashSet::new(), Vec::new());
         for name in &allowed_class_names {
             if name.starts_with('/') && name.ends_with('/') && name.len() > 2 {
                 allowed_patterns.push(name[1..name.len()-1].to_string());
-            } else {
-                allowed_plain.insert(name.clone());
-            }
+            } else { allowed_plain.insert(name.clone()); }
         }
 
         let mut css_classes = HashSet::new();
@@ -74,18 +71,9 @@ impl Rule for NoUnusedClassName {
                 }
 
                 for cls in &element_classes {
-                    if !css_classes.contains(cls.as_str()) {
-                        if allowed_plain.contains(cls.as_str()) {
-                            continue;
-                        }
-                        if allowed_patterns.iter().any(|p| simple_regex_match(p, cls)) {
-                            continue;
-                        }
-                        ctx.diagnostic(
-                            format!("Unused class \"{}\".", cls),
-                            el.span,
-                        );
-                    }
+                    if css_classes.contains(cls.as_str()) || allowed_plain.contains(cls.as_str())
+                        || allowed_patterns.iter().any(|p| simple_regex_match(p, cls)) { continue; }
+                    ctx.diagnostic(format!("Unused class \"{}\".", cls), el.span);
                 }
             }
         });
@@ -155,13 +143,8 @@ fn regex_match_inner_impl(pattern: &str, text: &str, pi: usize, ti: usize, must_
         return false;
     }
 
-    if ti < tb.len() && pb[pi] == tb[ti] {
+    if ti < tb.len() && (pb[pi] == tb[ti] || pb[pi] == b'.') {
         return regex_match_inner_impl(pattern, text, pi + 1, ti + 1, must_consume_all);
     }
-
-    if pb[pi] == b'.' && ti < tb.len() {
-        return regex_match_inner_impl(pattern, text, pi + 1, ti + 1, must_consume_all);
-    }
-
     false
 }
