@@ -129,20 +129,16 @@ impl Rule for Indent {
             if in_script {
                 let actual = leading_spaces(line);
                 let base = (script_base_depth.max(0) as usize) * indent;
-                if !indent_script {
-                    if actual != 0 && trimmed.starts_with("const ") || trimmed.starts_with("let ") || trimmed.starts_with("var ")
-                        || trimmed.starts_with("function ") || trimmed.starts_with("import ") || trimmed.starts_with("export ")
-                        || trimmed.starts_with("type ") || trimmed.starts_with("interface ") || trimmed.starts_with("class ")
-                        || trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with("$")
-                    {
-                        if actual != 0 {
-                            let msg = format!("Expected indentation of 0 spaces but found {} spaces.", actual);
-                            ctx.diagnostic(msg, oxc::span::Span::new(line_start as u32, (line_start + actual.max(1)) as u32));
-                        }
+                if !indent_script && actual != 0 {
+                    const TOP: &[&str] = &["const ", "let ", "var ", "function ", "import ", "export ",
+                        "type ", "interface ", "class ", "//", "/*", "$"];
+                    if TOP.iter().any(|kw| trimmed.starts_with(kw)) {
+                        ctx.diagnostic(format!("Expected indentation of 0 spaces but found {} spaces.", actual),
+                            oxc::span::Span::new(line_start as u32, (line_start + actual.max(1)) as u32));
                     }
-                } else if actual < base {
-                    let msg = format!("Expected indentation of {} spaces but found {} spaces.", base, actual);
-                    ctx.diagnostic(msg, oxc::span::Span::new(line_start as u32, (line_start + actual.max(1)) as u32));
+                } else if indent_script && actual < base {
+                    ctx.diagnostic(format!("Expected indentation of {} spaces but found {} spaces.", base, actual),
+                        oxc::span::Span::new(line_start as u32, (line_start + actual.max(1)) as u32));
                 }
                 continue;
             }
