@@ -32,8 +32,7 @@ impl Rule for InfiniteReactiveLoop {
             top_vars.append(&mut module_vars);
             implicit_reactive.extend(module_implicit);
         }
-        collect_store_refs(content, &mut top_vars);
-        let aliases = collect_aliases(content);
+        let aliases = collect_store_refs_and_aliases(content, &mut top_vars);
         let func_info = collect_func_info(content, &top_vars, &implicit_reactive);
 
         let mut search_pos = 0;
@@ -126,29 +125,7 @@ fn extract_declared_names(decl: &str, vars: &mut Vec<String>) {
     }
 }
 
-fn collect_store_refs(content: &str, vars: &mut Vec<String>) {
-    for line in content.lines() {
-        let t = line.trim();
-        if t.starts_with("import ") {
-            if let (Some(bs), Some(be)) = (t.find('{'), t.find('}')) {
-                for imp in t[bs+1..be].split(',') {
-                    let imp = imp.trim();
-                    let name = if let Some(ap) = imp.find(" as ") {
-                        imp[ap+4..].trim()
-                    } else { imp };
-                    if !name.is_empty() {
-                        let sr = format!("${}", name);
-                        if content.contains(&sr) && !vars.contains(&sr) {
-                            vars.push(sr);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn collect_aliases(content: &str) -> Vec<(String, String)> {
+fn collect_store_refs_and_aliases(content: &str, vars: &mut Vec<String>) -> Vec<(String, String)> {
     const FNS: &[&str] = &["setTimeout", "setInterval", "queueMicrotask", "tick"];
     let mut aliases = Vec::new();
     for line in content.lines() {
@@ -163,9 +140,16 @@ fn collect_aliases(content: &str) -> Vec<(String, String)> {
             if let (Some(bs), Some(be)) = (t.find('{'), t.find('}')) {
                 for imp in t[bs+1..be].split(',') {
                     let imp = imp.trim();
-                    if let Some(ap) = imp.find(" as ") {
-                        let orig = imp[..ap].trim();
-                        if FNS.contains(&orig) { aliases.push((orig.to_string(), imp[ap+4..].trim().to_string())); }
+                    let (orig, local) = match imp.find(" as ") {
+                        Some(ap) => (imp[..ap].trim(), imp[ap+4..].trim()),
+                        None => (imp, imp),
+                    };
+                    if !local.is_empty() {
+                        let sr = format!("${}", local);
+                        if content.contains(&sr) && !vars.contains(&sr) { vars.push(sr); }
+                    }
+                    if orig != local && FNS.contains(&orig) {
+                        aliases.push((orig.to_string(), local.to_string()));
                     }
                 }
             }
@@ -304,8 +288,8 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
             let body_end = if end_line < line_offsets.len() { line_offsets[end_line] + lines[end_line].len() } else { content.len() };
 
             let func_body = &content[body_start..body_end];
-            let then_catch_regions = find_then_catch_regions(func_body);
-            let timer_regions = find_timer_callback_regions(func_body);
+            let then_catch_regions = find_callback_regions(func_body, &[".then(", ".catch("], false, false);
+            let timer_regions = find_callback_regions(func_body, &["setTimeout(", "setInterval(", "queueMicrotask("], true, true);
             let mut has_then_catch_assigns = false;
             let mut all_async_regions = then_catch_regions;
             all_async_regions.extend_from_slice(&timer_regions);
@@ -436,10 +420,6 @@ fn is_local_declaration(line: &str, var: &str) -> bool {
 
 fn has_assign(line: &str, var: &str) -> bool {
     if !line.contains(var) { return false; }
-    has_assign_with_patterns_inline(line, var)
-}
-
-fn has_assign_with_patterns_inline(line: &str, var: &str) -> bool {
     let ops = [" = ", " += ", " -= ", " *= ", " /= "];
     for op in &ops {
         if let Some(pos) = find_var_op(line, var, op) {
@@ -833,20 +813,19 @@ fn scan_callback_args(bytes: &[u8], after: usize, first_only: bool) -> Vec<(usiz
     regions
 }
 
-fn find_timer_callback_regions(block: &str) -> Vec<(usize, usize)> {
+fn find_callback_regions(block: &str, patterns: &[&str], check_boundary: bool, first_only: bool) -> Vec<(usize, usize)> {
     let mut regions = Vec::new();
     let bytes = block.as_bytes();
-    for pattern in &["setTimeout(", "setInterval(", "queueMicrotask("] {
+    for pattern in patterns {
         let mut search = 0;
         while let Some(pos) = block[search..].find(pattern) {
             let abs = search + pos;
-            if abs > 0 {
-                let prev = bytes[abs - 1];
-                if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' {
-                    search = abs + pattern.len(); continue;
-                }
+            if check_boundary && abs > 0
+                && matches!(bytes[abs - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$')
+            {
+                search = abs + pattern.len(); continue;
             }
-            regions.extend(scan_callback_args(bytes, abs + pattern.len(), true));
+            regions.extend(scan_callback_args(bytes, abs + pattern.len(), first_only));
             search = abs + pattern.len();
         }
     }
@@ -861,20 +840,6 @@ fn is_in_effective_then_catch(regions: &[(usize, usize)], pos: usize) -> bool {
         None => return false,
     };
     !regions.iter().any(|(s, e)| *s > innermost.0 && *e < innermost.1 && *e <= pos)
-}
-
-fn find_then_catch_regions(block: &str) -> Vec<(usize, usize)> {
-    let mut regions = Vec::new();
-    let bytes = block.as_bytes();
-    for pattern in &[".then(", ".catch("] {
-        let mut search = 0;
-        while let Some(pos) = block[search..].find(pattern) {
-            let abs = search + pos;
-            regions.extend(scan_callback_args(bytes, abs + pattern.len(), false));
-            search = abs + pattern.len();
-        }
-    }
-    regions
 }
 
 fn report_intermediate_calls(
@@ -968,7 +933,7 @@ fn analyze_block(
         })
         .collect();
 
-    let async_callback_regions = find_then_catch_regions(block);
+    let async_callback_regions = find_callback_regions(block, &[".then(", ".catch("], false, false);
 
     let tracked_vars: std::collections::HashSet<String> = {
         let mut tracked = std::collections::HashSet::new();
