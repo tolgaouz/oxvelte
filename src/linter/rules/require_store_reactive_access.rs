@@ -152,11 +152,8 @@ impl Rule for RequireStoreReactiveAccess {
             for (pos, _) in content.match_indices(&raw_interp) {
                 if content[pos..].starts_with(&reactive_interp) { continue; }
                 if pos > 0 && content.as_bytes()[pos - 1] == b'$' { continue; }
-                let src_pos = content_offset + pos;
-                ctx.diagnostic(
-                    RAW_STORE_MSG,
-                    oxc::span::Span::new(src_pos as u32, (src_pos + raw_interp.len()) as u32),
-                );
+                let sp = content_offset + pos;
+                ctx.diagnostic(RAW_STORE_MSG, oxc::span::Span::new(sp as u32, (sp + raw_interp.len()) as u32));
             }
         }
 
@@ -213,21 +210,14 @@ impl Rule for RequireStoreReactiveAccess {
 
                 if before.ends_with(':') && !after_text.starts_with(']') { continue; }
 
-                let consistent_context =
-                    before.ends_with("typeof") || before.ends_with("typeof ")
-                    || before.ends_with('!')
-                    || after_text.starts_with("==") || after_text.starts_with("!=")
-                    || after_text.starts_with("&&") || after_text.starts_with("||") || after_text.starts_with("??")
-                    || (after_text.starts_with('?') && !after_text.starts_with("?."))
-                    || before.ends_with("await") || before.ends_with("await ");
+                let consistent_context = ["typeof", "typeof ", "!", "await", "await "].iter().any(|p| before.ends_with(p))
+                    || ["==", "!=", "&&", "||", "??"].iter().any(|p| after_text.starts_with(p))
+                    || (after_text.starts_with('?') && !after_text.starts_with("?."));
 
                 if consistent_context {
                     if is_const_store(var) {
-                        let src_pos = content_offset + pos;
-                        ctx.diagnostic(
-                            RAW_STORE_MSG,
-                            oxc::span::Span::new(src_pos as u32, (src_pos + var.len()) as u32),
-                        );
+                        let sp = content_offset + pos;
+                        ctx.diagnostic(RAW_STORE_MSG, oxc::span::Span::new(sp as u32, (sp + var.len()) as u32));
                     }
                     continue;
                 }
@@ -237,32 +227,18 @@ impl Rule for RequireStoreReactiveAccess {
                     || before_trimmed.ends_with("\tin") || before_trimmed.ends_with("\tof");
 
                 if in_for_in_of {
-                    let src_pos = content_offset + pos;
-                    ctx.diagnostic(
-                        RAW_STORE_MSG,
-                        oxc::span::Span::new(src_pos as u32, (src_pos + var.len()) as u32),
-                    );
+                    let sp = content_offset + pos;
+                    ctx.diagnostic(RAW_STORE_MSG, oxc::span::Span::new(sp as u32, (sp + var.len()) as u32));
                     continue;
                 }
 
                 if before.ends_with('(') {
                     let kw_before = before[..before.len()-1].trim_end();
-                    if kw_before.ends_with("if") {
-                        if is_const_store(var) {
-                            let src_pos = content_offset + pos;
-                            ctx.diagnostic(
-                                RAW_STORE_MSG,
-                                oxc::span::Span::new(src_pos as u32, (src_pos + var.len()) as u32),
-                            );
+                    if kw_before.ends_with("if") || kw_before.ends_with("switch") || kw_before.ends_with("while") {
+                        if !kw_before.ends_with("if") || is_const_store(var) {
+                            let sp = content_offset + pos;
+                            ctx.diagnostic(RAW_STORE_MSG, oxc::span::Span::new(sp as u32, (sp + var.len()) as u32));
                         }
-                        continue;
-                    }
-                    if kw_before.ends_with("switch") || kw_before.ends_with("while") {
-                        let src_pos = content_offset + pos;
-                        ctx.diagnostic(
-                            RAW_STORE_MSG,
-                            oxc::span::Span::new(src_pos as u32, (src_pos + var.len()) as u32),
-                        );
                         continue;
                     }
                 }
@@ -289,11 +265,8 @@ impl Rule for RequireStoreReactiveAccess {
                     continue;
                 }
 
-                let src_pos = content_offset + pos;
-                ctx.diagnostic(
-                    RAW_STORE_MSG,
-                    oxc::span::Span::new(src_pos as u32, (src_pos + var.len()) as u32),
-                );
+                let sp = content_offset + pos;
+                ctx.diagnostic(RAW_STORE_MSG, oxc::span::Span::new(sp as u32, (sp + var.len()) as u32));
             }
         }
 
@@ -358,12 +331,8 @@ impl Rule for RequireStoreReactiveAccess {
                         if let Attribute::Spread { span } = attr {
                             let region = &ctx.source[span.start as usize..span.end as usize];
                             for var in &store_vars_clone {
-                                let has_raw_ref = has_word_boundary_match(region, var);
-                                if has_raw_ref && !region.contains(&format!("${}", var)) {
-                                    ctx.diagnostic(
-                                        RAW_STORE_MSG,
-                                        *span,
-                                    );
+                                if has_word_boundary_match(region, var) && !region.contains(&format!("${}", var)) {
+                                    ctx.diagnostic(RAW_STORE_MSG, *span);
                                 }
                             }
                         }
