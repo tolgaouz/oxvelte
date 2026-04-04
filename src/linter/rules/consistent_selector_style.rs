@@ -146,49 +146,22 @@ impl Rule for ConsistentSelectorStyle {
                 false
             };
 
-            if can_be_id {
-                if let (Some(ip), Some(cp)) = (id_pos, class_pos) {
-                    if ip < cp {
-                        return Some("ID".to_string());
-                    }
-                }
-            }
-
-            if can_be_type {
-                if let (Some(tp), Some(cp)) = (type_pos, class_pos) {
-                    if tp < cp {
-                        return Some("element type".to_string());
-                    }
-                }
-            }
-
+            if can_be_id && id_pos.zip(class_pos).is_some_and(|(ip, cp)| ip < cp) { return Some("ID".to_string()); }
+            if can_be_type && type_pos.zip(class_pos).is_some_and(|(tp, cp)| tp < cp) { return Some("element type".to_string()); }
             None
         };
 
         let check_type_selector = |elem_name: &str| -> Option<String> {
-            let elem_count = element_usage.get(elem_name).copied().unwrap_or(0);
-            let can_be_id = elem_count <= 1;
-            if can_be_id {
-                if let (Some(ip), Some(tp)) = (id_pos, type_pos) {
-                    if ip < tp {
-                        return Some("ID".to_string());
-                    }
-                }
-            }
+            if element_usage.get(elem_name).copied().unwrap_or(0) <= 1
+                && id_pos.zip(type_pos).is_some_and(|(ip, tp)| ip < tp) { return Some("ID".to_string()); }
             None
         };
 
         let check_id_selector = |id_name: &str| -> Option<String> {
             if !flag_id { return None; }
-            if let Some(elem_type) = id_usage.get(id_name) {
-                let elem_count = element_usage.get(elem_type).copied().unwrap_or(0);
-                if elem_count <= 1 {
-                    if let (Some(tp), Some(ip)) = (type_pos, id_pos) {
-                        if tp < ip {
-                            return Some("element type".to_string());
-                        }
-                    }
-                }
+            if let Some(et) = id_usage.get(id_name) {
+                if element_usage.get(et).copied().unwrap_or(0) <= 1
+                    && type_pos.zip(id_pos).is_some_and(|(tp, ip)| tp < ip) { return Some("element type".to_string()); }
             }
             None
         };
@@ -223,11 +196,7 @@ impl Rule for ConsistentSelectorStyle {
                         && !trimmed.ends_with(';') && !trimmed.starts_with("/*")
                         && !trimmed.starts_with("//")
                     {
-                        let sel_text = if let Some(brace) = trimmed.find('{') {
-                            &trimmed[..brace]
-                        } else {
-                            trimmed
-                        };
+                        let sel_text = trimmed.find('{').map_or(trimmed, |b| &trimmed[..b]);
                         flag_selectors_in_text(ctx, sel_text, base + byte_offset + leading,
                             &check_class_selector, &check_type_selector, &check_id_selector, ELEMENT_SELECTORS);
                     }
@@ -268,21 +237,13 @@ impl Rule for ConsistentSelectorStyle {
                 && !trimmed.ends_with(';');
 
             if is_selector_line {
-                let selector_text = if let Some(brace_pos) = trimmed.find('{') {
-                    &trimmed[..brace_pos]
-                } else {
-                    trimmed
-                };
+                let selector_text = trimmed.find('{').map_or(trimmed, |bp| &trimmed[..bp]);
 
                 for sel_part in selector_text.split(',') {
                     let sel = sel_part.trim();
                     if sel.is_empty() { continue; }
 
-                    let sel_offset_in_line = if let Some(pos) = line.find(sel) {
-                        pos
-                    } else {
-                        leading
-                    };
+                    let sel_offset_in_line = line.find(sel).unwrap_or(leading);
 
                     flag_selectors_in_text(ctx, sel, base + byte_offset + sel_offset_in_line,
                         &check_class_selector, &check_type_selector, &check_id_selector, ELEMENT_SELECTORS);
