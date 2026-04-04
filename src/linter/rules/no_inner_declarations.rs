@@ -126,15 +126,8 @@ fn check_inner_declarations(content: &str, content_offset: usize, ctx: &mut Lint
         }
         if bytes[i] == b'}' {
             brace_depth -= 1;
-            while let Some(&(depth, _)) = scope_stack.last() {
-                if depth >= brace_depth {
-                    scope_stack.pop();
-                } else {
-                    break;
-                }
-            }
-            i += 1;
-            continue;
+            while scope_stack.last().is_some_and(|&(d, _)| d >= brace_depth) { scope_stack.pop(); }
+            i += 1; continue;
         }
 
         if !bytes[i].is_ascii() {
@@ -148,11 +141,8 @@ fn check_inner_declarations(content: &str, content_offset: usize, ctx: &mut Lint
             let prev = bytes[i - 1];
             !prev.is_ascii_alphanumeric() && prev != b'_' && prev != b'$' && prev != b'.'
         };
-        let is_control = kw_word_start && (rest.starts_with("if ") || rest.starts_with("if(")
-            || rest.starts_with("else ") || rest.starts_with("else{")
-            || rest.starts_with("for ") || rest.starts_with("for(")
-            || rest.starts_with("while ") || rest.starts_with("while(")
-            || rest.starts_with("switch ") || rest.starts_with("switch("));
+        let is_control = kw_word_start && ["if", "else", "for", "while", "switch"].iter()
+            .any(|&kw| rest.starts_with(kw) && rest.as_bytes().get(kw.len()).is_some_and(|&c| matches!(c, b' ' | b'(' | b'{')));
 
         if is_control {
             scope_stack.push((brace_depth, false));
@@ -165,17 +155,8 @@ fn check_inner_declarations(content: &str, content_offset: usize, ctx: &mut Lint
             } else {
                 before
             };
-            let is_expression = effective_before.ends_with('=')
-                || effective_before.ends_with('(')
-                || effective_before.ends_with(',')
-                || effective_before.ends_with('!')
-                || effective_before.ends_with("||")
-                || effective_before.ends_with("&&")
-                || effective_before.ends_with('?')
-                || effective_before.ends_with(':')
-                || effective_before.ends_with("return")
-                || effective_before.ends_with("=>")
-                || effective_before.is_empty();
+            let is_expression = effective_before.is_empty()
+                || ["=", "(", ",", "!", "||", "&&", "?", ":", "return", "=>"].iter().any(|&s| effective_before.ends_with(s));
 
             if !is_expression {
                 let in_control_flow = !scope_stack.is_empty()
