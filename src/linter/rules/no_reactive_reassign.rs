@@ -201,11 +201,9 @@ impl Rule for NoReactiveReassign {
                             continue;
                         }
 
-                        let source_pos = content_offset + abs;
-                        ctx.diagnostic(
-                            format!("Assignment to reactive value '{}'.", var),
-                            oxc::span::Span::new(source_pos as u32, (source_pos + pattern.len()) as u32),
-                        );
+                        let sp = content_offset + abs;
+                        ctx.diagnostic(format!("Assignment to reactive value '{}'.", var),
+                            oxc::span::Span::new(sp as u32, (sp + pattern.len()) as u32));
                         search_from = abs + pattern.len();
                     }
                 }
@@ -223,10 +221,8 @@ impl Rule for NoReactiveReassign {
                         let ls = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
                         if content[ls..].trim_start().starts_with("$:") || is_shadowed_in_scope(content, abs, var) { continue; }
                         let sp = content_offset + abs;
-                        ctx.diagnostic(
-                            format!("Assignment to reactive value '{}'.", var),
-                            oxc::span::Span::new(sp as u32, (sp + pattern.len()) as u32),
-                        );
+                        ctx.diagnostic(format!("Assignment to reactive value '{}'.", var),
+                            oxc::span::Span::new(sp as u32, (sp + pattern.len()) as u32));
                     }
                 }
                 {
@@ -253,10 +249,8 @@ impl Rule for NoReactiveReassign {
                                         let ls = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
                                         if !content[ls..].trim_start().starts_with("$:") && !is_shadowed_in_scope(content, abs, var) {
                                             let sp = content_offset + abs;
-                                            ctx.diagnostic(
-                                                format!("Assignment to property of reactive value '{}'.", var),
-                                                oxc::span::Span::new(sp as u32, (sp + chain_len + m.len() - 1) as u32),
-                                            );
+                                            ctx.diagnostic(format!("Assignment to property of reactive value '{}'.", var),
+                                                oxc::span::Span::new(sp as u32, (sp + chain_len + m.len() - 1) as u32));
                                         }
                                     }
                                 }
@@ -284,10 +278,8 @@ impl Rule for NoReactiveReassign {
                             let ls = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
                             if !content[ls..].trim_start().starts_with("$:") && !is_shadowed_in_scope(content, abs, var) {
                                 let sp = content_offset + abs;
-                                ctx.diagnostic(
-                                    format!("Assignment to property of reactive value '{}'.", var),
-                                    oxc::span::Span::new(sp as u32, (sp + dot_pat.len() + pe + suffix.len()) as u32),
-                                );
+                                ctx.diagnostic(format!("Assignment to property of reactive value '{}'.", var),
+                                    oxc::span::Span::new(sp as u32, (sp + dot_pat.len() + pe + suffix.len()) as u32));
                             }
                         }
                         search_from = abs + dot_pat.len();
@@ -319,11 +311,9 @@ impl Rule for NoReactiveReassign {
                         }
                         let rest = rest.trim_start();
                         if rest.starts_with('=') && !rest.starts_with("==") {
-                            let source_pos = content_offset + pos;
-                            ctx.diagnostic(
-                                format!("Assignment to property of reactive value '{}'.", var),
-                                oxc::span::Span::new(source_pos as u32, (source_pos + pattern_base.len()) as u32),
-                            );
+                            let sp = content_offset + pos;
+                            ctx.diagnostic(format!("Assignment to property of reactive value '{}'.", var),
+                                oxc::span::Span::new(sp as u32, (sp + pattern_base.len()) as u32));
                         }
                     }
                 }
@@ -332,11 +322,9 @@ impl Rule for NoReactiveReassign {
                     let line_start = content[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
                     let line = content[line_start..].trim_start();
                     if line.starts_with("$:") { continue; }
-                    let source_pos = content_offset + pos;
-                    ctx.diagnostic(
-                        format!("Assignment to property of reactive value '{}'.", var),
-                        oxc::span::Span::new(source_pos as u32, (source_pos + delete_pattern.len()) as u32),
-                    );
+                    let sp = content_offset + pos;
+                    ctx.diagnostic(format!("Assignment to property of reactive value '{}'.", var),
+                        oxc::span::Span::new(sp as u32, (sp + delete_pattern.len()) as u32));
                 }
             }
             } // end if check_props (step 2b)
@@ -381,11 +369,9 @@ impl Rule for NoReactiveReassign {
                             }
                         }
 
-                        let source_pos = content_offset + pos;
-                        ctx.diagnostic(
-                            format!("Assignment to reactive value '{}'.", var),
-                            oxc::span::Span::new(source_pos as u32, (source_pos + var.len()) as u32),
-                        );
+                        let sp = content_offset + pos;
+                        ctx.diagnostic(format!("Assignment to reactive value '{}'.", var),
+                            oxc::span::Span::new(sp as u32, (sp + var.len()) as u32));
                         break; // Only report once per var per pattern type
                     }
                 }
@@ -411,11 +397,9 @@ impl Rule for NoReactiveReassign {
                     if let Some(pos) = content.find(pattern.as_str()) {
                         let after = &content[pos + pattern.len()..];
                         if after.contains(" of ") || after.contains(" in ") {
-                            let source_pos = content_offset + pos;
-                            ctx.diagnostic(
-                                format!("Assignment to property of reactive value '{}'.", var),
-                                oxc::span::Span::new(source_pos as u32, (source_pos + pattern.len()) as u32),
-                            );
+                            let sp = content_offset + pos;
+                            ctx.diagnostic(format!("Assignment to property of reactive value '{}'.", var),
+                                oxc::span::Span::new(sp as u32, (sp + pattern.len()) as u32));
                         }
                     }
                 }
@@ -434,11 +418,9 @@ impl Rule for NoReactiveReassign {
                             let rest = after_dot[end..].trim_start();
                             if rest.starts_with('=') && !rest.starts_with("==") {
                                 if let Some(pos) = content.find(trimmed) {
-                                    let source_pos = content_offset + pos;
-                                    ctx.diagnostic(
-                                        format!("Assignment to property of reactive value '{}'.", var),
-                                        oxc::span::Span::new(source_pos as u32, (source_pos + trimmed.len()) as u32),
-                                    );
+                                    let sp = content_offset + pos;
+                                    ctx.diagnostic(format!("Assignment to property of reactive value '{}'.", var),
+                                        oxc::span::Span::new(sp as u32, (sp + trimmed.len()) as u32));
                                 }
                             }
                         }
