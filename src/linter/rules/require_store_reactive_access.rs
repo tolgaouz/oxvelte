@@ -404,7 +404,6 @@ fn has_word_boundary_match(text: &str, word: &str) -> bool {
     false
 }
 
-/// Check if a TypeScript type annotation text indicates a store type.
 fn is_store_type(type_text: &str) -> bool {
     const STORE_TYPES: &[&str] = &["Writable", "Readable", "Derived"];
     let text = type_text.trim();
@@ -417,7 +416,6 @@ fn is_store_type(type_text: &str) -> bool {
     false
 }
 
-/// Resolve a relative module path to a file, trying .ts and .js extensions.
 fn resolve_module_file(dir: &std::path::Path, module: &str) -> Option<String> {
     for ext in &["", ".ts", ".js", ".d.ts"] {
         let path = dir.join(format!("{}{}", module, ext));
@@ -428,8 +426,6 @@ fn resolve_module_file(dir: &std::path::Path, module: &str) -> Option<String> {
     None
 }
 
-/// Detect which exports from a module file are stores.
-/// Returns a set of export names that are stores.
 fn detect_store_exports(content: &str) -> HashSet<String> {
     let mut stores = HashSet::new();
     let imports = crate::linter::parse_imports(content);
@@ -480,16 +476,10 @@ fn detect_store_exports(content: &str) -> HashSet<String> {
                         stores.insert(name.to_string());
                         continue;
                     }
-                }
-
-                if let Some(colon) = rest[name_end..].find(':') {
-                    let type_start = name_end + colon + 1;
-                    let type_text = rest[type_start..].trim().trim_end_matches(';');
-                    let extends_store = content.contains(&format!("interface {} extends", type_text))
-                        && (content.contains(&format!("{} extends Writable", type_text))
-                            || content.contains(&format!("{} extends Readable", type_text))
-                            || content.contains(&format!("{} extends Derived", type_text)));
-                    if extends_store {
+                    let full_type = rest[type_start..].trim().trim_end_matches(';');
+                    if content.contains(&format!("interface {} extends", full_type))
+                        && ["Writable", "Readable", "Derived"].iter()
+                            .any(|s| content.contains(&format!("{} extends {}", full_type, s))) {
                         stores.insert(name.to_string());
                     }
                 }
