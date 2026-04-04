@@ -34,15 +34,6 @@ const VOID_ELEMENTS: &[&str] = &[
 
 pub struct HtmlSelfClosing;
 
-enum ElementKind {
-    Component,
-    Svelte,
-    Void,
-    Svg,
-    Math,
-    Normal,
-}
-
 impl Rule for HtmlSelfClosing {
     fn name(&self) -> &'static str {
         "svelte/html-self-closing"
@@ -85,39 +76,27 @@ impl Rule for HtmlSelfClosing {
 
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
-                let (kind, opt) = if el.name.starts_with("svelte:") {
-                    (ElementKind::Svelte, &svelte_opt)
+                let is_void = VOID_ELEMENTS.contains(&el.name.as_str());
+                let (opt, label) = if el.name.starts_with("svelte:") {
+                    (&svelte_opt, "Svelte special elements")
                 } else if el.name.starts_with(|c: char| c.is_uppercase()) || el.name.contains('.') {
-                    (ElementKind::Component, &component_opt)
-                } else if VOID_ELEMENTS.contains(&el.name.as_str()) {
-                    (ElementKind::Void, &void_opt)
+                    (&component_opt, "Svelte custom components")
+                } else if is_void {
+                    (&void_opt, "HTML void elements")
                 } else if is_svg_element(&el.name) {
-                    (ElementKind::Svg, &svg_opt)
+                    (&svg_opt, "SVG elements")
                 } else if is_math_element(&el.name) {
-                    (ElementKind::Math, &math_opt)
+                    (&math_opt, "MathML elements")
                 } else {
-                    (ElementKind::Normal, &normal_opt)
+                    (&normal_opt, "HTML elements")
                 };
+                if opt == "ignore" { return; }
                 let is_empty = el.children.is_empty() || el.children.iter().all(|c|
                     matches!(c, TemplateNode::Text(t) if t.data.trim().is_empty()));
-
-                if opt == "ignore" { return; }
-
-                let label = match kind {
-                    ElementKind::Component => "Svelte custom components",
-                    ElementKind::Svelte => "Svelte special elements",
-                    ElementKind::Void => "HTML void elements",
-                    ElementKind::Svg => "SVG elements",
-                    ElementKind::Math => "MathML elements",
-                    ElementKind::Normal => "HTML elements",
-                };
-
                 if opt == "never" && el.self_closing {
                     ctx.diagnostic(format!("Disallow self-closing on {}.", label), el.span);
-                } else if opt == "always" && !el.self_closing {
-                    if matches!(kind, ElementKind::Void) || is_empty {
-                        ctx.diagnostic(format!("Require self-closing on {}.", label), el.span);
-                    }
+                } else if opt == "always" && !el.self_closing && (is_void || is_empty) {
+                    ctx.diagnostic(format!("Require self-closing on {}.", label), el.span);
                 }
             }
         });
