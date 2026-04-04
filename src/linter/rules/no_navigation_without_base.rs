@@ -37,11 +37,7 @@ impl Rule for NoNavigationWithoutBase {
         let ignore_replace_state = get_bool("ignoreReplaceState");
         let ignore_links = get_bool("ignoreLinks");
 
-        let imports = if let Some(script) = &ctx.ast.instance {
-            parse_imports(&script.content)
-        } else {
-            Vec::new()
-        };
+        let imports = ctx.ast.instance.as_ref().map(|s| parse_imports(&s.content)).unwrap_or_default();
 
         let base_local: Option<String> = imports.iter()
             .find(|(_, imported, module)| {
@@ -90,12 +86,10 @@ impl Rule for NoNavigationWithoutBase {
                         let rest = &content[abs + search_pattern.len()..];
                         let trimmed = rest.trim_start();
 
-                        if trimmed.starts_with('\'') || trimmed.starts_with('"') || trimmed.starts_with('`') {
+                        if matches!(trimmed.as_bytes().first(), Some(b'\'' | b'"' | b'`')) {
                             let quote = trimmed.as_bytes()[0];
-                            let inner = &trimmed[1..];
-                            let is_absolute_uri = if let Some(end) = inner.find(quote as char) {
-                                is_exempt_href(&inner[..end])
-                            } else { false };
+                            let is_absolute_uri = trimmed[1..].find(quote as char)
+                                .map_or(false, |end| is_exempt_href(&trimmed[1..end+1]));
 
                             if !is_absolute_uri {
                                 let call_text = &content[abs..];
@@ -134,15 +128,11 @@ impl Rule for NoNavigationWithoutBase {
                         let region = &ctx.source[span.start as usize..span.end as usize];
                         if let Some(eq_pos) = region.find('=') {
                             let val = region[eq_pos + 1..].trim();
-                            if (val.starts_with('"') && val.ends_with('"'))
-                                || (val.starts_with('\'') && val.ends_with('\''))
-                            {
+                            if matches!((val.as_bytes().first(), val.as_bytes().last()),
+                                (Some(b'"'), Some(b'"')) | (Some(b'\''), Some(b'\''))) {
                                 let inner = &val[1..val.len()-1];
                                 if inner.starts_with('/') && !is_exempt_href(inner) {
-                                    ctx.diagnostic(
-                                        "Found a link with a url that isn't prefixed with the base path.",
-                                        *span,
-                                    );
+                                    ctx.diagnostic("Found a link with a url that isn't prefixed with the base path.", *span);
                                 }
                             }
                             else if val.starts_with('{') && val.ends_with('}') {
