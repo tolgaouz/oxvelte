@@ -346,27 +346,13 @@ impl Rule for RequireStoreReactiveAccess {
                             let region = &ctx.source[span.start as usize..span.end as usize];
                             let is_shorthand = !region.contains('=');
                             for var in check_vars {
-                                if dir_name == var.as_str() && is_shorthand {
-                                    ctx.diagnostic(
-                                        RAW_STORE_MSG,
-                                        *span,
-                                    );
-                                    continue;
-                                }
-                                if let Some(eq) = region.find('=') {
+                                let flag = if dir_name == var.as_str() && is_shorthand { true }
+                                else if let Some(eq) = region.find('=') {
                                     let val = &region[eq+1..];
-                                    if let Some(open) = val.find('{') {
-                                        if let Some(close) = val.find('}') {
-                                            let expr = val[open+1..close].trim();
-                                            if expr == var.as_str() && !expr.starts_with('$') {
-                                                ctx.diagnostic(
-                                                    RAW_STORE_MSG,
-                                                    *span,
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
+                                    val.find('{').and_then(|o| val.find('}').map(|c| val[o+1..c].trim()))
+                                        .is_some_and(|expr| expr == var.as_str() && !expr.starts_with('$'))
+                                } else { false };
+                                if flag { ctx.diagnostic(RAW_STORE_MSG, *span); }
                             }
                         }
                         if let Attribute::Spread { span } = attr {
