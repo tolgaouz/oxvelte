@@ -196,12 +196,9 @@ impl Rule for NoTopLevelBrowserGlobals {
                     }
                 }
 
-                let start = (content_offset + byte_offset) as u32;
-                let end = start + global.len() as u32;
-                ctx.diagnostic(
-                    format!("Unexpected top-level browser global variable \"{}\".", global),
-                    Span::new(start, end),
-                );
+                let s = (content_offset + byte_offset) as u32;
+                ctx.diagnostic(format!("Unexpected top-level browser global variable \"{}\".", global),
+                    Span::new(s, s + global.len() as u32));
             }
         }
 
@@ -281,10 +278,7 @@ fn check_expr_for_globals(expr: &str, span: Span, ctx: &mut LintContext<'_>) {
     for global in BROWSER_GLOBALS {
         if let Some(pos) = expr.find(global) {
             if !is_word_boundary(expr, pos, global.len()) { continue; }
-            ctx.diagnostic(
-                format!("Unexpected top-level browser global variable \"{}\".", global),
-                span,
-            );
+            ctx.diagnostic(format!("Unexpected top-level browser global variable \"{}\".", global), span);
         }
     }
 }

@@ -163,15 +163,10 @@ fn check_inner_declarations(content: &str, content_offset: usize, ctx: &mut Lint
                     && !scope_stack.iter().any(|&(_, is_fn)| is_fn);
 
                 if in_control_flow && brace_depth > 0 {
-                    let source_pos = content_offset + i;
-                    let fn_rest = &content[i + 9..]; // skip "function "
-                    let name_end = fn_rest.find(|c: char| !c.is_alphanumeric() && c != '_')
-                        .unwrap_or(fn_rest.len());
-                    let end_pos = source_pos + 9 + name_end;
-                    ctx.diagnostic(
-                        "Move function declaration to program root.",
-                        oxc::span::Span::new(source_pos as u32, end_pos as u32),
-                    );
+                    let sp = content_offset + i;
+                    let ne = content[i + 9..].find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(content.len() - i - 9);
+                    ctx.diagnostic("Move function declaration to program root.",
+                        oxc::span::Span::new(sp as u32, (sp + 9 + ne) as u32));
                 }
             }
 

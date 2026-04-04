@@ -128,11 +128,9 @@ impl Rule for PreferWritableDerived {
                                 }
                             }
                             if is_single_assignment_effect(&body[1..body_end], &effect_pattern) {
-                                let source_pos = content_offset + var_pos;
-                                ctx.diagnostic(
-                                    "Prefer using writable $derived instead of $state and $effect",
-                                    oxc::span::Span::new(source_pos as u32, (source_pos + var_name.len() + 4) as u32),
-                                );
+                                let sp = content_offset + var_pos;
+                                ctx.diagnostic("Prefer using writable $derived instead of $state and $effect",
+                                    oxc::span::Span::new(sp as u32, (sp + var_name.len() + 4) as u32));
                             }
                         }
                         search_from = abs + needle.len();
