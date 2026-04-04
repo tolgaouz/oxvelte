@@ -67,19 +67,15 @@ impl Rule for NoImmutableReactiveStatements {
                     }
                 }
             } else {
-                let decl_kw = if trimmed.starts_with("const ") { Some("const ") }
-                    else if trimmed.starts_with("let ") { Some("let ") }
-                    else if trimmed.starts_with("var ") { Some("var ") }
-                    else { None };
-                if let Some(kw) = decl_kw {
+                let (kw, is_const) = if trimmed.starts_with("const ") { ("const ", true) }
+                    else if trimmed.starts_with("let ") { ("let ", false) }
+                    else if trimmed.starts_with("var ") { ("var ", false) }
+                    else { ("", false) };
+                if !kw.is_empty() {
                     let rest = &trimmed[kw.len()..];
                     if rest.starts_with('{') || rest.starts_with('[') {
                         for dn in extract_destructured_names(rest) {
-                            if kw == "const " {
-                                const_names.insert(dn);
-                            } else {
-                                let_names.insert(dn);
-                            }
+                            if is_const { const_names.insert(dn); } else { let_names.insert(dn); }
                         }
                     }
                 }
@@ -242,49 +238,25 @@ impl Rule for NoImmutableReactiveStatements {
                 !all_declared.contains(id.as_str()) && !local_names.contains(id.as_str())
             });
 
-            let text_flag = if has_unknown {
-                false
-            } else if !referenced.is_empty() {
-                referenced.iter().all(|v| all_immutable.contains(v))
-            } else if ids.is_empty() && rhs != after {
-                true
-            } else {
-                false
-            };
-
-            let ast_flag = if has_unknown || !text_flag {
+            let text_flag = !has_unknown && ((!referenced.is_empty() && referenced.iter().all(|v| all_immutable.contains(v)))
+                || (ids.is_empty() && rhs != after));
+            let ast_flag = (has_unknown || !text_flag) && {
                 let line_num = content[..offset].matches('\n').count();
-                ast_immutable_stmts.iter().any(|&s| {
-                    let ast_line = content[..s as usize].matches('\n').count();
-                    ast_line == line_num
-                })
-            } else {
-                false
+                ast_immutable_stmts.iter().any(|&s| content[..s as usize].matches('\n').count() == line_num)
             };
-
-            let should_flag = text_flag || ast_flag;
-            if should_flag {
+            if text_flag || ast_flag {
                 let after = full_text[2..].trim_start();
                 let body_off = full_text.len() - after.len();
                 let base = content_offset + offset;
-                let end = base + full_text.len();
-                let diag_start = if let Some(eq) = after.find('=') {
-                    let lhs = after[..eq].trim();
-                    let post = &after[eq + 1..];
-                    if !post.starts_with('=') && !post.starts_with('>')
-                        && !lhs.is_empty() && lhs.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
-                    {
-                        let rhs_text = full_text[body_off + eq + 1..].trim_start();
-                        base + full_text.len() - rhs_text.len()
-                    } else {
-                        base + body_off
-                    }
-                } else {
-                    base + body_off
-                };
+                let diag_start = after.find('=').and_then(|eq| {
+                    let (lhs, post) = (after[..eq].trim(), &after[eq + 1..]);
+                    (!post.starts_with('=') && !post.starts_with('>') && !lhs.is_empty()
+                        && lhs.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$'))
+                        .then(|| base + full_text.len() - full_text[body_off + eq + 1..].trim_start().len())
+                }).unwrap_or(base + body_off);
                 ctx.diagnostic(
                     "This statement is not reactive because all variables referenced in the reactive statement are immutable.",
-                    oxc::span::Span::new(diag_start as u32, end as u32),
+                    oxc::span::Span::new(diag_start as u32, (base + full_text.len()) as u32),
                 );
             }
         }
@@ -342,12 +314,8 @@ fn find_statement_end(content: &str, start: usize) -> usize {
                 let before = content[start..i].trim_end();
                 let after = content[i + 1..].trim_start();
                 let ea = before.ends_with('=') && !before.ends_with("==");
-                if before.ends_with('?') || before.ends_with(':') || before.ends_with("||")
-                    || before.ends_with("&&") || before.ends_with('+') || before.ends_with('-')
-                    || before.ends_with(',') || before.ends_with('\\') || before.ends_with("??")
-                    || ea || after.starts_with('?') || after.starts_with(':')
-                    || after.starts_with("||") || after.starts_with("&&") || after.starts_with("??")
-                    || after.starts_with('.') || after.starts_with("?.") {
+                if ea || ["?", ":", "||", "&&", "+", "-", ",", "\\", "??"].iter().any(|p| before.ends_with(p))
+                    || ["?", ":", "||", "&&", "??", ".", "?."].iter().any(|p| after.starts_with(p)) {
                     i += 1; continue;
                 }
                 return i;
@@ -483,40 +451,25 @@ fn has_reassignment(content: &str, var: &str) -> bool {
     for suffix in &patterns {
         let search = format!("{}{}", var, suffix);
         for (pos, _) in content.match_indices(&search) {
-            if pos > 0 {
-                let prev = content.as_bytes()[pos - 1];
-                if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b':' { continue; }
-            }
-            let line_start = content[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
-            let line = content[line_start..].trim_start();
+            if pos > 0 && matches!(content.as_bytes()[pos - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b':') { continue; }
+            let ls = content[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
+            let line = content[ls..].trim_start();
             if line.starts_with("let ") || line.starts_with("var ") || line.starts_with("$:") { continue; }
-            if suffix == &" =" || suffix == &"=" {
-                let after = pos + search.len();
-                if after < content.len() && content.as_bytes()[after] == b'=' { continue; }
-            }
+            if matches!(suffix, &" =" | &"=") && pos + search.len() < content.len() && content.as_bytes()[pos + search.len()] == b'=' { continue; }
             return true;
         }
     }
 
-    let destructure_patterns = [
-        format!("[{}]", var),    // [var] = ...
-        format!(", {}]", var),   // [a, var] = ...
-        format!("[{},", var),    // [var, b] = ...
-        format!(": {} }}", var), // { x: var } = ...
-        format!(": {}}}", var),  // {x:var} = ...
-    ];
-    for pat in &destructure_patterns {
-        for (pos, _) in content.match_indices(pat.as_str()) {
-            let after_pat = pos + pat.len();
-            let rest = content[after_pat..].trim_start();
-            if rest.starts_with('=') && !rest.starts_with("==") && !rest.starts_with("=>") {
-                let line_start = content[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
-                let line = content[line_start..].trim_start();
-                if !line.starts_with("let ") && !line.starts_with("var ") && !line.starts_with("const ") && !line.starts_with("$:") {
-                    return true;
-                }
+    for pat in &[format!("[{}]", var), format!(", {}]", var), format!("[{},", var),
+                  format!(": {} }}", var), format!(": {}}}", var)] {
+        if content.match_indices(pat.as_str()).any(|(pos, _)| {
+            let rest = content[pos + pat.len()..].trim_start();
+            rest.starts_with('=') && !rest.starts_with("==") && !rest.starts_with("=>") && {
+                let ls = content[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
+                let line = content[ls..].trim_start();
+                !line.starts_with("let ") && !line.starts_with("var ") && !line.starts_with("const ") && !line.starts_with("$:")
             }
-        }
+        }) { return true; }
     }
     false
 }
@@ -535,10 +488,7 @@ fn has_member_write(content: &str, var: &str) -> bool {
     for pat in &[&dot_pat, &bracket_pat] {
         let is_bracket = pat == &&bracket_pat;
         for (pos, _) in content.match_indices(pat.as_str()) {
-            if pos > 0 {
-                let prev = content.as_bytes()[pos - 1];
-                if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' { continue; }
-            }
+            if pos > 0 && matches!(content.as_bytes()[pos - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$') { continue; }
             let rest = &content[pos + pat.len()..];
             let mut i = 0;
             let bytes = rest.as_bytes();
@@ -798,22 +748,9 @@ fn check_immutability_ast(content: &str, is_ts: bool, text_immutable: &HashSet<&
             if name.starts_with('$') { has_store_ref = true; continue; }
 
             let parent_id = nodes.parent_id(desc.id());
-            if let AstKind::StaticMemberExpression(member) = nodes.kind(parent_id) {
-                if member.property.span == ident.span { continue; }
-            }
-
-            if is_simple_assign {
-                if let AstKind::AssignmentExpression(assign) = nodes.kind(parent_id) {
-                    if assign.left.span().start == ident.span.start { continue; }
-                }
-            }
-
-            if let Some(ref_id) = ident.reference_id.get() {
-                let reference = scoping.get_reference(ref_id);
-                if reference.is_write() && !reference.is_read() {
-                    continue;
-                }
-            }
+            if matches!(nodes.kind(parent_id), AstKind::StaticMemberExpression(m) if m.property.span == ident.span) { continue; }
+            if is_simple_assign && matches!(nodes.kind(parent_id), AstKind::AssignmentExpression(a) if a.left.span().start == ident.span.start) { continue; }
+            if ident.reference_id.get().is_some_and(|r| { let rf = scoping.get_reference(r); rf.is_write() && !rf.is_read() }) { continue; }
 
             let symbol = ident.reference_id.get().and_then(|r| scoping.get_reference(r).symbol_id());
             match symbol {
