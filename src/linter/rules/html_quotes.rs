@@ -17,12 +17,10 @@ impl Rule for HtmlQuotes {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        // Parse config options
         let opts = ctx.config.options.as_ref()
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first());
 
-        // Read `prefer` option — default "double"
         let prefer = opts
             .and_then(|o| o.get("prefer"))
             .and_then(|v| v.as_str())
@@ -53,13 +51,11 @@ impl Rule for HtmlQuotes {
                             if end > ctx.source.len() { continue; }
                             let attr_src = &ctx.source[start..end];
 
-                            // Find the `=` to get the value portion
                             if let Some(eq_pos) = attr_src.find('=') {
                                 let val_part = attr_src[eq_pos + 1..].trim();
 
                                 match value {
                                     AttributeValue::Static(_) | AttributeValue::Concat(_) => {
-                                        // Static or mixed (concat) value: must use the preferred quote char
                                         let is_correct = val_part.starts_with(prefer_char);
                                         if !is_correct {
                                             ctx.diagnostic(
@@ -69,9 +65,7 @@ impl Rule for HtmlQuotes {
                                         }
                                     }
                                     AttributeValue::Expression(_) => {
-                                        // Pure dynamic expression
                                         if dynamic_quoted {
-                                            // dynamic.quoted = true: dynamic values should be quoted with prefer char
                                             if !val_part.starts_with(prefer_char) {
                                                 ctx.diagnostic(
                                                     expected_msg,
@@ -79,7 +73,6 @@ impl Rule for HtmlQuotes {
                                                 );
                                             }
                                         } else {
-                                            // dynamic.quoted = false (default): dynamic values should NOT be quoted
                                             let is_quoted = val_part.starts_with('"') || val_part.starts_with('\'');
                                             if is_quoted {
                                                 ctx.diagnostic(
@@ -87,7 +80,6 @@ impl Rule for HtmlQuotes {
                                                     *span,
                                                 );
                                             } else if avoid_invalid_unquoted {
-                                                // Check if the unquoted value contains chars invalid in HTML
                                                 if val_part.contains('>') || val_part.contains('<')
                                                     || val_part.contains('=') || val_part.contains('`')
                                                 {
@@ -111,7 +103,6 @@ impl Rule for HtmlQuotes {
                             if let Some(eq_pos) = attr_src.find('=') {
                                 let val_part = attr_src[eq_pos + 1..].trim();
                                 if dynamic_quoted {
-                                    // dynamic.quoted = true: directive values should be quoted with preferred char
                                     if val_part.starts_with('{') && !val_part.starts_with(prefer_char) {
                                         ctx.diagnostic(
                                             expected_msg,
@@ -119,7 +110,6 @@ impl Rule for HtmlQuotes {
                                         );
                                     }
                                 } else {
-                                    // dynamic.quoted = false (default): directive values should NOT be quoted
                                     let is_quoted = val_part.starts_with('"') || val_part.starts_with('\'');
                                     if is_quoted {
                                         ctx.diagnostic(

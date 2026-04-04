@@ -3,7 +3,6 @@
 
 use crate::linter::{LintContext, Rule};
 
-/// Check if the effect body contains exactly one statement that is `varName = expr;`
 fn is_single_assignment_effect(body: &str, assign_pattern: &str) -> bool {
     let bytes = body.as_bytes();
     let mut depth = 0i32;
@@ -69,15 +68,12 @@ impl Rule for PreferWritableDerived {
             let tag_text = &source[base..script.span.end as usize];
             let content_offset = tag_text.find('>').map(|p| base + p + 1).unwrap_or(base);
 
-            // Find let name = $state(expr); patterns
             let mut state_vars: Vec<(String, usize)> = Vec::new(); // (name, position)
             for line in content.lines() {
                 let trimmed = line.trim();
                 if let Some(rest) = trimmed.strip_prefix("let ") {
-                    // Match $state( or $state<...>(
                     let state_pos = rest.find("$state(")
                         .or_else(|| rest.find("$state<").and_then(|p| {
-                            // Find matching > then (
                             let after = &rest[p + 7..]; // after "$state<"
                             let mut depth = 1i32;
                             for (i, ch) in after.char_indices() {
@@ -95,7 +91,6 @@ impl Rule for PreferWritableDerived {
                         }));
                     if let Some(state_pos) = state_pos {
                         let name_part = rest[..state_pos].trim_end().trim_end_matches('=').trim();
-                        // Strip type annotation: `varName: Type` → `varName`
                         let name_part = if let Some(colon) = name_part.find(':') {
                             name_part[..colon].trim()
                         } else {
@@ -104,7 +99,6 @@ impl Rule for PreferWritableDerived {
                         if name_part.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
                             && !name_part.is_empty()
                         {
-                            // Find the actual position in content
                             if let Some(pos) = content.find(trimmed) {
                                 state_vars.push((name_part.to_string(), pos));
                             }
@@ -113,7 +107,6 @@ impl Rule for PreferWritableDerived {
                 }
             }
 
-            // For each $state var, check if there's a $effect that reassigns it
             for (var_name, var_pos) in &state_vars {
                 let effect_pattern = format!("{} =", var_name);
                 if !content.contains("$effect(") && !content.contains("$effect.pre(") { continue; }

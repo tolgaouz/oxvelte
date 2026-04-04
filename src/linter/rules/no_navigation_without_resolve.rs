@@ -8,15 +8,12 @@ use oxc::span::Span;
 
 const NAV_FUNCTIONS: &[&str] = &["goto", "pushState", "replaceState"];
 
-/// Check if a string starts with an absolute URL scheme.
 fn is_absolute_url(s: &str) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
         || s.starts_with("mailto:") || s.starts_with("tel:")
         || s.starts_with("//")
 }
 
-/// Find the index of the closing paren at depth 0 in `s`.
-/// Returns `s.len()` if not found.
 fn find_closing_paren(s: &str) -> usize {
     let mut depth = 0i32;
     for (i, ch) in s.char_indices() {
@@ -44,7 +41,6 @@ impl Rule for NoNavigationWithoutResolve {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        // Config options: ignoreGoto, ignorePushState, ignoreReplaceState, ignoreLinks
         let (ignore_goto, ignore_push_state, ignore_replace_state, ignore_links) = {
             let opts = ctx.config.options.as_ref()
                 .and_then(|v| v.as_array())
@@ -57,7 +53,6 @@ impl Rule for NoNavigationWithoutResolve {
             )
         };
 
-        // Parse imports once and reuse for both script and template checks
         let imports = ctx.ast.instance.as_ref()
             .map(|s| parse_imports(&s.content))
             .unwrap_or_default();
@@ -65,7 +60,6 @@ impl Rule for NoNavigationWithoutResolve {
         if let Some(script) = &ctx.ast.instance {
             let content = &script.content;
 
-            // Find local names for navigation functions
             let mut nav_local_names: Vec<(String, &str)> = Vec::new();
             for (local, imported, module) in &imports {
                 if module == "$app/navigation" {
@@ -84,7 +78,6 @@ impl Rule for NoNavigationWithoutResolve {
 
             if !nav_local_names.is_empty() {
 
-            // Check if resolveRoute is imported
             let resolve_local: Option<String> = imports.iter()
                 .find(|(_, imported, module)| {
                     (imported == "resolve" || imported == "asset" || imported == "*") && module == "$app/paths"
@@ -113,7 +106,6 @@ impl Rule for NoNavigationWithoutResolve {
                     let rest = &content[abs + search_pattern.len()..];
                     let trimmed = rest.trim_start();
 
-                    // Check if the argument is a string literal (not empty)
                     if trimmed.starts_with('\'') || trimmed.starts_with('"') || trimmed.starts_with('`') {
                         let quote = trimmed.as_bytes()[0];
                         let inner = &trimmed[1..];
@@ -142,10 +134,8 @@ impl Rule for NoNavigationWithoutResolve {
                         }
                     } else if trimmed.starts_with("resolve") || trimmed.starts_with("asset")
                         || resolve_local.as_ref().map_or(false, |r| trimmed.starts_with(r.as_str())) {
-                        // resolve()/asset() at the start — check for concatenation
                         let call_text = &content[abs + search_pattern.len()..];
                         let call_body = &call_text[..find_closing_paren(call_text)];
-                        // Check for `+` at top level (concatenation)
                         let mut d = 0i32;
                         let has_concat = call_body.chars().any(|ch| {
                             match ch {
@@ -163,7 +153,6 @@ impl Rule for NoNavigationWithoutResolve {
                             );
                         }
                     } else {
-                        // Variable argument — trace to its initializer
                         let var_ident = trimmed.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '$').next().unwrap_or("");
                         if !var_ident.is_empty() && !is_value_safe(var_ident, content, 0) {
                             let source_pos = base + gt + 1 + abs;
@@ -180,13 +169,8 @@ impl Rule for NoNavigationWithoutResolve {
             } // end if nav_local_names not empty
         }
 
-        // If ignoreLinks is set, skip template <a> checking
         if ignore_links { return; }
 
-        // Template <a href> checking: trace variable values to check if safe
-        // Only check <a href> if the file looks like a SvelteKit component.
-        // Skip if there are non-$app imports but no $app imports (clearly not SvelteKit).
-        // Still check if there are no imports at all (could be a simple SvelteKit page).
         let has_any_imports = !imports.is_empty();
         let has_sveltekit_imports = imports.iter().any(|(_, _, module)| module.starts_with("$app/"));
         if has_any_imports && !has_sveltekit_imports { return; }
@@ -199,8 +183,6 @@ impl Rule for NoNavigationWithoutResolve {
             if let TemplateNode::Element(el) = node {
                 if el.name != "a" { return; }
 
-                // Check for rel="external" — skip links with rel containing external
-                // Also handle shorthand {rel} where rel variable is 'external'
                 let el_source = &ctx.source[el.span.start as usize..el.span.end as usize];
                 let has_rel = el.attributes.iter().any(|a| {
                     match a {
@@ -212,7 +194,6 @@ impl Rule for NoNavigationWithoutResolve {
                                     _ => false,
                                 };
                             }
-                            // Shorthand {rel}
                             if name == "rel" || (matches!(value, AttributeValue::Expression(e) if e.trim() == "rel")) {
                                 return true;
                             }
@@ -221,7 +202,6 @@ impl Rule for NoNavigationWithoutResolve {
                         _ => false,
                     }
                 });
-                // Also check the raw element source for {rel} shorthand
                 let has_external = has_rel || el_source.contains("{rel}");
                 if has_external { return; }
 
@@ -230,7 +210,6 @@ impl Rule for NoNavigationWithoutResolve {
                         if name != "href" { continue; }
                         let region = &ctx.source[span.start as usize..span.end as usize];
 
-                        // Skip absolute URLs and fragments
                         let skip = match value {
                             AttributeValue::Static(v) => {
                                 is_absolute_url(v) || v.starts_with('#') || v.is_empty()
@@ -239,23 +218,18 @@ impl Rule for NoNavigationWithoutResolve {
                         };
                         if skip { continue; }
 
-                        // Check if resolve/asset wraps the ENTIRE value (not partial)
                         if let AttributeValue::Expression(expr) = value {
                             let e = expr.trim();
-                            // resolve('/path') or asset('/path') as the entire expression
                             if (e.starts_with("resolve") || e.starts_with("asset")) && e.ends_with(')') && !e.contains('+') {
                                 continue;
                             }
                         }
                         if region.contains("resolve(") && !region.contains('+') { continue; }
                         if has_resolve && region.contains("$") { continue; }
-                        // Check if expression is a PURE function call (not concatenated)
                         if let AttributeValue::Expression(expr) = value {
                             let e = expr.trim();
-                            // Pure call: `fn(args)` — no concatenation
                             if e.contains('(') && e.ends_with(')') && !e.contains('+') { continue; }
                         }
-                        // Skip if the expression is clearly safe (fragment, absolute URL, etc.)
                         if let AttributeValue::Expression(expr) = value {
                             let e = expr.trim();
                             if e.starts_with("'http") || e.starts_with("\"http")
@@ -263,21 +237,16 @@ impl Rule for NoNavigationWithoutResolve {
                                 || e.starts_with("'mailto:") || e.starts_with("\"mailto:")
                                 || e.starts_with("`#") || e.contains("'#'")
                                 || e.starts_with("'//") || e.starts_with("\"//")
-                                // Template literal with URL protocol
                                 || (e.starts_with('`') && e.contains("://"))
-                                // Expression producing URL (contains protocol)
                                 || e.contains("://")
-                                // Nullish
                                 || e == "undefined" || e == "null"
                                 {
                                 continue;
                             }
                         }
-                        // For identifiers, trace to initializer value
                         if let AttributeValue::Expression(expr) = value {
                             let e = expr.trim();
                             if e.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
-                                // Trace variable to its initializer
                                 let script_content = ctx.ast.instance.as_ref().map(|s| s.content.as_str()).unwrap_or("");
                                 if is_value_safe(e, script_content, 0) { continue; }
                             }
@@ -294,11 +263,8 @@ impl Rule for NoNavigationWithoutResolve {
     }
 }
 
-/// Trace a variable name to its initializer and check if the value is safe
-/// (resolve call, absolute URL, fragment, nullish, or asset call).
 fn is_value_safe(var_name: &str, script_content: &str, depth: usize) -> bool {
     if depth > 5 { return false; } // prevent infinite recursion
-    // Find `const/let VAR = INIT;` in script
     for kw in &["const ", "let ", "var "] {
         let pattern = format!("{}{}", kw, var_name);
         if let Some(pos) = script_content.find(&pattern) {
@@ -306,37 +272,26 @@ fn is_value_safe(var_name: &str, script_content: &str, depth: usize) -> bool {
             let rest = rest.trim_start();
             if !rest.starts_with('=') { continue; }
             let init = rest[1..].trim_start();
-            // Get the initializer up to ; or newline
             let end = init.find(|c| c == ';' || c == '\n').unwrap_or(init.len());
             let init = init[..end].trim();
-            // Check if initializer is safe
             if init.is_empty() { continue; }
-            // null/undefined → safe
             if init == "null" || init == "undefined" { return true; }
-            // resolve()/asset() call → safe only if it's a pure call (no concatenation)
             if (init.contains("resolve") || init.contains("asset")) && !init.contains('+') { return true; }
-            // Absolute URL → safe
             if init.starts_with("'http") || init.starts_with("\"http")
                 || init.starts_with("'//") || init.starts_with("\"//")
                 || init.starts_with("'mailto:") || init.starts_with("'tel:") { return true; }
-            // Fragment → safe
             if init.starts_with("'#") || init.starts_with("\"#") { return true; }
-            // Another identifier → trace recursively
             if init.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
                 return is_value_safe(init, script_content, depth + 1);
             }
-            // Template literal with resolve → safe
             if init.contains("resolve") { return true; }
-            // $page.url, $page.data → safe (SvelteKit stores)
             if init.starts_with("$page") || init.starts_with("$app") { return true; }
-            // Not clearly safe
             return false;
         }
     }
     false // variable not found or not initialized
 }
 
-/// Check if a navigation function should be ignored based on config.
 fn is_nav_ignored_resolve(name: &str, ignore_goto: bool, ignore_push_state: bool, ignore_replace_state: bool) -> bool {
     match name {
         "goto" => ignore_goto,

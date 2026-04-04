@@ -16,8 +16,6 @@ impl Rule for MaxAttributesPerLine {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        // Read singleline and multiline options from config.
-        // Config is passed as options: [{ "singleline": N, "multiline": N }]
         let opts = ctx.config.options.as_ref()
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first())
@@ -30,7 +28,6 @@ impl Rule for MaxAttributesPerLine {
         let singleline_max = get_opt("singleline");
         let multiline_max = get_opt("multiline");
 
-        // Build line-start table for span → line number conversion.
         let source = ctx.source;
         let line_starts: Vec<usize> = std::iter::once(0)
             .chain(
@@ -52,8 +49,6 @@ impl Rule for MaxAttributesPerLine {
                     return;
                 }
 
-                // Determine whether the opening tag is singleline or multiline.
-                // The opening tag spans from el.span.start up to (and including) the first `>`.
                 let el_start = el.span.start as usize;
                 let el_end = el.span.end as usize;
 
@@ -82,11 +77,9 @@ impl Rule for MaxAttributesPerLine {
     }
 }
 
-/// Get the display name of an attribute (as it appears in source).
 fn attr_name(attr: &Attribute, source: &str) -> String {
     match attr {
         Attribute::NormalAttribute { name, value, .. } => {
-            // Shorthand: {expr} where name == expr string
             match value {
                 AttributeValue::Expression(expr) if expr == name => {
                     format!("{{{}}}", name)
@@ -95,7 +88,6 @@ fn attr_name(attr: &Attribute, source: &str) -> String {
             }
         }
         Attribute::Spread { span } => {
-            // Extract the spread text from source, e.g. `{...attrs}`
             let start = span.start as usize;
             let end = span.end as usize;
             if end <= source.len() {
@@ -115,7 +107,6 @@ fn attr_name(attr: &Attribute, source: &str) -> String {
     }
 }
 
-/// Get the span of an attribute.
 fn attr_span(attr: &Attribute) -> oxc::span::Span {
     match attr {
         Attribute::NormalAttribute { span, .. } => *span,
@@ -124,7 +115,6 @@ fn attr_span(attr: &Attribute) -> oxc::span::Span {
     }
 }
 
-/// Map DirectiveKind to its source prefix string.
 fn directive_prefix(kind: &DirectiveKind) -> &'static str {
     match kind {
         DirectiveKind::EventHandler => "on",

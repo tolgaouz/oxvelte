@@ -27,7 +27,6 @@ impl Rule for InfiniteReactiveLoop {
         let content_offset = tag_text.find('>').map(|p| base + p + 1).unwrap_or(base);
 
         let (mut top_vars, mut implicit_reactive) = collect_top_level_vars(content);
-        // Also collect vars from module script (context="module")
         if let Some(module) = &ctx.ast.module {
             let (mut module_vars, module_implicit) = collect_top_level_vars(&module.content);
             top_vars.append(&mut module_vars);
@@ -80,25 +79,21 @@ fn collect_top_level_vars(content: &str) -> (Vec<String>, std::collections::Hash
 fn extract_declared_names(decl: &str, vars: &mut Vec<String>) {
     let trimmed = decl.trim();
     if trimmed.starts_with('{') || trimmed.starts_with('[') {
-        // Destructured: extract identifiers between braces/brackets up to `}`/`]`
         let close = if trimmed.starts_with('{') { '}' } else { ']' };
         if let Some(end) = trimmed.find(close) {
             let inner = &trimmed[1..end];
             for part in inner.split(',') {
                 let p = part.trim();
-                // Handle renaming: `orig: alias` → take alias
                 let name_part = if let Some(colon) = p.find(':') {
                     p[colon + 1..].trim()
                 } else {
                     p
                 };
-                // Handle defaults: `name = default` → take name
                 let name_part = if let Some(eq) = name_part.find('=') {
                     name_part[..eq].trim()
                 } else {
                     name_part
                 };
-                // Skip rest elements (`...rest` → `rest`)
                 let name_part = name_part.strip_prefix("...").unwrap_or(name_part);
                 let name: String = name_part.chars()
                     .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
@@ -107,8 +102,6 @@ fn extract_declared_names(decl: &str, vars: &mut Vec<String>) {
             }
         }
     } else {
-        // Simple or multi-variable: `a = 0, b = 1` or just `a = 0`
-        // Split by commas that are at depth 0 (not inside parens/brackets/braces)
         let mut depth = 0i32;
         let mut seg_start = 0;
         let bytes = trimmed.as_bytes();
@@ -207,7 +200,6 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
     let mut results = Vec::new();
     let lines: Vec<&str> = content.lines().collect();
 
-    // Pre-compute line byte offsets and brace depths
     let mut line_offsets = Vec::with_capacity(lines.len());
     let mut line_depths = Vec::with_capacity(lines.len());
     let mut depth = 0i32;
@@ -221,7 +213,6 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
         offset += line.len() + 1;
     }
 
-    // Pre-collect all function names for call tracking
     let func_names_seen: Vec<String> = lines.iter().enumerate()
         .filter(|(idx, _)| line_depths[*idx] == 0)
         .filter_map(|(_, line)| extract_func_name(line.trim()))
@@ -232,7 +223,6 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
         let t = lines[i].trim();
         if line_depths[i] > 0 { i += 1; continue; }
         if let Some(name) = extract_func_name(t) {
-            // Find function body range (line indices)
             let mut depth = 0i32;
             let mut started = false;
             let mut end_line = i;
@@ -249,7 +239,6 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
             }
             let func_start_offset = line_offsets[i];
 
-            // Single pass: collect assigns, positions, and function calls
             let mut assigns = Vec::new();
             let mut all_assign_positions = Vec::new();
             let mut assigns_after_await = Vec::new();
@@ -264,17 +253,13 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
                 let indent = line.len() - t.len();
                 let line_pos = line_offsets[j];
 
-                // Skip the declaration line itself — `const name = () => {` is not
-                // an assignment to `name` inside the function body.
                 if j == i { continue; }
 
                 if t.contains("await ") {
-                    // Check for `var = await expr` on this line
                     if seen_await || j > i {
                         for var in top_vars {
                             if var == &name { continue; }
                             if !t.contains(var.as_str()) { continue; }
-                            // Use word-boundary-aware check instead of simple contains
                             if let Some(_) = find_var_op(t, var, " = await ") {
                                 if is_local_declaration(t, var) { continue; }
                                 if !assigns_after_await.contains(var) { assigns_after_await.push(var.clone()); }
@@ -287,11 +272,9 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
                     seen_await = true;
                 }
 
-                // Check assignments on this line (skip local declarations)
                 for var in top_vars {
                     if var == &name { continue; }
                     if !t.contains(var.as_str()) { continue; }
-                    // Skip if the variable appears in a local declaration
                     if is_local_declaration(t, var) { continue; }
                     if has_assign(t, var) {
                         if !assigns.contains(var) { assigns.push(var.clone()); }
@@ -303,8 +286,6 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
                     }
                 }
 
-                // Track function calls on this line (for transitive propagation)
-                // Look for `funcName(` patterns with word boundary check
                 for other in &func_names_seen {
                     if other == &name { continue; }
                     let call_pat = format!("{}(", other);
@@ -322,9 +303,6 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
             let body_start = func_start_offset;
             let body_end = if end_line < line_offsets.len() { line_offsets[end_line] + lines[end_line].len() } else { content.len() };
 
-            // Detect assignments inside .then()/.catch() and timer callbacks
-            // Only track explicitly-declared vars (not implicit $: vars),
-            // matching vendor scope analysis which can't track implicit $: declarations.
             let func_body = &content[body_start..body_end];
             let then_catch_regions = find_then_catch_regions(func_body);
             let timer_regions = find_timer_callback_regions(func_body);
@@ -342,7 +320,6 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
                         if !lt.contains(var.as_str()) { continue; }
                         if is_local_declaration(lt, var) { continue; }
                         if !has_assign(lt, var) { continue; }
-                        // Check if this position is inside an async callback region
                         let in_region = all_async_regions.iter()
                             .any(|&(start, end)| lpos + indent >= start && lpos + indent < end);
                         if in_region {
@@ -361,7 +338,6 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
         i += 1;
     }
 
-    // Propagation pass: inherit callee assigns transitively. Multiple rounds for chains.
     for _ in 0..4 {
         let snapshot: Vec<(String, Vec<String>, Vec<(String, usize)>, Vec<String>, Vec<(String, usize)>, bool, bool)> = results.iter()
             .map(|fi| (fi.name.clone(), fi.assigns.clone(), fi.all_assign_positions.clone(), fi.assigns_after_await.clone(), fi.assign_positions_after_await.clone(), fi.has_await, fi.has_then_catch_assigns))
@@ -417,8 +393,6 @@ fn is_direct_function_expr(after: &str) -> bool {
         return true;
     }
     if after.starts_with('(') {
-        // Scan for the matching `)` at depth 0, then check if `=>` follows
-        // (possibly after a TypeScript return type annotation like `: void`)
         let mut depth = 0i32;
         for (i, ch) in after.char_indices() {
             match ch {
@@ -427,9 +401,7 @@ fn is_direct_function_expr(after: &str) -> bool {
                     depth -= 1;
                     if depth == 0 {
                         let rest = after[i + 1..].trim_start();
-                        // Direct arrow: `) => {`
                         if rest.starts_with("=>") { return true; }
-                        // TypeScript return type: `): ReturnType => {`
                         if rest.starts_with(':') && rest.contains("=>") {
                             return true;
                         }
@@ -463,7 +435,6 @@ fn is_local_declaration(line: &str, var: &str) -> bool {
 }
 
 fn has_assign(line: &str, var: &str) -> bool {
-    // Fast path: if the variable name doesn't appear at all, skip
     if !line.contains(var) { return false; }
     has_assign_with_patterns_inline(line, var)
 }
@@ -471,19 +442,16 @@ fn has_assign(line: &str, var: &str) -> bool {
 fn has_assign_with_patterns_inline(line: &str, var: &str) -> bool {
     let ops = [" = ", " += ", " -= ", " *= ", " /= "];
     for op in &ops {
-        // Inline pattern check without format! allocation
         if let Some(pos) = find_var_op(line, var, op) {
             if *op == " = " && pos + var.len() + op.len() < line.len()
                 && line.as_bytes()[pos + var.len() + op.len()] == b'=' { continue; }
             return true;
         }
     }
-    // Multi-line assignment: `var =\n`
     if let Some(pos) = find_var_op(line, var, " =") {
         let after = pos + var.len() + 2;
         if after >= line.len() || !matches!(line.as_bytes()[after], b'=' | b'>') { return true; }
     }
-    // Check property/index access
     has_member_assign(line, var, &ops)
 }
 
@@ -494,7 +462,6 @@ fn find_var_op(line: &str, var: &str, op: &str) -> Option<usize> {
         if is_word_start(line, abs) {
             let after = abs + var.len();
             if line[after..].starts_with(op) {
-                // Skip `typeof varName =` (TypeScript type annotation, not assignment)
                 let before = line[..abs].trim_end();
                 if before.ends_with("typeof") {
                     start = abs + 1;
@@ -552,7 +519,6 @@ fn has_member_assign(line: &str, var: &str, ops: &[&str]) -> bool {
 fn is_word_start(text: &str, pos: usize) -> bool {
     if pos == 0 { return true; }
     let b = text.as_bytes()[pos - 1];
-    // `.` means this is a member access (e.g. `item.value`), not standalone
     !(b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b == b'.')
 }
 
@@ -570,7 +536,6 @@ fn find_assign_pos(line: &str, var: &str) -> Option<usize> {
             return Some(pos);
         }
     }
-    // Member access: var.prop op
     let mut start = 0;
     while let Some(p) = line[start..].find(var) {
         let pos = start + p;
@@ -647,11 +612,9 @@ fn find_stmt_end(content: &str, dollar: usize) -> usize {
     let bytes = content.as_bytes();
     for (i, ch) in content[dollar + 2..].char_indices() {
         let abs = dollar + 2 + i;
-        // Line comments: skip everything until newline
         if in_line_comment {
             if ch == '\n' {
                 in_line_comment = false;
-                // Fall through to newline handling below
             } else {
                 continue;
             }
@@ -661,8 +624,6 @@ fn find_stmt_end(content: &str, dollar: usize) -> usize {
             continue;
         }
         match ch {
-            // Skip // line comments (apostrophes/backticks inside comments
-            // must not trigger string mode)
             '/' if abs + 1 < bytes.len() && bytes[abs + 1] == b'/' => {
                 in_line_comment = true;
                 continue;
@@ -671,12 +632,9 @@ fn find_stmt_end(content: &str, dollar: usize) -> usize {
             '{' => { bdepth += 1; has_c = true; }
             '}' => {
                 bdepth -= 1;
-                // If we close the outermost brace AND we're not inside parens,
-                // check if followed by `else` (if-else blocks continue past the first })
                 if bdepth <= 0 && pdepth <= 0 && has_c {
                     let rest = content[abs + 1..].trim_start();
                     if rest.starts_with("else") {
-                        // Continue past the else block
                     } else {
                         return abs + 1;
                     }
@@ -692,8 +650,6 @@ fn find_stmt_end(content: &str, dollar: usize) -> usize {
                         return abs + 1 + (rest.len() - nt.len()) + 1;
                     }
                     if nt.starts_with('\n') || nt.is_empty() {
-                        // Check if the next non-whitespace token is a continuation
-                        // (method chain, ternary, logical operator, etc.)
                         let after_ws = nt.trim_start();
                         let is_continuation = after_ws.as_bytes().first().is_some_and(|b|
                             matches!(b, b'.' | b'?' | b':' | b'+' | b'-' | b'*' | b'/'
@@ -706,18 +662,14 @@ fn find_stmt_end(content: &str, dollar: usize) -> usize {
             }
             ';' if pdepth <= 0 && bdepth <= 0 && has_c => return abs + 1,
             '\n' if pdepth <= 0 && bdepth <= 0 && has_c => {
-                // ASI-like check: if the next non-blank line starts with a
-                // statement keyword or declaration, end the statement here.
                 let rest = &content[abs + 1..];
                 let next_line = rest.trim_start();
                 if next_line.is_empty() {
                     return abs + 1;
                 }
-                // Blank line followed by content → end statement
                 if rest.starts_with('\n') || (rest.starts_with("\r\n") && !next_line.is_empty()) {
                     return abs + 1;
                 }
-                // Statement-starting keywords
                 let stmt_starts = ["async ", "function ", "const ", "let ", "var ",
                     "if ", "if(", "for ", "for(", "while ", "while(", "return ",
                     "return;", "throw ", "class ", "import ", "export ",
@@ -755,11 +707,8 @@ fn block_reads_var(block: &str, var: &str) -> bool {
             .count();
         if count == 0 { continue; }
 
-        // Multiple occurrences means at least one is a read
         if count > 1 { return true; }
 
-        // Single occurrence: check if it's ONLY a simple assignment (write-only)
-        // Compound assignments (+=, -=, etc.) are read-modify-write → count as reads
         let simple_assign = find_var_op(t, var, " = ").is_some_and(|pos| {
             let a = pos + var.len() + 3;
             a >= t.len() || t.as_bytes()[a] != b'='
@@ -769,8 +718,6 @@ fn block_reads_var(block: &str, var: &str) -> bool {
             continue; // write-only
         }
 
-        // If has_assign but not simple assign, it's a compound assignment (read)
-        // Or it's a non-assignment reference (read)
         return true;
     }
     false
@@ -808,7 +755,6 @@ fn has_await_on_prev_line(block: &str, line_start_pos: usize) -> bool {
     if !before.contains("async ") && !before.contains("async(") { return false; }
 
     let bytes = before.as_bytes();
-    // Single pass: compute target_depth + async_body_depth together
     let mut depth = 0i32;
     let mut in_str = false;
     let mut sch = b'"';
@@ -830,7 +776,6 @@ fn has_await_on_prev_line(block: &str, line_start_pos: usize) -> bool {
     }
     let target_depth = depth;
 
-    // Second pass: find `await` keywords at correct depth
     depth = 0;
     in_str = false;
     sch = b'"';
@@ -915,7 +860,6 @@ fn scan_callback_args(bytes: &[u8], after: usize, first_only: bool) -> Vec<(usiz
                     regions.push((body_start, i));
                     if i < bytes.len() { i += 1; }
                 } else if i < bytes.len() {
-                    // Expression body: scan to next `,` or `)` at depth 0
                     let body_start = i;
                     let mut pd = 0i32;
                     while i < bytes.len() {
@@ -1000,11 +944,8 @@ fn report_intermediate_calls(
     if body_end > ctx.source.len().saturating_sub(base) { return; }
     let body = &ctx.source[base + body_start..base + body_end];
 
-    // Check all callees (not just calls_after_await) for those that
-    // transitively assign the tracked variable
     let mut reported = std::collections::HashSet::new();
     let mut stack: Vec<&str> = Vec::new();
-    // Seed with this function's callees
     for callee_name in fi.all_calls.iter().chain(fi.calls_after_await.iter()) {
         if !stack.contains(&callee_name.as_str()) {
             stack.push(callee_name.as_str());
@@ -1019,7 +960,6 @@ fn report_intermediate_calls(
         };
         if !callee_fi.assigns.contains(&pos_var.to_string()) { continue; }
 
-        // Report at the call site of this callee within the parent function body
         let callee_call = format!("{}(", callee_name);
         if let Some(cpos) = body.find(&callee_call) {
             if is_word_start(body, cpos) {
@@ -1032,7 +972,6 @@ fn report_intermediate_calls(
         }
         reported.insert(callee_name);
 
-        // Also recurse into the callee's body to find deeper call sites
         let (cb_start, cb_end) = callee_fi.body_range;
         if cb_end <= ctx.source.len().saturating_sub(base) {
             let callee_body = &ctx.source[base + cb_start..base + cb_end];
@@ -1072,10 +1011,7 @@ fn analyze_block(
         .iter().map(|s| s.to_string()).collect();
     for (_, alias) in aliases { all_triggers.push(alias.clone()); }
 
-    // Check if tick is locally redefined in the script (not just the block)
-    // For tick02 test: `function tick(fn) { fn(); }` means tick is not an async trigger
 
-    // Collect locally declared names in this block (for variable shadowing)
     let local_names: Vec<String> = block.lines()
         .filter_map(|line| {
             let t = line.trim();
@@ -1088,18 +1024,13 @@ fn analyze_block(
         })
         .collect();
 
-    // Pre-compute .then()/.catch() callback regions in the block
     let async_callback_regions = find_then_catch_regions(block);
 
-    // Compute tracked (dependency) variables for this reactive block.
-    // Only variables that are READ inside the block can re-trigger it.
-    // This matches the vendor's getTrackedVariableNodes approach.
     let tracked_vars: std::collections::HashSet<String> = {
         let mut tracked = std::collections::HashSet::new();
         let bytes = block.as_bytes();
         let mut i = 0;
         while i < bytes.len() {
-            // Skip strings
             if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
                 let q = bytes[i]; i += 1;
                 while i < bytes.len() && bytes[i] != q {
@@ -1109,13 +1040,11 @@ fn analyze_block(
                 if i < bytes.len() { i += 1; }
                 continue;
             }
-            // Skip comments
             if bytes[i] == b'/' && i + 1 < bytes.len() {
                 if bytes[i+1] == b'/' { while i < bytes.len() && bytes[i] != b'\n' { i += 1; } continue; }
                 if bytes[i+1] == b'*' { i += 2; while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i+1] == b'/') { i += 1; } i += 2; continue; }
             }
             if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' || bytes[i] == b'$' {
-                // Skip member access (after `.`)
                 if i > 0 && bytes[i-1] == b'.'
                     && !(i >= 3 && bytes[i-2] == b'.' && bytes[i-3] == b'.') {
                     while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') { i += 1; }
@@ -1124,20 +1053,14 @@ fn analyze_block(
                 let start = i;
                 while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') { i += 1; }
                 let ident = &block[start..i];
-                // Skip object property names (identifier followed by `:` without `?`)
-                // e.g., `{ label: value }` — `label` is a key, not a reference
                 let after_ident = block[i..].trim_start();
                 if after_ident.starts_with(':') && !after_ident.starts_with("::") {
-                    // Check if this is likely an object property name rather than a
-                    // ternary or type annotation. Property names appear after `{` or `,`
-                    // at the same brace depth.
                     let before_start = block[..start].trim_end();
                     if before_start.ends_with('{') || before_start.ends_with(',')
                         || before_start.ends_with('\n') {
                         continue;
                     }
                 }
-                // Only track top-level variables (not JS keywords, locals, etc.)
                 if top_vars.iter().any(|v| v == ident) && !local_names.contains(&ident.to_string()) {
                     tracked.insert(ident.to_string());
                 }
@@ -1153,8 +1076,6 @@ fn analyze_block(
     let mut off = 0usize;
     for l in &lines { line_offsets.push(off); off += l.len() + 1; }
 
-    // Track which functions have already been reported in this block
-    // (matches vendor's `processed` set — only report each function body once)
     let mut reported_funcs: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for (idx, line) in lines.iter().enumerate() {
@@ -1164,21 +1085,15 @@ fn analyze_block(
 
         let line_byte_start = line_offsets[idx];
 
-        // Determine if this line is in an async context (line-level checks)
         let in_callback = is_in_async_callback(block, line_byte_start, &all_triggers);
         let after_await = has_await_on_prev_line(block, line_byte_start);
         let in_then_catch = is_in_effective_then_catch(&async_callback_regions, line_byte_start);
-        // Also check if any position within this line falls inside a then/catch region
-        // (handles single-line patterns like `$: foo().then((x) => (var = x))`)
         let line_end = line_byte_start + line.len();
         let line_overlaps_then_catch = async_callback_regions.iter()
             .any(|&(start, end)| start < line_end && end > line_byte_start);
         let in_async_ctx = in_callback || after_await || in_then_catch;
 
         if in_async_ctx && !is_dollar_line {
-            // Report direct assignments to tracked reactive vars.
-            // The vendor flags any tracked variable assigned in an async boundary,
-            // regardless of whether it's read elsewhere in the block.
             for var in top_vars {
                 if local_names.contains(var) { continue; }
                 if !tracked_vars.contains(var.as_str()) { continue; }
@@ -1192,7 +1107,6 @@ fn analyze_block(
                 );
             }
 
-            // Report indirect function calls (with assignment sites)
             for fi in func_info {
                 if fi.assigns.is_empty() { continue; }
                 if local_names.contains(&fi.name) { continue; }
@@ -1209,9 +1123,6 @@ fn analyze_block(
                             format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", av),
                             Span::new(abs as u32, abs as u32 + 1),
                         );
-                        // When called from an async context (timer/then), ALL assignments
-                        // in the function are in a different microtask. Report at all
-                        // assignment positions, not just post-await ones.
                         for (pos_var, pos_offset) in &fi.all_assign_positions {
                             if pos_var == av {
                                 let abs = base + pos_offset;
@@ -1221,9 +1132,6 @@ fn analyze_block(
                                 );
                             }
                         }
-                        // When called after an await in the reactive block, also
-                        // report at pre-await assignment sites by scanning the
-                        // function body in the script content.
                         if after_await {
                             let (body_start, body_end) = fi.body_range;
                             if body_end <= ctx.source.len().saturating_sub(base) {
@@ -1249,20 +1157,14 @@ fn analyze_block(
             }
         }
 
-        // Check for calls to async functions (or functions with .then()/.catch()
-        // callbacks) that assign reactive vars in a different microtask
         if !in_async_ctx {
             for fi in func_info {
                 if !fi.has_await && !fi.has_then_catch_assigns { continue; }
                 if fi.assigns_after_await.is_empty() { continue; }
                 if local_names.contains(&fi.name) { continue; }
-                // Skip if this function has already been reported in this block
-                // (matches vendor's processed set — each function body is only
-                // analyzed once per reactive statement)
                 if reported_funcs.contains(&fi.name) { continue; }
                 let call_pat = format!("{}(", fi.name);
                 if !t.contains(&call_pat) { continue; }
-                // Word boundary check
                 if let Some(cp) = t.find(&call_pat) {
                     if cp > 0 {
                         let prev = t.as_bytes()[cp - 1];
@@ -1270,11 +1172,8 @@ fn analyze_block(
                     }
                 }
 
-                // Report at call site AND assignment sites inside the function.
-                // ESLint reports one call-site diagnostic per assignment location.
                 for (pos_var, pos_offset) in &fi.assign_positions_after_await {
                     if tracked_vars.contains(pos_var.as_str()) && block_has_var_ref(block, pos_var) {
-                        // Report at call site in the reactive block
                         let indent = line.len() - t.len();
                         let call_col = t.find(&call_pat).unwrap_or(0);
                         let abs = base + block_start + line_offsets[idx] + indent + call_col;
@@ -1282,17 +1181,11 @@ fn analyze_block(
                             format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", pos_var),
                             Span::new(abs as u32, abs as u32 + 1),
                         );
-                        // Report at assignment site
                         let abs = base + pos_offset;
                         ctx.diagnostic(
                             format!("Possibly it may occur an infinite reactive loop because `{}` is updated here.", pos_var),
                             Span::new(abs as u32, abs as u32 + 1),
                         );
-                        // Report at intermediate call sites within the function body.
-                        // When the assignment was propagated from a callee, report
-                        // at the callee's call site inside this function's body.
-                        // Check both calls_after_await AND all_calls (for callees
-                        // that have async assigns themselves).
                         report_intermediate_calls(ctx, fi, func_info, pos_var, base);
                     }
                 }
@@ -1300,14 +1193,10 @@ fn analyze_block(
             }
         }
 
-        // Check for assignments within .then()/.catch() regions on this line
-        // (handles single-line patterns like `$: foo().then((x) => (var = x))`)
         if !in_async_ctx && line_overlaps_then_catch {
             for var in top_vars {
                 if local_names.contains(var) { continue; }
                 if !has_assign(t, var) { continue; }
-                // Find the assignment position within the line and check if it's
-                // inside a then/catch region
                 if let Some(assign_pos) = find_assign_pos(t, var) {
                     let indent = line.len() - t.len();
                     let abs_pos_in_block = line_byte_start + indent + assign_pos;
@@ -1323,7 +1212,6 @@ fn analyze_block(
             }
         }
 
-        // Special case: `await funcName()` on this line
         if t.contains("await ") {
             for fi in func_info {
                 if fi.assigns.is_empty() { continue; }
@@ -1345,9 +1233,6 @@ fn analyze_block(
                 }
             }
 
-            // Same-line await + assignment patterns:
-            // 1. `var op= await expr` (assignment receives await result)
-            // 2. `(await expr, (var op= val))` (comma expression after await)
             if !in_async_ctx {
                 for var in top_vars {
                     if local_names.contains(var) { continue; }
@@ -1355,7 +1240,6 @@ fn analyze_block(
 
                     if let Some(assign_pos) = find_assign_pos(t, var) {
                         if let Some(await_pos) = t.find("await ") {
-                            // Pattern 1: `var op= await ...` -> assign_pos < await_pos
                             if assign_pos < await_pos {
                                 let indent = line.len() - t.len();
                                 let abs = base + block_start + line_offsets[idx] + indent + assign_pos;
@@ -1365,9 +1249,6 @@ fn analyze_block(
                                 );
                                 continue;
                             }
-                            // Pattern 2: assignment after await, but NOT inside await's argument parens
-                            // Check paren depth: if the assignment is at the same or shallower
-                            // paren depth as the await keyword
                             if is_after_await_same_line(t, await_pos, assign_pos) {
                                 let indent = line.len() - t.len();
                                 let abs = base + block_start + line_offsets[idx] + indent + assign_pos;

@@ -31,7 +31,6 @@ impl Rule for Indent {
         let mut in_script = false;
         let mut script_base_depth = 0i32;
 
-        // Parse config options
         let opts = ctx.config.options.as_ref()
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first());
@@ -50,7 +49,6 @@ impl Rule for Indent {
             let trimmed = line.trim();
             if trimmed.is_empty() { continue; }
 
-            // Skip style/template blocks (script is checked for indentation)
             if let Some(end) = skip_tag {
                 if trimmed.starts_with(end) { skip_tag = None; }
                 continue;
@@ -60,11 +58,8 @@ impl Rule for Indent {
                 skip_tag = Some("</template");
                 continue;
             }
-            // Script tags: just skip the tag line itself, not content
             if trimmed.starts_with("<script") || trimmed.starts_with("</script") {
-                // Consume prettier-ignore if it was set for this line
                 if skip_next_line { skip_next_line = false; }
-                // Track depth for script open/close
                 if trimmed.starts_with("<script") && !trimmed.ends_with("/>") {
                     in_script = true;
                     if indent_script {
@@ -82,31 +77,23 @@ impl Rule for Indent {
                 continue;
             }
 
-            // prettier-ignore: skip just the next line's indentation check
             if trimmed.contains("prettier-ignore") {
                 skip_next_line = true;
                 continue;
             }
 
-            // Multiline tag: check attribute indentation using tag's column + indent
             if in_multiline_tag {
                 let is_end = trimmed.ends_with(">") || trimmed.ends_with("/>") || trimmed == ">" || trimmed == "/>";
-                // Check attribute indentation only for simple cases (not ignored):
-                // Only check lines that look like top-level attribute names
-                // (not inside {}, not value continuations, not deeper nesting)
                 if !is_end && !multiline_tag_ignored && multiline_brace_depth == 0 {
                     let actual = leading_spaces(line);
                     let expected = multiline_tag_column + indent;
-                    // Only check if it's a simple attribute name at the right depth
                     let first_char = trimmed.chars().next().unwrap_or(' ');
                     let is_simple_attr = first_char.is_ascii_alphabetic() || first_char == '_' || first_char == '$';
-                    // Flag only exact attribute-name lines at wrong indent
                     if is_simple_attr && actual != expected && actual < expected + indent {
                         let msg = format!("Expected indentation of {} spaces but found {} spaces.", expected, actual);
                         ctx.diagnostic(msg, oxc::span::Span::new(line_start as u32, (line_start + actual.max(1)) as u32));
                     }
                 }
-                // Track brace depth within multiline tags
                 if !is_end {
                     for c in trimmed.chars() {
                         if c == '{' { multiline_brace_depth += 1; }
@@ -126,7 +113,6 @@ impl Rule for Indent {
             let opens = count_opens(trimmed);
             let closes = count_closes(trimmed);
 
-            // Skip check for this line (prettier-ignore)
             if skip_next_line {
                 skip_next_line = false;
                 if trimmed.starts_with('<') && !trimmed.starts_with("</") && !trimmed.starts_with("<!--") && !trimmed.contains('>') {
@@ -141,14 +127,10 @@ impl Rule for Indent {
                 continue;
             }
 
-            // Inside script blocks: check base indentation level
-            // When indentScript=false, enforce exact depth 0 for top-level lines
-            // When indentScript=true, only check minimum (don't track JS nesting)
             if in_script {
                 let actual = leading_spaces(line);
                 let base = (script_base_depth.max(0) as usize) * indent;
                 if !indent_script {
-                    // indentScript=false: top-level script content must be at depth 0
                     if actual != 0 && trimmed.starts_with("const ") || trimmed.starts_with("let ") || trimmed.starts_with("var ")
                         || trimmed.starts_with("function ") || trimmed.starts_with("import ") || trimmed.starts_with("export ")
                         || trimmed.starts_with("type ") || trimmed.starts_with("interface ") || trimmed.starts_with("class ")
@@ -166,10 +148,8 @@ impl Rule for Indent {
                 continue;
             }
 
-            // Comments
             if trimmed.starts_with("<!--") { continue; }
 
-            // Check for multiline opening tag
             if trimmed.starts_with('<') && !trimmed.starts_with("</") && !trimmed.starts_with("<!--") {
                 if !trimmed.contains('>') {
                     in_multiline_tag = true;
@@ -180,7 +160,6 @@ impl Rule for Indent {
                 }
             }
 
-            // Compute expected indent
             let pre_depth = depth - closes;
             let check_depth = pre_depth.max(0) as usize;
             let actual = leading_spaces(line);

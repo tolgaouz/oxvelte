@@ -11,8 +11,6 @@ impl Rule for ButtonHasType {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        // Config: { "button": false, "submit": false, "reset": false }
-        // When a type value is set to false, that type is forbidden.
         let opts = ctx.config.options.as_ref()
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first())
@@ -32,16 +30,13 @@ impl Rule for ButtonHasType {
                     return;
                 }
 
-                // Check for bind:type directive first
                 let has_bind_type = el.attributes.iter().any(|attr| {
                     matches!(attr, Attribute::Directive { kind: DirectiveKind::Binding, name, .. } if name == "type")
                 });
                 if has_bind_type {
-                    // bind:type is valid (it binds to a local variable)
                     return;
                 }
 
-                // Check for shorthand {type} attribute — treated as valid (dynamic)
                 let has_shorthand_type = el.attributes.iter().any(|attr| {
                     if let Attribute::NormalAttribute { name, value, span, .. } = attr {
                         if name == "type" {
@@ -57,7 +52,6 @@ impl Rule for ButtonHasType {
                     return;
                 }
 
-                // Find explicit type attribute
                 let type_attr = el.attributes.iter().find(|attr| {
                     matches!(attr, Attribute::NormalAttribute { name, .. } if name == "type")
                 });
@@ -65,21 +59,18 @@ impl Rule for ButtonHasType {
                 match type_attr {
                     Some(Attribute::NormalAttribute { value, span, .. }) => {
                         match value {
-                            // <button type> — bare attribute with no value
                             AttributeValue::True => {
                                 ctx.diagnostic(
                                     "A value must be set for button type attribute.",
                                     *span,
                                 );
                             }
-                            // <button type=""> — empty string value
                             AttributeValue::Static(v) if v.is_empty() => {
                                 ctx.diagnostic(
                                     "A value must be set for button type attribute.",
                                     *span,
                                 );
                             }
-                            // <button type="button|submit|reset"> — known valid values
                             AttributeValue::Static(v) => {
                                 let is_known = matches!(v.as_str(), "button" | "submit" | "reset");
                                 if !is_known {
@@ -102,7 +93,6 @@ impl Rule for ButtonHasType {
                                     }
                                 }
                             }
-                            // Dynamic expression — can't statically determine the value; skip
                             AttributeValue::Expression(_) | AttributeValue::Concat(_) => {}
                         }
                     }

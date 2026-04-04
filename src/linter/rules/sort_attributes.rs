@@ -16,12 +16,10 @@ impl Rule for SortAttributes {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        // Parse order config
         let order_rules = parse_order_config(&ctx.config.options);
 
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
-                // Build full attribute names including directive prefixes
                 let mut groups: Vec<Vec<String>> = vec![vec![]];
                 for attr in &el.attributes {
                     match attr {
@@ -34,7 +32,6 @@ impl Rule for SortAttributes {
                             groups.last_mut().unwrap().push(full_name);
                         }
                         Attribute::Spread { .. } => {
-                            // Start a new group after spread
                             groups.push(vec![]);
                         }
                     }
@@ -135,8 +132,6 @@ fn parse_order_config(options: &Option<serde_json::Value>) -> Vec<OrderRule> {
     }).collect()
 }
 
-/// Find the position (index) of the first order rule that matches the attribute name.
-/// Returns None if no rule matches (unmatched attributes are free-positioned).
 fn find_order_position(name: &str, rules: &[OrderRule]) -> Option<usize> {
     rules.iter().position(|r| matches_pattern(name, &r.patterns))
 }

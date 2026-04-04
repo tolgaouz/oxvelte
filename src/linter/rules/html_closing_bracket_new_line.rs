@@ -17,8 +17,6 @@ impl Rule for HtmlClosingBracketNewLine {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        // Parse config options — extract all values as owned booleans so we don't hold a
-        // borrow on ctx.config across the walk_template_nodes closure.
         let (singleline_expect_newline, multiline_expect_newline, sc_singleline, sc_multiline) = {
             let opts = ctx.config.options.as_ref()
                 .and_then(|v| v.as_array())
@@ -52,7 +50,6 @@ impl Rule for HtmlClosingBracketNewLine {
 
             let tag_text = &source[span.start as usize..span.end as usize];
 
-            // Find the opening tag end (first > or />)
             let mut depth = 0;
             let mut open_bracket_end = None;
             let bytes = tag_text.as_bytes();
@@ -80,28 +77,20 @@ impl Rule for HtmlClosingBracketNewLine {
                 None => return,
             };
 
-            // Determine if self-closing
             let is_self_closing = bracket_pos > 0 && bytes[bracket_pos - 1] == b'/';
 
-            // The bracket is `>` or `/>`. Find the actual bracket start
             let bracket_start = if is_self_closing { bracket_pos - 1 } else { bracket_pos };
 
-            // Find the content before the bracket (between tag name/last attr and bracket)
             let before_bracket = &tag_text[..bracket_start];
 
-            // Count line breaks between the last non-whitespace content and the bracket
             let last_content_pos = before_bracket.rfind(|c: char| !c.is_whitespace()).unwrap_or(0);
             let between = &before_bracket[last_content_pos + 1..];
             let line_breaks = between.chars().filter(|&c| c == '\n').count();
 
-            // Determine if the element is multiline (has attributes and they span multiple lines)
             let first_line_end = tag_text.find('\n').unwrap_or(tag_text.len());
             let is_multiline = attrs_count > 0 && first_line_end < bracket_start;
 
-            // Also check closing tags like </div\n\n\n  >
-            // Find closing tag if present
             let close_tag_start = if !is_self_closing {
-                // Find the closing tag </name>
                 let tag_name_end = tag_text[1..].find(|c: char| !c.is_alphanumeric() && c != '-' && c != '_' && c != ':' && c != '.')
                     .map(|p| p + 1).unwrap_or(1);
                 let name = &tag_text[1..tag_name_end];
@@ -110,7 +99,6 @@ impl Rule for HtmlClosingBracketNewLine {
             } else { None };
 
             if let Some(close_start) = close_tag_start {
-                // Check closing tag for line breaks: </name ... >
                 let close_text = &tag_text[close_start..];
                 let close_name_end = close_text.find('>').unwrap_or(close_text.len());
                 let close_before_bracket = &close_text[..close_name_end];

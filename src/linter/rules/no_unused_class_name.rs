@@ -12,7 +12,6 @@ impl Rule for NoUnusedClassName {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        // Config: { "allowedClassNames": ["name", "/^pattern$/"] }
         let allowed_class_names: Vec<String> = ctx.config.options.as_ref()
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first())
@@ -21,7 +20,6 @@ impl Rule for NoUnusedClassName {
             .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
             .unwrap_or_default();
 
-        // Separate plain names and regex patterns
         let mut allowed_plain: HashSet<String> = HashSet::new();
         let mut allowed_patterns: Vec<String> = Vec::new();
         for name in &allowed_class_names {
@@ -32,7 +30,6 @@ impl Rule for NoUnusedClassName {
             }
         }
 
-        // Step 1: Extract all class selectors from the CSS content
         let mut css_classes = HashSet::new();
         if let Some(style) = &ctx.ast.css {
             let css = &style.content;
@@ -58,7 +55,6 @@ impl Rule for NoUnusedClassName {
             }
         }
 
-        // Step 2: Collect all template classes and check if they're defined in CSS
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
                 let mut element_classes = Vec::new();
@@ -77,10 +73,8 @@ impl Rule for NoUnusedClassName {
                     }
                 }
 
-                // Report template classes not found in CSS
                 for cls in &element_classes {
                     if !css_classes.contains(cls.as_str()) {
-                        // Check if class is in allowed list
                         if allowed_plain.contains(cls.as_str()) {
                             continue;
                         }
@@ -98,8 +92,6 @@ impl Rule for NoUnusedClassName {
     }
 }
 
-/// Simple regex-like matching for common patterns used in allowedClassNames.
-/// Handles: ^prefix, suffix$, ^exact$, \d, \d{N,M}, character classes, etc.
 fn simple_regex_match(pattern: &str, text: &str) -> bool {
     let anchored_start = pattern.starts_with('^');
     let anchored_end = pattern.ends_with('$');
@@ -119,13 +111,11 @@ fn simple_regex_match(pattern: &str, text: &str) -> bool {
 
 fn regex_match_inner_impl(pattern: &str, text: &str, pi: usize, ti: usize, must_consume_all: bool) -> bool {
     if pi >= pattern.len() {
-        // Pattern exhausted — only accept if text is also exhausted (full match) or not required
         return if must_consume_all { ti >= text.len() } else { true };
     }
     let pb = pattern.as_bytes();
     let tb = text.as_bytes();
 
-    // Handle \d (digit), \w (word), \s (whitespace)
     if pb[pi] == b'\\' && pi + 1 < pattern.len() {
         let matches_char = |c: u8| -> bool {
             match pb[pi + 1] {
@@ -135,7 +125,6 @@ fn regex_match_inner_impl(pattern: &str, text: &str, pi: usize, ti: usize, must_
                 other => c == other,
             }
         };
-        // Check for quantifier {N,M}
         if pi + 2 < pattern.len() && pb[pi + 2] == b'{' {
             if let Some(close) = pattern[pi+2..].find('}') {
                 let quant = &pattern[pi+3..pi+2+close];
@@ -148,7 +137,6 @@ fn regex_match_inner_impl(pattern: &str, text: &str, pi: usize, ti: usize, must_
                     (n, n)
                 };
                 let next_pi = pi + 2 + close + 1;
-                // Try matching min..=max digits
                 let mut count = 0;
                 let mut t = ti;
                 while count < max && t < tb.len() && matches_char(tb[t]) {
@@ -161,19 +149,16 @@ fn regex_match_inner_impl(pattern: &str, text: &str, pi: usize, ti: usize, must_
                 return count >= min && regex_match_inner_impl(pattern, text, next_pi, ti + count, must_consume_all);
             }
         }
-        // Single char match
         if ti < tb.len() && matches_char(tb[ti]) {
             return regex_match_inner_impl(pattern, text, pi + 2, ti + 1, must_consume_all);
         }
         return false;
     }
 
-    // Literal character
     if ti < tb.len() && pb[pi] == tb[ti] {
         return regex_match_inner_impl(pattern, text, pi + 1, ti + 1, must_consume_all);
     }
 
-    // . matches any
     if pb[pi] == b'.' && ti < tb.len() {
         return regex_match_inner_impl(pattern, text, pi + 1, ti + 1, must_consume_all);
     }
