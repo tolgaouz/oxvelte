@@ -204,49 +204,52 @@ impl Rule for NoReactiveReassign {
             if check_props {
             for var in &reactive_vars {
                 if !content.contains(var.as_str()) { continue; }
-                // Single scan for "var." to check both mutating methods and property chains
+                // Single "var." scan for mutating methods, chained mutations, and ++/--
                 {
                     let prefix = format!("{}.", var);
-                    // Check mutating methods via the same prefix scan
                     let mut search_from = 0;
                     while let Some(pos) = content[search_from..].find(prefix.as_str()) {
                         let abs = search_from + pos;
-                        if abs > 0 && matches!(content.as_bytes()[abs - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_') {
-                            search_from = abs + prefix.len(); continue;
-                        }
+                        search_from = abs + prefix.len();
+                        if abs > 0 && matches!(content.as_bytes()[abs - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_') { continue; }
                         let after_prefix = &content[abs + prefix.len()..];
-                        // Check if it's a direct mutating method call
+
+                        // Check direct mutating method: var.push(
                         if let Some(method) = MUTATING_METHODS.iter().find(|m| after_prefix.starts_with(*m)) {
                             let ls = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
                             if !content[ls..].trim_start().starts_with("$:") && !is_shadowed_in_scope(content, abs, var) {
                                 let sp = content_offset + abs;
-                                let pattern_len = prefix.len() + method.len();
                                 ctx.diagnostic(format!("Assignment to reactive value '{}'.", var),
-                                    oxc::span::Span::new(sp as u32, (sp + pattern_len) as u32));
+                                    oxc::span::Span::new(sp as u32, (sp + prefix.len() + method.len()) as u32));
                             }
+                            continue;
                         }
-                        search_from = abs + prefix.len();
-                    }
-                }
-                {
-                    let prefix = format!("{}.", var);
-                    let mut search_from = 0;
-                    while let Some(pos) = content[search_from..].find(prefix.as_str()) {
-                        let abs = search_from + pos;
-                        if abs > 0 && matches!(content.as_bytes()[abs - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_') {
-                            search_from = abs + prefix.len(); continue;
-                        }
-                        let mut rest = &content[abs + prefix.len()..];
+
+                        // Follow property chain for chained mutations, assignments, and ++/--
+                        let mut rest = after_prefix;
                         let mut chain_len = prefix.len();
                         loop {
                             let end = rest.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(rest.len());
                             if end == 0 { break; }
                             rest = &rest[end..];
                             chain_len += end;
+
+                            // Check for ++ and -- on property
+                            if rest.starts_with("++") || rest.starts_with("--") {
+                                let ls = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
+                                if !content[ls..].trim_start().starts_with("$:") && !is_shadowed_in_scope(content, abs, var) {
+                                    let sp = content_offset + abs;
+                                    ctx.diagnostic(format!("Assignment to property of reactive value '{}'.", var),
+                                        oxc::span::Span::new(sp as u32, (sp + chain_len + 2) as u32));
+                                }
+                                break;
+                            }
+
                             if rest.starts_with('.') || rest.starts_with("?.") {
                                 let skip = if rest.starts_with("?.") { 2 } else { 1 };
                                 rest = &rest[skip..];
                                 chain_len += skip;
+                                // Check for chained mutating method
                                 for m in MUTATING_METHODS {
                                     if rest.starts_with(*m) {
                                         let ls = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
@@ -264,30 +267,6 @@ impl Rule for NoReactiveReassign {
                                 break;
                             }
                         }
-                        search_from = abs + prefix.len();
-                    }
-                }
-                // ++ and -- checks merged into a single var. scan
-                {
-                    let dot_pat = format!("{}.", var);
-                    let mut search_from = 0;
-                    while let Some(pos) = content[search_from..].find(&dot_pat) {
-                        let abs = search_from + pos;
-                        if abs > 0 && matches!(content.as_bytes()[abs - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_') {
-                            search_from = abs + dot_pat.len(); continue;
-                        }
-                        let after_dot = &content[abs + dot_pat.len()..];
-                        let pe = after_dot.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(after_dot.len());
-                        if after_dot[pe..].starts_with("++") || after_dot[pe..].starts_with("--") {
-                            let suffix_len = 2;
-                            let ls = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
-                            if !content[ls..].trim_start().starts_with("$:") && !is_shadowed_in_scope(content, abs, var) {
-                                let sp = content_offset + abs;
-                                ctx.diagnostic(format!("Assignment to property of reactive value '{}'.", var),
-                                    oxc::span::Span::new(sp as u32, (sp + dot_pat.len() + pe + suffix_len) as u32));
-                            }
-                        }
-                        search_from = abs + dot_pat.len();
                     }
                 }
                 for pattern_base in &[format!("{}.", var), format!("{}?.", var), format!("{}[", var)] {
