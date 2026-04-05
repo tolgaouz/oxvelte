@@ -187,6 +187,7 @@ impl Rule for NoImmutableReactiveStatements {
 
         let mut reactive_decl_names: HashSet<&str> = HashSet::new();
         for (_, full_text) in &reactive_stmts {
+            if full_text.len() < 3 { continue; }
             let after = full_text[2..].trim_start();
             if let Some(eq) = after.find('=') {
                 let name = after[..eq].trim();
@@ -202,6 +203,7 @@ impl Rule for NoImmutableReactiveStatements {
             .collect();
 
         for &(offset, ref full_text) in &reactive_stmts {
+            if full_text.len() < 3 { continue; }
             let after = full_text[2..].trim_start();
             let rhs = if let Some(eq) = after.find('=') {
                 let lhs = after[..eq].trim();
@@ -255,7 +257,7 @@ impl Rule for NoImmutableReactiveStatements {
                 let line_num = content[..offset].matches('\n').count();
                 ast_immutable_stmts.iter().any(|&s| content[..s as usize].matches('\n').count() == line_num)
             };
-            if text_flag || ast_flag {
+            if (text_flag || ast_flag) && full_text.len() >= 3 {
                 let after = full_text[2..].trim_start();
                 let body_off = full_text.len() - after.len();
                 let base = content_offset + offset;
@@ -569,7 +571,7 @@ fn collect_local_names(expr: &str) -> HashSet<String> {
             b'=' if i + 1 < bytes.len() && bytes[i + 1] == b'>' => {
                 let mut j = i;
                 while j > 0 && bytes[j - 1].is_ascii_whitespace() { j -= 1; }
-                if j > 0 && bytes[j - 1] == b')' {
+                if j >= 2 && bytes[j - 1] == b')' {
                     let mut depth = 1;
                     let mut k = j - 2;
                     while depth > 0 {
