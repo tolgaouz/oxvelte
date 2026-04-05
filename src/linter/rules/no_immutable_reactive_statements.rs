@@ -106,16 +106,20 @@ impl Rule for NoImmutableReactiveStatements {
         let is_ts = script.lang.as_deref() == Some("ts")
             || script.lang.as_deref() == Some("typescript");
 
+        // Batch find all reassigned/member-written vars in a single pass
+        let (batch_reassigned, batch_member_written) = find_assigned_vars_batch(content, &let_names, &const_names);
+        let (src_reassigned, src_member_written) = find_assigned_vars_batch(ctx.source, &let_names, &const_names);
+
         let mut mutable_lets: HashSet<&str> = HashSet::new();
         for &var in &let_names {
-            if has_reassignment(content, var) || has_reassignment(ctx.source, var) {
+            if batch_reassigned.contains(var) || src_reassigned.contains(var) {
                 mutable_lets.insert(var);
             }
         }
 
         let mut const_member_written: HashSet<&str> = HashSet::new();
         for &var in &const_names {
-            if has_member_write(content, var) || has_member_write(ctx.source, var) {
+            if batch_member_written.contains(var) || src_member_written.contains(var) {
                 const_member_written.insert(var);
             }
         }
@@ -445,6 +449,93 @@ fn extract_import_names(line: &str) -> Vec<&str> {
         }
     }
     names
+}
+
+/// Single-pass batch detection of reassigned and member-written variables.
+/// Returns (reassigned_vars, member_written_vars) as sets of &str references.
+fn find_assigned_vars_batch<'a>(
+    content: &'a str,
+    let_names: &HashSet<&'a str>,
+    const_names: &HashSet<&'a str>,
+) -> (HashSet<&'a str>, HashSet<&'a str>) {
+    let mut reassigned = HashSet::new();
+    let mut member_written = HashSet::new();
+    let all_vars: HashSet<&str> = let_names.union(const_names).copied().collect();
+    if all_vars.is_empty() { return (reassigned, member_written); }
+
+    let bytes = content.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Skip to next identifier
+        if !(bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' || bytes[i] == b'$') {
+            i += 1; continue;
+        }
+        // Check word boundary
+        if i > 0 && (bytes[i-1].is_ascii_alphanumeric() || bytes[i-1] == b'_' || bytes[i-1] == b'$' || bytes[i-1] == b'.') {
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') { i += 1; }
+            continue;
+        }
+        let start = i;
+        while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') { i += 1; }
+        let ident = &content[start..i];
+        if !all_vars.contains(ident) { continue; }
+
+        // Check what follows the identifier
+        let mut j = i;
+        while j < bytes.len() && bytes[j] == b' ' { j += 1; }
+        if j >= bytes.len() { continue; }
+
+        // Check for assignment: var =, var +=, var -=, var *=, var /=
+        let is_assign = match bytes[j] {
+            b'=' => j + 1 >= bytes.len() || (bytes[j+1] != b'=' && bytes[j+1] != b'>'),
+            b'+' | b'-' | b'*' | b'/' => j + 1 < bytes.len() && bytes[j+1] == b'=',
+            _ => false,
+        };
+        // Check for ++ and --
+        let is_incr = (bytes[j] == b'+' && j + 1 < bytes.len() && bytes[j+1] == b'+')
+            || (bytes[j] == b'-' && j + 1 < bytes.len() && bytes[j+1] == b'-');
+
+        if is_assign || is_incr {
+            // Skip if on a declaration line
+            let ls = content[..start].rfind('\n').map(|p| p + 1).unwrap_or(0);
+            let line = content[ls..].trim_start();
+            if !line.starts_with("let ") && !line.starts_with("var ") && !line.starts_with("$:")
+                && !line.starts_with("const ")
+            {
+                if let_names.contains(ident) { reassigned.insert(ident); }
+            }
+        }
+
+        // Check for member access: var. or var[
+        if bytes[j] == b'.' || bytes[j] == b'[' {
+            // Check if there's an assignment after the member chain
+            let mut k = j;
+            loop {
+                if k >= bytes.len() { break; }
+                if bytes[k] == b'.' {
+                    k += 1;
+                    while k < bytes.len() && (bytes[k].is_ascii_alphanumeric() || bytes[k] == b'_') { k += 1; }
+                } else if bytes[k] == b'[' {
+                    let mut d = 1; k += 1;
+                    while k < bytes.len() && d > 0 { match bytes[k] { b'[' => d += 1, b']' => d -= 1, _ => {} } k += 1; }
+                } else { break; }
+            }
+            // Skip whitespace
+            while k < bytes.len() && bytes[k] == b' ' { k += 1; }
+            if k < bytes.len() {
+                let ma = match bytes[k] {
+                    b'=' => k + 1 >= bytes.len() || (bytes[k+1] != b'=' && bytes[k+1] != b'>'),
+                    b'+' | b'-' | b'*' | b'/' => k + 1 < bytes.len() && bytes[k+1] == b'=',
+                    _ => false,
+                };
+                if ma {
+                    if const_names.contains(ident) { member_written.insert(ident); }
+                    if let_names.contains(ident) { reassigned.insert(ident); }
+                }
+            }
+        }
+    }
+    (reassigned, member_written)
 }
 
 fn has_reassignment(content: &str, var: &str) -> bool {
