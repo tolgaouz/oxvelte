@@ -52,6 +52,7 @@ impl<'a> LintContext<'a> {
         Self { ast, source, config, file_path: None, is_svelte_module: false, diagnostics: Vec::new(), current_rule: "" }
     }
 
+    #[inline]
     pub fn diagnostic(&mut self, message: impl Into<String>, span: Span) {
         self.diagnostics.push(LintDiagnostic {
             rule_name: self.current_rule, message: message.into(), span, fix: None,
@@ -64,6 +65,7 @@ impl<'a> LintContext<'a> {
         });
     }
 
+    #[inline]
     fn set_rule(&mut self, name: &'static str) { self.current_rule = name; }
     pub fn into_diagnostics(self) -> Vec<LintDiagnostic> { self.diagnostics }
 }
