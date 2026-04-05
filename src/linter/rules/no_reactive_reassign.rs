@@ -204,18 +204,28 @@ impl Rule for NoReactiveReassign {
             if check_props {
             for var in &reactive_vars {
                 if !content.contains(var.as_str()) { continue; }
-                for method in MUTATING_METHODS {
-                    let pattern = format!("{}.{}", var, method);
+                // Single scan for "var." to check both mutating methods and property chains
+                {
+                    let prefix = format!("{}.", var);
+                    // Check mutating methods via the same prefix scan
                     let mut search_from = 0;
-                    while let Some(pos) = content[search_from..].find(&pattern) {
+                    while let Some(pos) = content[search_from..].find(prefix.as_str()) {
                         let abs = search_from + pos;
-                        search_from = abs + pattern.len();
-                        if abs > 0 && matches!(content.as_bytes()[abs - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_') { continue; }
-                        let ls = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
-                        if content[ls..].trim_start().starts_with("$:") || is_shadowed_in_scope(content, abs, var) { continue; }
-                        let sp = content_offset + abs;
-                        ctx.diagnostic(format!("Assignment to reactive value '{}'.", var),
-                            oxc::span::Span::new(sp as u32, (sp + pattern.len()) as u32));
+                        if abs > 0 && matches!(content.as_bytes()[abs - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_') {
+                            search_from = abs + prefix.len(); continue;
+                        }
+                        let after_prefix = &content[abs + prefix.len()..];
+                        // Check if it's a direct mutating method call
+                        if let Some(method) = MUTATING_METHODS.iter().find(|m| after_prefix.starts_with(*m)) {
+                            let ls = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
+                            if !content[ls..].trim_start().starts_with("$:") && !is_shadowed_in_scope(content, abs, var) {
+                                let sp = content_offset + abs;
+                                let pattern_len = prefix.len() + method.len();
+                                ctx.diagnostic(format!("Assignment to reactive value '{}'.", var),
+                                    oxc::span::Span::new(sp as u32, (sp + pattern_len) as u32));
+                            }
+                        }
+                        search_from = abs + prefix.len();
                     }
                 }
                 {
