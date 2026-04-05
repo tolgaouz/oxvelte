@@ -101,26 +101,14 @@ fn extract_declared_names(decl: &str, vars: &mut Vec<String>) {
             }
         }
     } else {
-        let mut depth = 0i32;
-        let mut seg_start = 0;
-        let bytes = trimmed.as_bytes();
+        let (mut depth, mut seg_start, bytes) = (0i32, 0, trimmed.as_bytes());
         for i in 0..=bytes.len() {
-            let at_end = i == bytes.len();
-            let is_comma = !at_end && bytes[i] == b',' && depth == 0;
-            if at_end || is_comma {
-                let seg = trimmed[seg_start..i].trim();
-                let name: String = seg.chars()
-                    .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
-                    .collect();
+            if i == bytes.len() || (bytes[i] == b',' && depth == 0) {
+                let name: String = trimmed[seg_start..i].trim().chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$').collect();
                 if !name.is_empty() { vars.push(name); }
                 seg_start = i + 1;
-            } else {
-                match bytes[i] {
-                    b'(' | b'[' | b'{' => depth += 1,
-                    b')' | b']' | b'}' => depth -= 1,
-                    _ => {}
-                }
-            }
+            } else { match bytes[i] { b'(' | b'[' | b'{' => depth += 1, b')' | b']' | b'}' => depth -= 1, _ => {} } }
         }
     }
 }
@@ -136,23 +124,16 @@ fn collect_store_refs_and_aliases(content: &str, vars: &mut Vec<String>) -> Vec<
                 if FNS.contains(&val) { aliases.push((val.to_string(), rest[..eq].to_string())); }
             }
         }
-        if t.starts_with("import ") {
-            if let (Some(bs), Some(be)) = (t.find('{'), t.find('}')) {
-                for imp in t[bs+1..be].split(',') {
-                    let imp = imp.trim();
-                    let (orig, local) = match imp.find(" as ") {
-                        Some(ap) => (imp[..ap].trim(), imp[ap+4..].trim()),
-                        None => (imp, imp),
-                    };
-                    if !local.is_empty() {
-                        let sr = format!("${}", local);
-                        if content.contains(&sr) && !vars.contains(&sr) { vars.push(sr); }
-                    }
-                    if orig != local && FNS.contains(&orig) {
-                        aliases.push((orig.to_string(), local.to_string()));
-                    }
-                }
+        if !t.starts_with("import ") { continue; }
+        let (Some(bs), Some(be)) = (t.find('{'), t.find('}')) else { continue };
+        for imp in t[bs+1..be].split(',') {
+            let imp = imp.trim();
+            let (orig, local) = imp.find(" as ").map_or((imp, imp), |ap| (imp[..ap].trim(), imp[ap+4..].trim()));
+            if !local.is_empty() {
+                let sr = format!("${}", local);
+                if content.contains(&sr) && !vars.contains(&sr) { vars.push(sr); }
             }
+            if orig != local && FNS.contains(&orig) { aliases.push((orig.to_string(), local.to_string())); }
         }
     }
     aliases
@@ -323,31 +304,31 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
     }
 
     for _ in 0..4 {
-        let snapshot: Vec<(String, Vec<String>, Vec<(String, usize)>, Vec<String>, Vec<(String, usize)>, bool, bool)> = results.iter()
-            .map(|fi| (fi.name.clone(), fi.assigns.clone(), fi.all_assign_positions.clone(), fi.assigns_after_await.clone(), fi.assign_positions_after_await.clone(), fi.has_await, fi.has_then_catch_assigns))
-            .collect();
-
+        let snap: Vec<FuncInfo> = results.iter().map(|fi| FuncInfo {
+            name: fi.name.clone(), assigns: fi.assigns.clone(), has_await: fi.has_await,
+            assigns_after_await: fi.assigns_after_await.clone(), assign_positions_after_await: fi.assign_positions_after_await.clone(),
+            all_assign_positions: fi.all_assign_positions.clone(), calls_after_await: vec![], all_calls: vec![],
+            body_range: fi.body_range, has_then_catch_assigns: fi.has_then_catch_assigns,
+        }).collect();
         for fi in results.iter_mut() {
             let br = fi.body_range;
             for callee_name in fi.calls_after_await.clone() {
-                if let Some((_, ca, cp, caa, caap, cha, _)) = snapshot.iter().find(|(n, ..)| n == &callee_name) {
-                    let (vi, pi) = if *cha { (caa, caap) } else { (ca, cp) };
-                    for v in vi { merge_var(&mut fi.assigns_after_await, v); }
-                    for v in ca { merge_var(&mut fi.assigns, v); }
-                    for (v, p) in pi { merge_pos(&mut fi.assign_positions_after_await, v, *p, Some(br)); }
-                    for (v, p) in cp { merge_pos(&mut fi.all_assign_positions, v, *p, None); }
-                }
+                let Some(c) = snap.iter().find(|s| s.name == callee_name) else { continue };
+                let (vi, pi) = if c.has_await { (&c.assigns_after_await, &c.assign_positions_after_await) } else { (&c.assigns, &c.all_assign_positions) };
+                for v in vi { merge_var(&mut fi.assigns_after_await, v); }
+                for v in &c.assigns { merge_var(&mut fi.assigns, v); }
+                for (v, p) in pi { merge_pos(&mut fi.assign_positions_after_await, v, *p, Some(br)); }
+                for (v, p) in &c.all_assign_positions { merge_pos(&mut fi.all_assign_positions, v, *p, None); }
             }
             for callee_name in fi.all_calls.clone() {
-                if let Some((_, ca, cp, caa, caap, cha, chtc)) = snapshot.iter().find(|(n, ..)| n == &callee_name) {
-                    for v in ca { merge_var(&mut fi.assigns, v); }
-                    for (v, p) in cp { merge_pos(&mut fi.all_assign_positions, v, *p, None); }
-                    if !caa.is_empty() {
-                        for v in caa { merge_var(&mut fi.assigns_after_await, v); }
-                        for (v, p) in caap { merge_pos(&mut fi.assign_positions_after_await, v, *p, Some(br)); }
-                        fi.has_await |= cha;
-                        fi.has_then_catch_assigns |= chtc;
-                    }
+                let Some(c) = snap.iter().find(|s| s.name == callee_name) else { continue };
+                for v in &c.assigns { merge_var(&mut fi.assigns, v); }
+                for (v, p) in &c.all_assign_positions { merge_pos(&mut fi.all_assign_positions, v, *p, None); }
+                if !c.assigns_after_await.is_empty() {
+                    for v in &c.assigns_after_await { merge_var(&mut fi.assigns_after_await, v); }
+                    for (v, p) in &c.assign_positions_after_await { merge_pos(&mut fi.assign_positions_after_await, v, *p, Some(br)); }
+                    fi.has_await |= c.has_await;
+                    fi.has_then_catch_assigns |= c.has_then_catch_assigns;
                 }
             }
         }
@@ -377,19 +358,15 @@ fn is_direct_function_expr(after: &str) -> bool {
     if after.starts_with('(') {
         let mut depth = 0i32;
         for (i, ch) in after.char_indices() {
-            match ch {
-                '(' => depth += 1,
-                ')' => { depth -= 1; if depth == 0 {
-                    let rest = after[i + 1..].trim_start();
-                    return rest.starts_with("=>") || (rest.starts_with(':') && rest.contains("=>"));
-                }}
-                _ => {}
-            }
+            match ch { '(' => depth += 1, ')' => { depth -= 1; if depth == 0 {
+                let r = after[i + 1..].trim_start();
+                return r.starts_with("=>") || (r.starts_with(':') && r.contains("=>"));
+            }} _ => {} }
         }
         return false;
     }
-    let ident_end = after.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(after.len());
-    ident_end > 0 && after[ident_end..].trim_start().starts_with("=>")
+    let end = after.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(after.len());
+    end > 0 && after[end..].trim_start().starts_with("=>")
 }
 
 fn is_local_declaration(line: &str, var: &str) -> bool {
@@ -411,19 +388,17 @@ fn is_local_declaration(line: &str, var: &str) -> bool {
 
 fn has_assign(line: &str, var: &str) -> bool {
     if !line.contains(var) { return false; }
-    let ops = [" = ", " += ", " -= ", " *= ", " /= "];
-    for op in &ops {
+    const OPS: [&str; 5] = [" = ", " += ", " -= ", " *= ", " /= "];
+    for op in &OPS {
         if let Some(pos) = find_var_op(line, var, op) {
-            if *op == " = " && pos + var.len() + op.len() < line.len()
-                && line.as_bytes()[pos + var.len() + op.len()] == b'=' { continue; }
-            return true;
+            if *op != " = " || pos + var.len() + 3 >= line.len() || line.as_bytes()[pos + var.len() + 3] != b'=' { return true; }
         }
     }
     if let Some(pos) = find_var_op(line, var, " =") {
         let after = pos + var.len() + 2;
         if after >= line.len() || !matches!(line.as_bytes()[after], b'=' | b'>') { return true; }
     }
-    has_member_assign(line, var, &ops)
+    has_member_assign(line, var, &OPS)
 }
 
 fn find_var_op(line: &str, var: &str, op: &str) -> Option<usize> {
@@ -447,40 +422,23 @@ fn find_var_op(line: &str, var: &str, op: &str) -> Option<usize> {
 }
 
 fn has_member_assign(line: &str, var: &str, ops: &[&str]) -> bool {
-    for &sep in &[".", "["] {
+    for sep in [".", "["] {
         let mut start = 0;
-        let prefix_len = var.len() + sep.len();
-        while start + prefix_len <= line.len() {
-            let pos = match line[start..].find(var) {
-                Some(p) => start + p,
-                None => break,
-            };
-            if !is_word_start(line, pos) { start = pos + 1; continue; }
-            let after_var = pos + var.len();
-            if !line[after_var..].starts_with(sep) { start = pos + 1; continue; }
-
-            let rest = &line[after_var + sep.len()..];
+        while start + var.len() + sep.len() <= line.len() {
+            let Some(p) = line[start..].find(var) else { break };
+            let pos = start + p;
+            if !is_word_start(line, pos) || !line[pos + var.len()..].starts_with(sep) { start = pos + 1; continue; }
+            let rest = &line[pos + var.len() + sep.len()..];
             let mut r = if sep == "." {
-                let end = rest.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(rest.len());
-                &rest[end..]
-            } else {
-                rest.find(']').map(|p| &rest[p+1..]).unwrap_or("")
-            };
+                &rest[rest.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(rest.len())..]
+            } else { rest.find(']').map(|p| &rest[p+1..]).unwrap_or("") };
             loop {
-                if r.starts_with('[') {
-                    if let Some(close) = r.find(']') { r = &r[close+1..]; } else { break; }
-                } else if r.starts_with('.') {
-                    let end = r[1..].find(|c: char| !c.is_alphanumeric() && c != '_').map(|e| e+1).unwrap_or(r.len());
-                    r = &r[end..];
-                } else { break; }
+                if r.starts_with('[') { match r.find(']') { Some(c) => r = &r[c+1..], None => break } }
+                else if r.starts_with('.') { r = &r[r[1..].find(|c: char| !c.is_alphanumeric() && c != '_').map(|e| e+1).unwrap_or(r.len())..]; }
+                else { break; }
             }
             let r = r.trim_start();
-            for op in ops {
-                if r.starts_with(op.trim()) {
-                    if *op == " = " && r.len() > 1 && r.as_bytes()[1] == b'=' { continue; }
-                    return true;
-                }
-            }
+            if ops.iter().any(|op| r.starts_with(op.trim()) && !(*op == " = " && r.len() > 1 && r.as_bytes()[1] == b'=')) { return true; }
             start = pos + 1;
         }
     }
@@ -494,25 +452,20 @@ fn is_word_start(text: &str, pos: usize) -> bool {
 }
 
 fn find_assign_pos(line: &str, var: &str) -> Option<usize> {
-    for op in &[" = ", " += ", " -= "] {
-        if let Some(pos) = find_var_op(line, var, op) {
-            if *op == " = " {
-                let a = pos + var.len() + 3;
-                if a < line.len() && line.as_bytes()[a] == b'=' { continue; }
-            }
-            return Some(pos);
+    [" = ", " += ", " -= "].iter().find_map(|op| {
+        let pos = find_var_op(line, var, op)?;
+        if *op == " = " && pos + var.len() + 3 < line.len() && line.as_bytes()[pos + var.len() + 3] == b'=' { return None; }
+        Some(pos)
+    }).or_else(|| {
+        let mut s = 0;
+        while let Some(p) = line[s..].find(var) {
+            let pos = s + p;
+            if is_word_start(line, pos) && line[pos + var.len()..].starts_with('.')
+                && [" = ", " += ", " -= "].iter().any(|op| line[pos + var.len() + 1..].contains(op)) { return Some(pos); }
+            s = pos + 1;
         }
-    }
-    let mut start = 0;
-    while let Some(p) = line[start..].find(var) {
-        let pos = start + p;
-        if is_word_start(line, pos) && line[pos + var.len()..].starts_with('.') {
-            let rest = &line[pos + var.len() + 1..];
-            if [" = ", " += ", " -= "].iter().any(|op| rest.contains(op)) { return Some(pos); }
-        }
-        start = pos + 1;
-    }
-    None
+        None
+    })
 }
 
 fn find_reactive_block(content: &str, from: usize) -> Option<(usize, usize)> {
@@ -801,13 +754,9 @@ fn find_callback_regions(block: &str, patterns: &[&str], check_boundary: bool, f
 }
 
 fn is_in_effective_then_catch(regions: &[(usize, usize)], pos: usize) -> bool {
-    let innermost = match regions.iter()
-        .filter(|(s, e)| pos >= *s && pos < *e)
-        .min_by_key(|(s, e)| e - s) {
-        Some(r) => r,
-        None => return false,
-    };
-    !regions.iter().any(|(s, e)| *s > innermost.0 && *e < innermost.1 && *e <= pos)
+    let Some(inner) = regions.iter().filter(|(s, e)| pos >= *s && pos < *e).min_by_key(|(s, e)| e - s)
+    else { return false };
+    !regions.iter().any(|(s, e)| *s > inner.0 && *e < inner.1 && *e <= pos)
 }
 
 fn report_call_in_body(ctx: &mut LintContext, body: &str, body_offset: usize, callee: &str, var: &str) {
@@ -860,20 +809,14 @@ fn analyze_block(
 ) {
     let mut all_triggers: Vec<String> = ["setTimeout", "setInterval", "queueMicrotask", "tick"]
         .iter().map(|s| s.to_string()).collect();
-    for (_, alias) in aliases { all_triggers.push(alias.clone()); }
+    all_triggers.extend(aliases.iter().map(|(_, a)| a.clone()));
 
-
-    let local_names: Vec<String> = block.lines()
-        .filter_map(|line| {
-            let t = line.trim();
-            let rest = t.strip_prefix("let ").or_else(|| t.strip_prefix("const "))
-                .or_else(|| t.strip_prefix("var ")).or_else(|| t.strip_prefix("function "))?;
-            let name: String = rest.chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
-                .collect();
-            if !name.is_empty() { Some(name) } else { None }
-        })
-        .collect();
+    let local_names: Vec<String> = block.lines().filter_map(|line| {
+        let t = line.trim();
+        let rest = ["let ", "const ", "var ", "function "].iter().find_map(|kw| t.strip_prefix(kw))?;
+        let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$').collect();
+        if !name.is_empty() { Some(name) } else { None }
+    }).collect();
 
     let async_callback_regions = find_callback_regions(block, &[".then(", ".catch("], false, false);
 
@@ -884,7 +827,7 @@ fn analyze_block(
         while i < bytes.len() {
             match bytes[i] {
                 b'\'' | b'"' | b'`' => { i = skip_string_raw(bytes, i); continue; }
-                b'/' => if let Some(end) = skip_comment_raw(bytes, i) { i = end; continue; },
+                b'/' => { if let Some(end) = skip_comment_raw(bytes, i) { i = end; } else { i += 1; } continue; }
                 b if b.is_ascii_alphabetic() || b == b'_' || b == b'$' => {
                     if i > 0 && bytes[i-1] == b'.' && !(i >= 3 && bytes[i-2] == b'.' && bytes[i-3] == b'.') {
                         while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') { i += 1; }
