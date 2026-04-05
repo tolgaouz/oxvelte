@@ -448,17 +448,18 @@ fn extract_import_names(line: &str) -> Vec<&str> {
 }
 
 fn has_reassignment(content: &str, var: &str) -> bool {
-    let patterns = [" =", "=", "++", "--", " +=", " -="];
-    for suffix in &patterns {
-        let search = format!("{}{}", var, suffix);
-        for (pos, _) in content.match_indices(&search) {
-            if pos > 0 && matches!(content.as_bytes()[pos - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b':') { continue; }
-            let ls = content[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
-            let line = content[ls..].trim_start();
-            if line.starts_with("let ") || line.starts_with("var ") || line.starts_with("$:") { continue; }
-            if matches!(suffix, &" =" | &"=") && pos + search.len() < content.len() && content.as_bytes()[pos + search.len()] == b'=' { continue; }
-            return true;
-        }
+    let suffixes: &[&str] = &[" =", "=", "++", "--", " +=", " -="];
+    // Single scan for the var, check suffixes at each match
+    for (pos, _) in content.match_indices(var) {
+        if pos > 0 && matches!(content.as_bytes()[pos - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b':') { continue; }
+        let after = &content[pos + var.len()..];
+        let Some(suffix) = suffixes.iter().find(|s| after.starts_with(*s)) else { continue };
+        let search_len = var.len() + suffix.len();
+        let ls = content[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
+        let line = content[ls..].trim_start();
+        if line.starts_with("let ") || line.starts_with("var ") || line.starts_with("$:") { continue; }
+        if matches!(*suffix, " =" | "=") && pos + search_len < content.len() && content.as_bytes()[pos + search_len] == b'=' { continue; }
+        return true;
     }
 
     for pat in &[format!("[{}]", var), format!(", {}]", var), format!("[{},", var),
