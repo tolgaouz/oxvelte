@@ -91,11 +91,11 @@ fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool) -> ExitCode {
         let path_str = path.to_string_lossy();
         let is_svelte = path.extension().is_some_and(|e| e == "svelte");
         let is_svelte_module = path_str.ends_with(".svelte.js") || path_str.ends_with(".svelte.ts");
+        let file_path_owned = path_str.to_string();
         let diags = if is_svelte {
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let result = parser::parse(&source);
-                let file_path_str = path.to_string_lossy().to_string();
-                lint.lint_with_config_and_path(&result.ast, &source, oxvelte::linter::RuleConfig::default(), &file_path_str)
+                lint.lint_with_config_and_path(&result.ast, &source, oxvelte::linter::RuleConfig::default(), &file_path_owned)
             })) {
                 Ok(d) => d,
                 Err(_) => {
