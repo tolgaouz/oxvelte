@@ -711,6 +711,7 @@ fn extract_identifiers(expr: &str) -> Vec<String> {
 }
 
 fn check_immutability_ast(content: &str, is_ts: bool, text_immutable: &HashSet<&str>) -> HashSet<u32> {
+    if text_immutable.is_empty() { return HashSet::new(); }
     use oxc::allocator::Allocator;
     use oxc::ast::AstKind;
     use oxc::parser::Parser;
