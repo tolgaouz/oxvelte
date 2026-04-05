@@ -314,6 +314,7 @@ impl Rule for NoReactiveReassign {
             } // end if check_props (step 2b)
 
             for var in &reactive_vars {
+                if !content.contains(var.as_str()) { continue; }
                 let destructure_patterns = [
                     format!("{} }} =", var),     // { foo: reactiveVar } =
                     format!("{}}} =", var),      // {reactiveVar} = (no space)
