@@ -163,6 +163,7 @@ fn merge_pos(vec: &mut Vec<(String, usize)>, var: &str, pos: usize, body_range: 
     if !vec.iter().any(|(v, p)| v == var && *p == pos) { vec.push((var.to_string(), pos)); }
 }
 
+#[inline]
 fn extract_line_idents<'a>(line: &'a str) -> Vec<&'a str> {
     let mut idents = Vec::new();
     let bytes = line.as_bytes();
@@ -471,6 +472,7 @@ fn has_member_assign(line: &str, var: &str, ops: &[&str]) -> bool {
     false
 }
 
+#[inline]
 fn is_word_start(text: &str, pos: usize) -> bool {
     if pos == 0 { return true; }
     let b = text.as_bytes()[pos - 1];
@@ -670,6 +672,7 @@ fn has_await_on_prev_line(block: &str, line_start_pos: usize) -> bool {
     min_await_depth <= depth
 }
 
+#[inline]
 fn skip_string_raw(bytes: &[u8], start: usize) -> usize {
     let q = bytes[start];
     let mut j = start + 1;
@@ -681,6 +684,7 @@ fn skip_string_raw(bytes: &[u8], start: usize) -> usize {
     j
 }
 
+#[inline]
 fn skip_comment_raw(bytes: &[u8], i: usize) -> Option<usize> {
     if i + 1 >= bytes.len() || bytes[i] != b'/' { return None; }
     if bytes[i + 1] == b'/' {
