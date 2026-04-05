@@ -20,6 +20,7 @@ impl Rule for NoImmutableReactiveStatements {
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         let script = match &ctx.ast.instance { Some(s) => s, None => return };
         let content = &script.content;
+        if !content.contains("$:") { return; }
         let base = script.span.start as usize;
         let source = ctx.source;
         let tag_text = &source[base..script.span.end as usize];
