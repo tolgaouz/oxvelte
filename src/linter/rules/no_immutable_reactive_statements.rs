@@ -107,16 +107,25 @@ impl Rule for NoImmutableReactiveStatements {
         let is_ts = script.lang.as_deref() == Some("ts")
             || script.lang.as_deref() == Some("typescript");
 
+        // Extract template portion of source (outside script tags) to avoid re-scanning script
+        let template_source = {
+            let script_start = script.span.start as usize;
+            let script_end = script.span.end as usize;
+            let before = &ctx.source[..script_start];
+            let after = if script_end < ctx.source.len() { &ctx.source[script_end..] } else { "" };
+            format!("{}{}", before, after)
+        };
+
         let mut mutable_lets: HashSet<&str> = HashSet::new();
         for &var in &let_names {
-            if has_reassignment(content, var) || has_reassignment(ctx.source, var) {
+            if has_reassignment(content, var) || has_reassignment(&template_source, var) {
                 mutable_lets.insert(var);
             }
         }
 
         let mut const_member_written: HashSet<&str> = HashSet::new();
         for &var in &const_names {
-            if has_member_write(content, var) || has_member_write(ctx.source, var) {
+            if has_member_write(content, var) || has_member_write(&template_source, var) {
                 const_member_written.insert(var);
             }
         }
