@@ -202,6 +202,7 @@ impl Rule for NoReactiveReassign {
 
             if check_props {
             for var in &reactive_vars {
+                if !content.contains(var.as_str()) { continue; }
                 for method in MUTATING_METHODS {
                     let pattern = format!("{}.{}", var, method);
                     let mut search_from = 0;
