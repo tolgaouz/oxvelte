@@ -487,9 +487,6 @@ fn has_reassignment(content: &str, var: &str) -> bool {
 }
 
 fn has_member_write(content: &str, var: &str) -> bool {
-    let dot_pat = format!("{}.", var);
-    let bracket_pat = format!("{}[", var);
-
     let skip_brackets = |bytes: &[u8], i: &mut usize| {
         let mut d = 1; *i += 1;
         while *i < bytes.len() && d > 0 {
@@ -497,34 +494,37 @@ fn has_member_write(content: &str, var: &str) -> bool {
             *i += 1;
         }
     };
-    for pat in &[&dot_pat, &bracket_pat] {
-        let is_bracket = pat == &&bracket_pat;
-        for (pos, _) in content.match_indices(pat.as_str()) {
-            if pos > 0 && matches!(content.as_bytes()[pos - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$') { continue; }
-            let rest = &content[pos + pat.len()..];
-            let mut i = 0;
-            let bytes = rest.as_bytes();
-            if is_bracket {
-                skip_brackets(bytes, &mut i);
-            } else {
-                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') { i += 1; }
+    // Single scan for var, check if followed by . or [
+    for (pos, _) in content.match_indices(var) {
+        if pos > 0 && matches!(content.as_bytes()[pos - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$') { continue; }
+        let after_var = pos + var.len();
+        if after_var >= content.len() { continue; }
+        let first = content.as_bytes()[after_var];
+        if first != b'.' && first != b'[' { continue; }
+        let rest = &content[after_var..];
+        let mut i = 0;
+        let bytes = rest.as_bytes();
+        if bytes[0] == b'[' {
+            skip_brackets(bytes, &mut i);
+        } else {
+            i += 1; // skip '.'
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') { i += 1; }
+        }
+        while i < bytes.len() {
+            match bytes[i] {
+                b'.' => { i += 1; while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') { i += 1; } }
+                b'[' => skip_brackets(bytes, &mut i),
+                _ => break,
             }
-            while i < bytes.len() {
-                match bytes[i] {
-                    b'.' => { i += 1; while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') { i += 1; } }
-                    b'[' => skip_brackets(bytes, &mut i),
-                    _ => break,
-                }
-            }
-            while i < bytes.len() && bytes[i].is_ascii_whitespace() { i += 1; }
-            if i < bytes.len() {
-                match bytes[i] {
-                    b'=' if i + 1 < bytes.len() && bytes[i + 1] != b'=' => return true,
-                    b'+' | b'-' if i + 1 < bytes.len() && bytes[i + 1] == bytes[i] => return true,
-                    b'+' | b'-' | b'*' | b'/' | b'%' | b'&' | b'|' | b'^'
-                        if i + 1 < bytes.len() && bytes[i + 1] == b'=' => return true,
-                    _ => {}
-                }
+        }
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() { i += 1; }
+        if i < bytes.len() {
+            match bytes[i] {
+                b'=' if i + 1 < bytes.len() && bytes[i + 1] != b'=' => return true,
+                b'+' | b'-' if i + 1 < bytes.len() && bytes[i + 1] == bytes[i] => return true,
+                b'+' | b'-' | b'*' | b'/' | b'%' | b'&' | b'|' | b'^'
+                    if i + 1 < bytes.len() && bytes[i + 1] == b'=' => return true,
+                _ => {}
             }
         }
     }
