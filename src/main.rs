@@ -326,22 +326,23 @@ fn offset_to_line_col(source: &str, offset: usize) -> (usize, usize) {
 fn collect_lint_files(paths: &[PathBuf]) -> Vec<PathBuf> {
     let mut files = Vec::new();
     let extensions = ["svelte", "js", "ts", "mjs", "mts"];
-    for path in paths {
+    let mut stack: Vec<PathBuf> = paths.to_vec();
+    while let Some(path) = stack.pop() {
         if path.is_file() {
             if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                 if extensions.contains(&ext) {
-                    files.push(path.clone());
+                    files.push(path);
                 }
             }
         } else if path.is_dir() {
-            // Skip node_modules, .svelte-kit, build, dist
             let dirname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if matches!(dirname, "node_modules" | ".svelte-kit" | "build" | "dist" | ".git") {
                 continue;
             }
-            if let Ok(entries) = std::fs::read_dir(path) {
-                let children: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
-                files.extend(collect_lint_files(&children));
+            if let Ok(entries) = std::fs::read_dir(&path) {
+                for entry in entries.flatten() {
+                    stack.push(entry.path());
+                }
             }
         }
     }
