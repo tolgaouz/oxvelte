@@ -85,14 +85,19 @@ pub trait Rule: Send + Sync {
 /// The linter: holds rules and runs them on parsed files.
 pub struct Linter {
     rules: Vec<Box<dyn Rule>>,
+    has_script_rules: bool,
 }
 
 impl Linter {
     pub fn recommended() -> Self {
-        Self { rules: rules::recommended_rules() }
+        let rules = rules::recommended_rules();
+        let has_script_rules = rules.iter().any(|r| r.applies_to_scripts());
+        Self { rules, has_script_rules }
     }
     pub fn all() -> Self {
-        Self { rules: rules::all_rules() }
+        let rules = rules::all_rules();
+        let has_script_rules = rules.iter().any(|r| r.applies_to_scripts());
+        Self { rules, has_script_rules }
     }
 
     pub fn rules(&self) -> &[Box<dyn Rule>] {
@@ -111,6 +116,7 @@ impl Linter {
     /// Lint a plain JS/TS file. Only runs rules marked with `applies_to_scripts`.
     /// Wraps the source in a synthetic SvelteAst with the content as an instance script.
     pub fn lint_script(&self, source: &str) -> Vec<LintDiagnostic> {
+        if !self.has_script_rules { return vec![]; }
         use crate::ast::{SvelteAst, Script, Fragment};
         let ast = SvelteAst {
             html: Fragment { nodes: vec![], span: oxc::span::Span::new(0, 0) },
