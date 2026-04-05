@@ -31,6 +31,7 @@ impl Rule for NoReactiveReassign {
 
         if let Some(script) = &ctx.ast.instance {
             let content = &script.content;
+            if !content.contains("$:") { return; }
             let base = script.span.start as usize;
             let source = ctx.source;
             let tag_text = &source[base..script.span.end as usize];
