@@ -106,20 +106,16 @@ impl Rule for NoImmutableReactiveStatements {
         let is_ts = script.lang.as_deref() == Some("ts")
             || script.lang.as_deref() == Some("typescript");
 
-        // Batch find all reassigned/member-written vars in a single pass
-        let (batch_reassigned, batch_member_written) = find_assigned_vars_batch(content, &let_names, &const_names);
-        let (src_reassigned, src_member_written) = find_assigned_vars_batch(ctx.source, &let_names, &const_names);
-
         let mut mutable_lets: HashSet<&str> = HashSet::new();
         for &var in &let_names {
-            if batch_reassigned.contains(var) || src_reassigned.contains(var) {
+            if has_reassignment(content, var) || has_reassignment(ctx.source, var) {
                 mutable_lets.insert(var);
             }
         }
 
         let mut const_member_written: HashSet<&str> = HashSet::new();
         for &var in &const_names {
-            if batch_member_written.contains(var) || src_member_written.contains(var) {
+            if has_member_write(content, var) || has_member_write(ctx.source, var) {
                 const_member_written.insert(var);
             }
         }
