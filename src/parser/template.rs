@@ -144,10 +144,12 @@ impl<'a> TemplateParser<'a> {
 
     // ─── Helpers ───────────────────────────────────────────────────────
 
+    #[inline]
     fn looking_at(&self, prefix: &str) -> bool {
         self.source[self.pos..].starts_with(prefix)
     }
 
+    #[inline]
     fn remaining(&self) -> &'a str {
         &self.source[self.pos..]
     }
