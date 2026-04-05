@@ -361,7 +361,10 @@ impl Rule for NoReactiveReassign {
                 }
             }
 
+            let has_for = content.contains("for (");
             for var in &reactive_vars {
+                if !has_for { break; }
+                if !content.contains(var.as_str()) { continue; }
                 let for_patterns = [
                     format!("for ({} ", var),
                     format!("for ({}", var),
@@ -390,11 +393,15 @@ impl Rule for NoReactiveReassign {
             }
 
             if check_props { for var in &reactive_vars {
+                if !content.contains(var.as_str()) { continue; }
+                let ternary_pat1 = format!("? {} :", var);
+                let ternary_pat2 = format!("? {}", var);
                 for line in content.lines() {
                     let trimmed = line.trim();
                     if trimmed.starts_with("$:") { continue; }
-                    if trimmed.contains(&format!("? {} :", var))
-                        || trimmed.contains(&format!("? {}", var))
+                    if !trimmed.contains(var.as_str()) { continue; }
+                    if trimmed.contains(&ternary_pat1)
+                        || trimmed.contains(&ternary_pat2)
                     {
                         if let Some(dot_pos) = trimmed.rfind(").") {
                             let after_dot = &trimmed[dot_pos + 2..];
