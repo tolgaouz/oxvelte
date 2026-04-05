@@ -161,52 +161,42 @@ impl Rule for NoReactiveReassign {
 
             let suffixes: &[&str] = &[" =", "=", "++", "--", " +=", " -=", " *=", " /=", " %=", " &&=", " ||=", " ??="];
             for var in &reactive_vars {
-                if !content.contains(var.as_str()) { continue; }
-                let patterns: Vec<String> = suffixes.iter().map(|s| format!("{}{}", var, s)).collect();
-                for pattern in &patterns {
-                    let mut search_from = 0;
-                    while let Some(pos) = content[search_from..].find(pattern.as_str()) {
-                        let abs = search_from + pos;
+                // Single scan for the var, then check suffixes at each match
+                let mut search_from = 0;
+                while let Some(pos) = content[search_from..].find(var.as_str()) {
+                    let abs = search_from + pos;
+                    search_from = abs + var.len();
 
-                        let line_start = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
-                        let line = content[line_start..].trim_start();
-                        if line.starts_with("$:") || line.starts_with("//") || line.starts_with("/*")
-                            || line.starts_with("const ") || line.starts_with("let ") || line.starts_with("var ")
-                        {
-                            search_from = abs + pattern.len();
-                            continue;
-                        }
+                    // Word boundary check
+                    if abs > 0 && matches!(content.as_bytes()[abs - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'.') { continue; }
+                    let after = &content[abs + var.len()..];
 
-                        if abs > 0 {
-                            if matches!(content.as_bytes()[abs - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'.') {
-                                search_from = abs + pattern.len(); continue;
-                            }
-                            if let Some(bo) = content[..abs].rfind('[') {
-                                let inside = content[..abs].rfind(']').map_or(true, |bc| bo > bc);
-                                if inside && content[abs + var.len()..].trim_start().starts_with(']') {
-                                    search_from = abs + pattern.len(); continue;
-                                }
-                            }
-                        }
+                    // Check which suffix matches
+                    let matched_suffix = suffixes.iter().find(|s| after.starts_with(*s));
+                    let Some(suffix) = matched_suffix else { continue };
+                    let pattern_len = var.len() + suffix.len();
 
-                        if pattern.ends_with(" =") || pattern.ends_with('=') {
-                            let after_eq = abs + pattern.len();
-                            if after_eq < content.len() && content.as_bytes()[after_eq] == b'=' {
-                                search_from = abs + pattern.len();
-                                continue;
-                            }
-                        }
+                    let line_start = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
+                    let line = content[line_start..].trim_start();
+                    if line.starts_with("$:") || line.starts_with("//") || line.starts_with("/*")
+                        || line.starts_with("const ") || line.starts_with("let ") || line.starts_with("var ")
+                    { continue; }
 
-                        if is_shadowed_in_scope(content, abs, var) {
-                            search_from = abs + pattern.len();
-                            continue;
-                        }
-
-                        let sp = content_offset + abs;
-                        ctx.diagnostic(format!("Assignment to reactive value '{}'.", var),
-                            oxc::span::Span::new(sp as u32, (sp + pattern.len()) as u32));
-                        search_from = abs + pattern.len();
+                    if let Some(bo) = content[..abs].rfind('[') {
+                        let inside = content[..abs].rfind(']').map_or(true, |bc| bo > bc);
+                        if inside && after.trim_start().starts_with(']') { continue; }
                     }
+
+                    if suffix.ends_with('=') {
+                        let after_eq = abs + pattern_len;
+                        if after_eq < content.len() && content.as_bytes()[after_eq] == b'=' { continue; }
+                    }
+
+                    if is_shadowed_in_scope(content, abs, var) { continue; }
+
+                    let sp = content_offset + abs;
+                    ctx.diagnostic(format!("Assignment to reactive value '{}'.", var),
+                        oxc::span::Span::new(sp as u32, (sp + pattern_len) as u32));
                 }
             }
 
