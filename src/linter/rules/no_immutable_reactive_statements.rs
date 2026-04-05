@@ -102,6 +102,7 @@ impl Rule for NoImmutableReactiveStatements {
 
         extract_multiline_imports(content, &mut immutable_names);
         let reactive_stmts = collect_reactive_stmts(content);
+        if reactive_stmts.is_empty() { return; }
 
         let is_ts = script.lang.as_deref() == Some("ts")
             || script.lang.as_deref() == Some("typescript");
