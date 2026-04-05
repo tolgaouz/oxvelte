@@ -163,9 +163,26 @@ fn merge_pos(vec: &mut Vec<(String, usize)>, var: &str, pos: usize, body_range: 
     if !vec.iter().any(|(v, p)| v == var && *p == pos) { vec.push((var.to_string(), pos)); }
 }
 
+fn extract_line_idents<'a>(line: &'a str) -> Vec<&'a str> {
+    let mut idents = Vec::new();
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' || bytes[i] == b'$' {
+            let start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') { i += 1; }
+            idents.push(&line[start..i]);
+        } else {
+            i += 1;
+        }
+    }
+    idents
+}
+
 fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std::collections::HashSet<String>) -> Vec<FuncInfo> {
     let mut results = Vec::new();
     let lines: Vec<&str> = content.lines().collect();
+    let top_var_set: std::collections::HashSet<&str> = top_vars.iter().map(|s| s.as_str()).collect();
 
     let mut line_offsets = Vec::with_capacity(lines.len());
     let mut line_depths = Vec::with_capacity(lines.len());
@@ -184,6 +201,7 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
         .filter(|(idx, _)| line_depths[*idx] == 0)
         .filter_map(|(_, line)| extract_func_name(line.trim()))
         .collect();
+    let func_name_set: std::collections::HashSet<&str> = func_names_seen.iter().map(|s| s.as_str()).collect();
 
     let mut i = 0;
     while i < lines.len() {
@@ -222,45 +240,50 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
 
                 if j == i { continue; }
 
+                // Extract identifiers once per line for fast membership checks
+                let line_idents = extract_line_idents(t);
+                let vars_in_line: Vec<&String> = top_vars.iter()
+                    .filter(|v| *v != &name && line_idents.contains(&v.as_str()))
+                    .collect();
+
                 if t.contains("await ") {
                     if seen_await || j > i {
-                        for var in top_vars {
-                            if var == &name { continue; }
-                            if !t.contains(var.as_str()) { continue; }
+                        for var in &vars_in_line {
                             if let Some(_) = find_var_op(t, var, " = await ") {
                                 if is_local_declaration(t, var) { continue; }
-                                if !assigns_after_await.contains(var) { assigns_after_await.push(var.clone()); }
-                                assign_positions_after_await.push((var.clone(), line_pos + indent));
-                                if !assigns.contains(var) { assigns.push(var.clone()); }
-                                all_assign_positions.push((var.clone(), line_pos + indent));
+                                if !assigns_after_await.contains(*var) { assigns_after_await.push((*var).clone()); }
+                                assign_positions_after_await.push(((*var).clone(), line_pos + indent));
+                                if !assigns.contains(*var) { assigns.push((*var).clone()); }
+                                all_assign_positions.push(((*var).clone(), line_pos + indent));
                             }
                         }
                     }
                     seen_await = true;
                 }
 
-                for var in top_vars {
-                    if var == &name { continue; }
-                    if !t.contains(var.as_str()) { continue; }
+                for var in &vars_in_line {
                     if is_local_declaration(t, var) { continue; }
                     if has_assign(t, var) {
-                        if !assigns.contains(var) { assigns.push(var.clone()); }
-                        all_assign_positions.push((var.clone(), line_pos + indent));
+                        if !assigns.contains(*var) { assigns.push((*var).clone()); }
+                        all_assign_positions.push(((*var).clone(), line_pos + indent));
                         if seen_await {
-                            if !assigns_after_await.contains(var) { assigns_after_await.push(var.clone()); }
-                            assign_positions_after_await.push((var.clone(), line_pos + indent));
+                            if !assigns_after_await.contains(*var) { assigns_after_await.push((*var).clone()); }
+                            assign_positions_after_await.push(((*var).clone(), line_pos + indent));
                         }
                     }
                 }
 
-                for other in &func_names_seen {
-                    if other == &name { continue; }
-                    let call_pat = format!("{}(", other);
-                    if let Some(cp) = t.find(&call_pat) {
-                        if is_word_start(t, cp) {
-                            if !all_calls.contains(other) { all_calls.push(other.clone()); }
-                            if seen_await && !calls_after_await.contains(other) {
-                                calls_after_await.push(other.clone());
+                // Check function calls using identifier extraction
+                for ident in &line_idents {
+                    if func_name_set.contains(ident) && *ident != name.as_str() {
+                        let call_pat = format!("{}(", ident);
+                        if let Some(cp) = t.find(&call_pat) {
+                            if is_word_start(t, cp) {
+                                let other = ident.to_string();
+                                if !all_calls.contains(&other) { all_calls.push(other.clone()); }
+                                if seen_await && !calls_after_await.contains(&other) {
+                                    calls_after_await.push(other);
+                                }
                             }
                         }
                     }
@@ -281,10 +304,11 @@ fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std
                     let line = lines[j];
                     let lt = line.trim();
                     let indent = line.len() - lt.len();
-                    let lpos = line_offsets[j] - body_start; // position relative to func body
+                    let lpos = line_offsets[j] - body_start;
+                    let lt_idents = extract_line_idents(lt);
                     for var in top_vars {
                         if implicit_reactive.contains(var) { continue; }
-                        if !lt.contains(var.as_str()) { continue; }
+                        if !lt_idents.contains(&var.as_str()) { continue; }
                         if is_local_declaration(lt, var) { continue; }
                         if !has_assign(lt, var) { continue; }
                         let in_region = all_async_regions.iter()
