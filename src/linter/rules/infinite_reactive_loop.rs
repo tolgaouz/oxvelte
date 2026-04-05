@@ -21,6 +21,8 @@ impl Rule for InfiniteReactiveLoop {
             None => return,
         };
         let content = &script.content;
+        // Fast bail: no reactive statements means nothing to check
+        if !content.contains("$:") { return; }
         let base = script.span.start as usize;
         let source = ctx.source;
         let tag_text = &source[base..script.span.end as usize];
