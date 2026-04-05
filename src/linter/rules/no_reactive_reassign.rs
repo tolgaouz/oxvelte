@@ -161,6 +161,7 @@ impl Rule for NoReactiveReassign {
 
             let suffixes: &[&str] = &[" =", "=", "++", "--", " +=", " -=", " *=", " /=", " %=", " &&=", " ||=", " ??="];
             for var in &reactive_vars {
+                if !content.contains(var.as_str()) { continue; }
                 let patterns: Vec<String> = suffixes.iter().map(|s| format!("{}{}", var, s)).collect();
                 for pattern in &patterns {
                     let mut search_from = 0;
