@@ -76,6 +76,11 @@ impl Rule for PreferSvelteReactivity {
         for script in [&ctx.ast.instance, &ctx.ast.module].into_iter().flatten() {
             let content = &script.content;
             if content.trim().is_empty() { continue; }
+            // Skip OXC parsing if no "new ClassName" patterns appear
+            if !BUILTIN_CLASSES.iter().any(|c| {
+                let pat = format!("new {}", c.name);
+                content.contains(&pat)
+            }) { continue; }
 
             let content_offset = if ctx.is_svelte_module {
                 0
