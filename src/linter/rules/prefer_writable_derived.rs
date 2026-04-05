@@ -63,6 +63,7 @@ impl Rule for PreferWritableDerived {
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         if let Some(script) = &ctx.ast.instance {
             let content = &script.content;
+            if !content.contains("$state(") && !content.contains("$state<") { return; }
             let base = script.span.start as usize;
             let source = ctx.source;
             let tag_text = &source[base..script.span.end as usize];
