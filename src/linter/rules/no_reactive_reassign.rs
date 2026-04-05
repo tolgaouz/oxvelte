@@ -267,7 +267,8 @@ impl Rule for NoReactiveReassign {
                         search_from = abs + prefix.len();
                     }
                 }
-                for suffix in &["++", "--"] {
+                // ++ and -- checks merged into a single var. scan
+                {
                     let dot_pat = format!("{}.", var);
                     let mut search_from = 0;
                     while let Some(pos) = content[search_from..].find(&dot_pat) {
@@ -277,12 +278,13 @@ impl Rule for NoReactiveReassign {
                         }
                         let after_dot = &content[abs + dot_pat.len()..];
                         let pe = after_dot.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(after_dot.len());
-                        if after_dot[pe..].starts_with(suffix) {
+                        if after_dot[pe..].starts_with("++") || after_dot[pe..].starts_with("--") {
+                            let suffix_len = 2;
                             let ls = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
                             if !content[ls..].trim_start().starts_with("$:") && !is_shadowed_in_scope(content, abs, var) {
                                 let sp = content_offset + abs;
                                 ctx.diagnostic(format!("Assignment to property of reactive value '{}'.", var),
-                                    oxc::span::Span::new(sp as u32, (sp + dot_pat.len() + pe + suffix.len()) as u32));
+                                    oxc::span::Span::new(sp as u32, (sp + dot_pat.len() + pe + suffix_len) as u32));
                             }
                         }
                         search_from = abs + dot_pat.len();
