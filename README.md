@@ -19,27 +19,130 @@ Tested against 4 real-world Svelte codebases (3,428 files total):
 | [immich](https://github.com/immich-app/immich) | 400 | 492ms | **20ms** | **25x** | 0/0 exact |
 | [sveltejs/kit](https://github.com/sveltejs/kit) | 876 | 45ms | **33ms** | **1.4x** | 3/3 rules exact |
 
-**Zero false positives. Zero false negatives.** The only differences are `no-unused-svelte-ignore` (requires the Svelte compiler) and one ESLint false positive on `{'{{'}`.
+## Using with oxlint (recommended setup)
 
-## Training curve
+The fastest way to lint a SvelteKit project is **oxlint + oxvelte** together. They handle different concerns with zero overlap:
 
-<p align="center">
-  <img src="assets/loss-curve.svg" alt="Tests passing over 234 agent iterations" width="700">
-</p>
+| Tool | What it lints | File types |
+|------|--------------|------------|
+| [oxlint](https://oxc.rs/docs/guide/usage/linter) | General JS/TS rules (`no-unused-vars`, `no-console`, type checks, imports, etc.) | `.js`, `.ts`, `.svelte` (script blocks) |
+| **oxvelte** | Svelte-specific rules (`infinite-reactive-loop`, `no-at-html-tags`, template issues, etc.) | `.svelte` |
 
-234 autonomous iterations. 39 tests passing at the start, 1,401 at the end. Each commit was made by the agent after verifying tests pass and benchmarks improve.
+oxlint already extracts and lints `<script>` blocks from `.svelte` files. oxvelte adds the Svelte-specific rules that oxlint doesn't have — reactive patterns, template structure, style scoping, component conventions.
 
-## How it was built
+### Quick setup
 
-This project follows the [autoresearch](https://github.com/karpathy/autoresearch) pattern:
+```bash
+# Install both
+npm install -D oxlint
+cargo install --git https://github.com/tolgaouz/oxvelte.git
 
-1. **Human writes `program.md`** — a spec describing the goal, benchmarks, constraints, and experiment loop
-2. **Agent runs autonomously** — reads the spec, builds the code, runs benchmarks, fixes failures, commits, and loops
-3. **Repeat** — the human updates the spec (new goals, tighter targets), the agent iterates
+# Add to package.json
+```
 
-The parity program ran until oxvelte matched eslint-plugin-svelte's output on all 4 repos. The performance program then optimized until p95 latency hit the targets. Every commit in `src/` was authored by the agent.
+```json
+{
+  "scripts": {
+    "lint": "oxlint && oxvelte lint src/"
+  }
+}
+```
 
-The agent scaffolding (`program.md`, test fixtures, benchmark scripts) lives on the [`autoresearch`](../../tree/autoresearch) branch. If you want to point an LLM agent at this repo to improve it, check out that branch.
+That's it. Both tools work out of the box with zero config and sensible defaults.
+
+### Full SvelteKit example
+
+For a typical SvelteKit project with TypeScript:
+
+```json
+{
+  "scripts": {
+    "lint": "oxlint --tsconfig tsconfig.json && oxvelte lint src/",
+    "lint:fix": "oxlint --fix --tsconfig tsconfig.json && oxvelte lint --fix src/"
+  },
+  "devDependencies": {
+    "oxlint": "^1.58.0"
+  }
+}
+```
+
+```bash
+# optional: configure oxlint
+# .oxlintrc.json
+{
+  "plugins": ["typescript", "import", "unicorn"],
+  "rules": {
+    "no-console": "warn"
+  }
+}
+
+# optional: configure oxvelte
+# oxvelte.config.json
+{
+  "rules": {
+    "svelte/no-at-html-tags": "error"
+  },
+  "settings": {
+    "svelte": {
+      "kit": {
+        "files": { "routes": "src/routes" }
+      }
+    }
+  }
+}
+```
+
+### Why not a plugin?
+
+oxlint doesn't have a third-party Rust plugin system — all plugins are compiled into the binary. There's a JS plugin API in alpha, but it doesn't fully support `.svelte` files yet and would lose the performance advantage of native Rust.
+
+Running them as separate binaries is actually fine:
+- **No startup penalty** — both are native binaries, not Node.js
+- **No rule conflicts** — oxlint handles JS/TS rules, oxvelte handles `svelte/*` rules
+- **Independent config** — each tool has its own config file, no complex merging
+- **Combined time is still fast** — oxlint + oxvelte together lint a 2,500-file project in under 300ms
+
+### Replacing eslint-plugin-svelte + ESLint
+
+If you're migrating from the ESLint setup (`eslint-plugin-svelte` + `@eslint/js` + `typescript-eslint`), here's how the tools map:
+
+| ESLint stack | Replacement |
+|-------------|-------------|
+| `@eslint/js` (core JS rules) | `oxlint` |
+| `typescript-eslint` | `oxlint --tsconfig` |
+| `eslint-plugin-svelte` | **`oxvelte`** |
+| `eslint-plugin-import` | `oxlint` (built-in `--import-plugin`) |
+
+```bash
+# Before (ESLint, ~3-10 seconds)
+eslint src/
+
+# After (oxlint + oxvelte, ~200-400ms)
+oxlint && oxvelte lint src/
+```
+
+If you have an existing eslint-plugin-svelte config, oxvelte can convert it:
+
+```bash
+oxvelte migrate eslint.config.js --write
+```
+
+### CI integration
+
+Both tools return non-zero exit codes on errors, so they work naturally in CI:
+
+```yaml
+# GitHub Actions
+- run: npx oxlint --tsconfig tsconfig.json
+- run: oxvelte lint src/
+```
+
+For JSON output (useful for custom reporters or IDE integration):
+
+```bash
+oxlint --format json
+oxvelte lint --json src/
+```
 
 ## Install
 
@@ -59,44 +162,17 @@ cargo build --release
 
 The binary will be at `./target/release/oxvelte`.
 
-### Adding to a project
-
-Copy the binary somewhere on your `$PATH` (or reference it directly), then add a script to your `package.json`:
-
-```json
-{
-  "scripts": {
-    "lint:svelte": "oxvelte lint src/"
-  }
-}
-```
-
-Or run it directly:
+## Usage
 
 ```bash
-oxvelte lint src/
-oxvelte lint --json src/
-oxvelte lint --fix src/
-oxvelte lint --all-rules src/
+oxvelte lint src/              # lint with recommended rules
+oxvelte lint --json src/       # JSON output
+oxvelte lint --fix src/        # auto-fix where supported
+oxvelte lint --all-rules src/  # run all 79 rules
+oxvelte rules                  # list available rules
 ```
 
 ## Configuration
-
-### Migrating from ESLint
-
-If you have an existing eslint-plugin-svelte config, oxvelte can convert it automatically:
-
-```bash
-# Print the converted config to stdout
-oxvelte migrate .eslintrc.json
-
-# Or write directly to oxvelte.config.json
-oxvelte migrate eslint.config.js --write
-```
-
-This reads your ESLint config, extracts all `svelte/*` rule settings, and outputs the equivalent `oxvelte.config.json`.
-
-### Config file
 
 Create `oxvelte.config.json` in your project root:
 
@@ -122,12 +198,6 @@ Create `oxvelte.config.json` in your project root:
 **Settings** configure framework-specific behavior. The `svelte.kit.files.routes` setting tells SvelteKit-aware rules where your route files live.
 
 Without a config file, oxvelte runs the **recommended** ruleset (same as eslint-plugin-svelte's `flat/recommended`).
-
-### List available rules
-
-```bash
-oxvelte rules
-```
 
 ## What's implemented
 
