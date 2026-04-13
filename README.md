@@ -1,9 +1,13 @@
+<p align="center">
+  <img src="assets/oxvelte.png" alt="oxvelte logo" width="200">
+</p>
+
 # oxvelte
 
 A Svelte linter written in Rust. Drop-in replacement for [eslint-plugin-svelte](https://github.com/sveltejs/eslint-plugin-svelte) — same rules, same diagnostics, **4-25x faster**.
 
 <p align="center">
-  <img src="assets/perf-chart.svg" alt="oxvelte vs eslint-plugin-svelte performance" width="700">
+  <img src="assets/compare.gif" alt="Side-by-side benchmark linting shadcn-svelte (1,603 files): eslint-plugin-svelte takes ~15s while oxvelte completes the same lint hundreds of times in the same window" width="900">
 </p>
 
 > **This entire codebase was written by an LLM.** A coding agent ([Claude Code](https://docs.anthropic.com/en/docs/claude-code)) ran in an autonomous loop against real-world benchmarks — fixing lint rule parity, eliminating false positives, and optimizing hot paths — until the numbers converged. The human wrote `program.md` (the spec); the machine wrote everything in `src/`.
