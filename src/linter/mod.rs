@@ -100,6 +100,19 @@ impl Linter {
         Self { rules, has_script_rules }
     }
 
+    pub fn with_custom_rules(mut self, rules: Vec<Box<dyn Rule>>) -> Self {
+        self.has_script_rules =
+            self.has_script_rules || rules.iter().any(|r| r.applies_to_scripts());
+        self.rules.extend(rules);
+        self
+    }
+
+    /// Remove rules that are set to "off" in the config.
+    pub fn remove_disabled_rules(&mut self, config: &crate::config::OxvelteConfig) {
+        self.rules.retain(|r| !config.is_rule_off(r.name()));
+        self.has_script_rules = self.rules.iter().any(|r| r.applies_to_scripts());
+    }
+
     pub fn rules(&self) -> &[Box<dyn Rule>] {
         &self.rules
     }

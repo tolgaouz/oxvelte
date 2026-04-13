@@ -26,6 +26,9 @@ enum Command {
         /// Output results as JSON.
         #[arg(long)]
         json: bool,
+        /// Suppress warnings, only show errors.
+        #[arg(long, short)]
+        quiet: bool,
     },
     /// Parse a Svelte file and dump the AST as JSON.
     Parse {
@@ -57,9 +60,9 @@ enum Command {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
-        Command::Lint { paths, all_rules, fix: _, json } => cmd_lint(&paths, all_rules, json),
+        Command::Lint { paths, all_rules, fix: _, json, quiet } => cmd_lint(&paths, all_rules, json, quiet),
         Command::Parse { file, pretty, format } => cmd_parse(&file, pretty, &format),
-        Command::Check { paths } => cmd_lint(&paths, false, false),
+        Command::Check { paths } => cmd_lint(&paths, false, false, false),
         Command::Rules => cmd_rules(),
         Command::Migrate { file, write } => cmd_convert_config(&file, write),
     }
@@ -79,12 +82,34 @@ struct FileResult {
     diagnostics: Vec<FileDiagnostic>,
 }
 
-fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool) -> ExitCode {
+fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool, quiet: bool) -> ExitCode {
     use rayon::prelude::*;
 
-    let lint = if all_rules { linter::Linter::all() } else { linter::Linter::recommended() };
+    // Load config (walks up from the first path, or cwd).
+    let config_dir = paths.first()
+        .and_then(|p| if p.is_dir() { Some(p.clone()) } else { p.parent().map(|p| p.to_path_buf()) })
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let config = oxvelte::config::OxvelteConfig::load(&config_dir);
+
+    #[allow(unused_mut)]
+    let mut lint = if all_rules { linter::Linter::all() } else { linter::Linter::recommended() };
+
+    // Drop rules disabled in config.
+    lint.remove_disabled_rules(&config);
+
+    // Load custom JS rules when the feature is enabled.
+    #[cfg(feature = "custom-rules")]
+    {
+        if !config.custom_rules.is_empty() {
+            let custom = oxvelte::custom_rules::load_custom_rules(&config.custom_rules, &config_dir);
+            lint = lint.with_custom_rules(custom);
+        }
+    }
+
     let files = collect_lint_files(paths);
+    let file_count = files.len();
     let use_color = !json_output && atty::is(atty::Stream::Stderr);
+    let start = std::time::Instant::now();
 
     let mut file_results: Vec<FileResult> = files.par_iter().filter_map(|path| {
         let source = std::fs::read_to_string(path).ok()?;
@@ -125,55 +150,69 @@ fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool) -> ExitCode {
     let total_diags: usize = file_results.iter().map(|f| f.diagnostics.len()).sum();
     let files_with_diags = file_results.len();
 
-    if json_output {
-        let json_results: Vec<serde_json::Value> = file_results.iter().flat_map(|f| {
-            f.diagnostics.iter().map(|d| serde_json::json!({
-                "file": &f.path,
-                "rule": d.rule_name,
-                "message": &d.message,
-                "line": d.line,
-                "column": d.col,
-                "endLine": d.end_line,
-                "endColumn": d.end_col,
-            }))
-        }).collect();
-        println!("{}", serde_json::to_string_pretty(&json_results).unwrap_or_default());
-    } else {
-        for file_result in &file_results {
-            // File header — underlined, clickable in VS Code
-            if use_color {
-                eprintln!("\n\x1b[4m{}\x1b[0m", file_result.path);
-            } else {
-                eprintln!("\n{}", file_result.path);
+    if !quiet {
+        if json_output {
+            let json_results: Vec<serde_json::Value> = file_results.iter().flat_map(|f| {
+                f.diagnostics.iter().map(|d| serde_json::json!({
+                    "file": &f.path,
+                    "rule": d.rule_name,
+                    "message": &d.message,
+                    "line": d.line,
+                    "column": d.col,
+                    "endLine": d.end_line,
+                    "endColumn": d.end_col,
+                }))
+            }).collect();
+            println!("{}", serde_json::to_string_pretty(&json_results).unwrap_or_default());
+        } else {
+            for file_result in &file_results {
+                // File header — underlined, clickable in VS Code
+                if use_color {
+                    eprintln!("\n\x1b[4m{}\x1b[0m", file_result.path);
+                } else {
+                    eprintln!("\n{}", file_result.path);
+                }
+
+                // Find max widths for alignment
+                let max_loc_width = file_result.diagnostics.iter()
+                    .map(|d| format!("{}:{}", d.line, d.col).len())
+                    .max().unwrap_or(0);
+
+                for d in &file_result.diagnostics {
+                    let loc = format!("{}:{}", d.line, d.col);
+                    if use_color {
+                        eprintln!(
+                            "  \x1b[2m{:<width$}\x1b[0m  \x1b[33mwarning\x1b[0m  {}  \x1b[2m{}\x1b[0m",
+                            loc, d.message, d.rule_name, width = max_loc_width
+                        );
+                    } else {
+                        eprintln!(
+                            "  {:<width$}  warning  {}  {}",
+                            loc, d.message, d.rule_name, width = max_loc_width
+                        );
+                    }
+                }
             }
 
-            // Find max widths for alignment
-            let max_loc_width = file_result.diagnostics.iter()
-                .map(|d| format!("{}:{}", d.line, d.col).len())
-                .max().unwrap_or(0);
-
-            for d in &file_result.diagnostics {
-                let loc = format!("{}:{}", d.line, d.col);
+            if total_diags > 0 {
                 if use_color {
-                    eprintln!(
-                        "  \x1b[2m{:<width$}\x1b[0m  \x1b[33mwarning\x1b[0m  {}  \x1b[2m{}\x1b[0m",
-                        loc, d.message, d.rule_name, width = max_loc_width
-                    );
+                    eprintln!("\n\x1b[1;31m\u{2716} {} problem(s) in {} file(s).\x1b[0m", total_diags, files_with_diags);
                 } else {
-                    eprintln!(
-                        "  {:<width$}  warning  {}  {}",
-                        loc, d.message, d.rule_name, width = max_loc_width
-                    );
+                    eprintln!("\n{} problem(s) in {} file(s).", total_diags, files_with_diags);
                 }
             }
         }
-
-        if total_diags > 0 {
-            if use_color {
-                eprintln!("\n\x1b[1;31m\u{2716} {} problem(s) in {} file(s).\x1b[0m", total_diags, files_with_diags);
+    }
+    if quiet {
+        let elapsed = start.elapsed();
+        if use_color {
+            if total_diags > 0 {
+                eprintln!("\x1b[1m{}\x1b[0m file(s) scanned in \x1b[1m{:.0?}\x1b[0m, \x1b[1;31m{} problem(s)\x1b[0m found.", file_count, elapsed, total_diags);
             } else {
-                eprintln!("\n{} problem(s) in {} file(s).", total_diags, files_with_diags);
+                eprintln!("\x1b[1m{}\x1b[0m file(s) scanned in \x1b[1m{:.0?}\x1b[0m, \x1b[1;32m0 problems\x1b[0m found.", file_count, elapsed);
             }
+        } else {
+            eprintln!("{} file(s) scanned in {:.0?}, {} problem(s) found.", file_count, elapsed, total_diags);
         }
     }
     if total_diags > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS }

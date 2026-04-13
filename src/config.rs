@@ -34,6 +34,8 @@ pub struct OxvelteConfig {
     pub rules: HashMap<String, RuleEntry>,
     /// Global settings (e.g. svelte.kit.files.routes)
     pub settings: Option<Value>,
+    /// Glob patterns for custom JS rule files (e.g. `["./rules/*.js"]`)
+    pub custom_rules: Vec<String>,
 }
 
 /// A single rule's configuration.
@@ -89,6 +91,14 @@ impl OxvelteConfig {
 
         // Parse settings
         config.settings = value.get("settings").cloned();
+
+        // Parse customRules
+        if let Some(arr) = value.get("customRules").and_then(|v| v.as_array()) {
+            config.custom_rules = arr
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect();
+        }
 
         Ok(config)
     }
