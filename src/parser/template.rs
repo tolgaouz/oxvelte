@@ -91,16 +91,17 @@ impl<'a> TemplateParser<'a> {
             } else if self.looking_at("{@render") {
                 nodes.push(self.parse_render_tag()?);
             } else if self.looking_at("{") {
+                let recovery_start = self.pos;
                 match self.parse_mustache() {
                     Ok(node) => nodes.push(node),
                     Err(_) => {
-                        // Error recovery for malformed mustache
-                        let start = self.pos as u32;
-                        self.pos += 1; // skip {
+                        // Error recovery for malformed mustache: restore pos and
+                        // emit a single "{" text node so we make forward progress.
+                        self.pos = recovery_start + 1;
                         let data = "{".to_string();
                         nodes.push(TemplateNode::Text(Text {
                             data,
-                            span: Span::new(start, self.pos as u32),
+                            span: Span::new(recovery_start as u32, self.pos as u32),
                         }));
                     }
                 }
