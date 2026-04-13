@@ -3,6 +3,9 @@ pub mod parser;
 pub mod linter;
 pub mod config;
 
+#[cfg(feature = "custom-rules")]
+pub mod custom_rules;
+
 
 #[cfg(test)]
 mod linter_fixture_tests {
