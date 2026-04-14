@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# bench — dispatcher for the oxvelte-vs-eslint demo.
+#
+# `bench eslint`  runs eslint once, writes its wall time to .race-time
+# `bench oxvelte` loops oxvelte for exactly that same duration
+#
+# Both commands use identical character counts so VHS typing time matches,
+# making the stitched GIF end on the same frame.
+
+set -e
+DEMO_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(dirname "$DEMO_DIR")"
+export RACE_TIME_FILE="$DEMO_DIR/.race-time"
+
+case "$1" in
+  eslint)
+    exec "$DEMO_DIR/timer.sh" npx eslint . \
+      --no-config-lookup \
+      --config eslint.config.js \
+      --quiet
+    ;;
+  oxvelte)
+    # Read eslint's wall time from the sync file.
+    if [ -f "$RACE_TIME_FILE" ]; then
+      DUR=$(cat "$RACE_TIME_FILE")
+    else
+      DUR=16
+    fi
+    exec "$DEMO_DIR/loop-oxvelte.sh" "$DUR"
+    ;;
+  *)
+    echo "Usage: bench eslint|oxvelte" >&2
+    exit 1
+    ;;
+esac
