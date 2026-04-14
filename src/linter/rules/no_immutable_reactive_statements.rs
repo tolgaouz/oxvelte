@@ -183,7 +183,7 @@ impl Rule for NoImmutableReactiveStatements {
                 .copied())
             .collect();
 
-        let ast_immutable_stmts = check_immutability_ast(content, is_ts, &all_immutable);
+        let ast_immutable_stmts = check_immutability_ast(ctx.instance_semantic, &all_immutable);
 
         let mut reactive_decl_names: HashSet<&str> = HashSet::new();
         for (_, full_text) in &reactive_stmts {
@@ -712,23 +712,16 @@ fn extract_identifiers(expr: &str) -> Vec<String> {
     ids
 }
 
-fn check_immutability_ast(content: &str, is_ts: bool, text_immutable: &HashSet<&str>) -> HashSet<u32> {
+fn check_immutability_ast(
+    semantic: Option<&oxc::semantic::Semantic<'_>>,
+    text_immutable: &HashSet<&str>,
+) -> HashSet<u32> {
     if text_immutable.is_empty() { return HashSet::new(); }
-    use oxc::allocator::Allocator;
+    let Some(semantic) = semantic else { return HashSet::new() };
     use oxc::ast::AstKind;
-    use oxc::parser::Parser;
-    use oxc::semantic::SemanticBuilder;
-    use oxc::span::{GetSpan, SourceType};
+    use oxc::span::GetSpan;
 
     let mut result = HashSet::new();
-
-    let alloc = Allocator::default();
-    let source_type = if is_ts { SourceType::ts() } else { SourceType::mjs() };
-    let parse_result = Parser::new(&alloc, content, source_type).parse();
-    if parse_result.panicked { return result; }
-
-    let semantic_ret = SemanticBuilder::new().build(&parse_result.program);
-    let semantic = semantic_ret.semantic;
     let scoping = semantic.scoping();
     let nodes = semantic.nodes();
     let root_scope = scoping.root_scope_id();
