@@ -1,7 +1,10 @@
 //! `svelte/no-navigation-without-base` — require navigation functions to use base path.
 
-use crate::linter::{parse_imports, walk_template_nodes, LintContext, Rule};
-use crate::ast::{TemplateNode, Attribute};
+use crate::linter::{walk_template_nodes, LintContext, Rule};
+use crate::ast::{Attribute, TemplateNode};
+use oxc::ast::ast::{Expression, ImportDeclarationSpecifier, ModuleExportName, Statement};
+use oxc::ast::AstKind;
+use oxc::span::{GetSpan, Span};
 
 const NAV_FUNCTIONS: &[&str] = &["goto", "pushState", "replaceState"];
 
@@ -37,82 +40,88 @@ impl Rule for NoNavigationWithoutBase {
         let ignore_replace_state = get_bool("ignoreReplaceState");
         let ignore_links = get_bool("ignoreLinks");
 
-        let imports = ctx.ast.instance.as_ref().map(|s| parse_imports(&s.content)).unwrap_or_default();
-
-        let base_local: Option<String> = imports.iter()
-            .find(|(_, imported, module)| {
-                (imported == "base" || imported == "*") && module == "$app/paths"
-            })
-            .map(|(local, imported, _)| {
-                if imported == "*" { format!("{}.base", local) } else { local.clone() }
-            });
-
-        if let Some(script) = &ctx.ast.instance {
-            let content = &script.content;
-            let mut nav_local_names: Vec<(String, &str)> = Vec::new();
-            for (local, imported, module) in &imports {
-                if module == "$app/navigation" {
-                    if imported == "*" {
-                        for nav_fn in NAV_FUNCTIONS {
-                            if is_nav_ignored(nav_fn, ignore_goto, ignore_push_state, ignore_replace_state) { continue; }
-                            nav_local_names.push((format!("{}.{}", local, nav_fn), nav_fn));
-                        }
-                    } else if NAV_FUNCTIONS.contains(&imported.as_str()) {
-                        if !is_nav_ignored(&imported, ignore_goto, ignore_push_state, ignore_replace_state) {
-                            nav_local_names.push((local.clone(), imported.as_str()));
-                        }
-                    }
-                }
-            }
-
-            if !nav_local_names.is_empty() {
-                let script_base = script.span.start as usize;
-                let source = ctx.source;
-                let tag_text = &source[script_base..script.span.end as usize];
-                let gt = tag_text.find('>').unwrap_or(0);
-
-                for (local_name, orig_name) in &nav_local_names {
-                    let search_pattern = format!("{}(", local_name);
-                    let mut search_from = 0;
-                    while let Some(pos) = content[search_from..].find(&search_pattern) {
-                        let abs = search_from + pos;
-                        if abs > 0 && matches!(content.as_bytes()[abs - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_') {
-                            search_from = abs + search_pattern.len(); continue;
-                        }
-                        let rest = &content[abs + search_pattern.len()..];
-                        let trimmed = rest.trim_start();
-
-                        if matches!(trimmed.as_bytes().first(), Some(b'\'' | b'"' | b'`')) {
-                            let quote = trimmed.as_bytes()[0];
-                            let is_absolute_uri = trimmed[1..].find(quote as char)
-                                .map_or(false, |end| is_exempt_href(&trimmed[1..end+1]));
-
-                            if !is_absolute_uri {
-                                let call_text = &content[abs..];
-                                let call_end = call_text.find(')').unwrap_or(call_text.len());
-                                let call_body = &call_text[..call_end];
-                                let uses_base = if let Some(ref bname) = base_local {
-                                    call_body.contains(&format!("`${{{}}}", bname)) ||
-                                    call_body.contains(&format!("{} +", bname)) ||
-                                    call_body.contains(&format!("{}+", bname))
-                                } else { false };
-
-                                if !uses_base {
-                                    let sp = script_base + gt + 1 + abs;
-                                    ctx.diagnostic(format!("Found a {}() call with a url that isn't prefixed with the base path.", orig_name),
-                                        oxc::span::Span::new(sp as u32, (sp + search_pattern.len()) as u32));
+        // Resolve local names for base + nav functions from the instance script.
+        let mut base_name: Option<String> = None;
+        let mut nav_locals: Vec<(String, &'static str)> = Vec::new(); // (local-call-text, original-name)
+        if let Some(semantic) = ctx.instance_semantic {
+            let program = semantic.nodes().program();
+            for stmt in &program.body {
+                let Statement::ImportDeclaration(imp) = stmt else { continue };
+                let src = imp.source.value.as_str();
+                let Some(specifiers) = &imp.specifiers else { continue };
+                for spec in specifiers {
+                    match spec {
+                        ImportDeclarationSpecifier::ImportSpecifier(s) => {
+                            let imported_name = match &s.imported {
+                                ModuleExportName::IdentifierName(n) => n.name.as_str(),
+                                ModuleExportName::IdentifierReference(n) => n.name.as_str(),
+                                ModuleExportName::StringLiteral(l) => l.value.as_str(),
+                            };
+                            if src == "$app/paths" && imported_name == "base" {
+                                base_name = Some(s.local.name.to_string());
+                            }
+                            if src == "$app/navigation" {
+                                if let Some(nav) = NAV_FUNCTIONS.iter().find(|f| **f == imported_name) {
+                                    if !is_nav_ignored(nav, ignore_goto, ignore_push_state, ignore_replace_state) {
+                                        nav_locals.push((s.local.name.to_string(), nav));
+                                    }
                                 }
                             }
                         }
-
-                        search_from = abs + search_pattern.len();
+                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => {
+                            if src == "$app/paths" {
+                                base_name = Some(format!("{}.base", s.local.name));
+                            }
+                            if src == "$app/navigation" {
+                                for nav in NAV_FUNCTIONS {
+                                    if is_nav_ignored(nav, ignore_goto, ignore_push_state, ignore_replace_state) {
+                                        continue;
+                                    }
+                                    nav_locals.push((format!("{}.{}", s.local.name, nav), nav));
+                                }
+                            }
+                        }
+                        _ => {}
                     }
+                }
+            }
+        }
+
+        // Walk call expressions in the instance script.
+        if let Some(semantic) = ctx.instance_semantic {
+            if !nav_locals.is_empty() {
+                let content_offset = ctx.instance_content_offset;
+                for node in semantic.nodes().iter() {
+                    let AstKind::CallExpression(ce) = node.kind() else { continue };
+                    let Some(callee_text) = callee_static_name(&ce.callee) else { continue };
+                    let Some((_, orig_name)) = nav_locals.iter().find(|(l, _)| l == &callee_text) else { continue };
+
+                    let Some(first_arg) = ce.arguments.first().and_then(|a| a.as_expression()) else { continue };
+                    if let Some(bn) = &base_name {
+                        if arg_uses_base(first_arg, bn) {
+                            continue;
+                        }
+                    }
+                    let Some(leading) = leading_string_prefix(first_arg) else { continue };
+                    if is_exempt_href(&leading) {
+                        continue;
+                    }
+                    let callee_span = ce.callee.span();
+                    let s = content_offset + callee_span.start;
+                    let e = content_offset + callee_span.end + 1; // include `(`
+                    ctx.diagnostic(
+                        format!("Found a {}() call with a url that isn't prefixed with the base path.", orig_name),
+                        Span::new(s, e),
+                    );
                 }
             }
         }
 
         if ignore_links { return; }
 
+        // Anchor href checks — template-based (still uses the template AST + raw
+        // string extraction for attribute values because template expressions
+        // aren't in the semantic model).
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
                 if el.name != "a" { return; }
@@ -132,7 +141,7 @@ impl Rule for NoNavigationWithoutBase {
                             else if val.starts_with('{') && val.ends_with('}') {
                                 let expr = val[1..val.len()-1].trim();
 
-                                let uses_base = if let Some(ref bname) = base_local {
+                                let uses_base = if let Some(ref bname) = base_name {
                                     expr.starts_with(&format!("{} +", bname))
                                     || expr.starts_with(&format!("{}+", bname))
                                     || expr.starts_with(&format!("${{{}}}",  bname))
@@ -156,5 +165,66 @@ impl Rule for NoNavigationWithoutBase {
                 }
             }
         });
+    }
+}
+
+fn callee_static_name(callee: &Expression<'_>) -> Option<String> {
+    match callee {
+        Expression::Identifier(id) => Some(id.name.to_string()),
+        Expression::StaticMemberExpression(mem) => {
+            if let Expression::Identifier(id) = &mem.object {
+                Some(format!("{}.{}", id.name, mem.property.name))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn arg_uses_base(expr: &Expression<'_>, base_name: &str) -> bool {
+    match expr {
+        Expression::TemplateLiteral(t) => {
+            if let (Some(first_quasi), Some(first_expr)) = (t.quasis.first(), t.expressions.first()) {
+                let first_text = first_quasi.value.cooked.as_deref().unwrap_or(first_quasi.value.raw.as_str());
+                if first_text.is_empty() && is_base_ref(first_expr, base_name) {
+                    return true;
+                }
+            }
+            false
+        }
+        Expression::BinaryExpression(b) if b.operator == oxc::syntax::operator::BinaryOperator::Addition => {
+            arg_uses_base(&b.left, base_name) || is_base_ref(&b.left, base_name)
+        }
+        _ => is_base_ref(expr, base_name),
+    }
+}
+
+fn is_base_ref(expr: &Expression<'_>, base_name: &str) -> bool {
+    match expr {
+        Expression::Identifier(id) => id.name == base_name,
+        Expression::StaticMemberExpression(mem) => {
+            if let Expression::Identifier(id) = &mem.object {
+                let composed = format!("{}.{}", id.name, mem.property.name);
+                composed == base_name
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
+fn leading_string_prefix(expr: &Expression<'_>) -> Option<String> {
+    match expr {
+        Expression::StringLiteral(l) => Some(l.value.to_string()),
+        Expression::TemplateLiteral(t) => t
+            .quasis
+            .first()
+            .map(|q| q.value.cooked.as_deref().unwrap_or(q.value.raw.as_str()).to_string()),
+        Expression::BinaryExpression(b) if b.operator == oxc::syntax::operator::BinaryOperator::Addition => {
+            leading_string_prefix(&b.left)
+        }
+        _ => None,
     }
 }
