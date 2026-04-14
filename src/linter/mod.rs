@@ -39,17 +39,50 @@ pub struct LintContext<'a> {
     pub file_path: Option<String>,
     /// True when linting a `.svelte.js` or `.svelte.ts` module (not a `.svelte` component).
     pub is_svelte_module: bool,
+    /// Pre-parsed JS/TS semantic model for the instance `<script>` block.
+    /// `None` if there is no instance script or it failed to parse.
+    pub instance_semantic: Option<&'a oxc::semantic::Semantic<'a>>,
+    /// Pre-parsed JS/TS semantic model for the module (`<script module>`) block.
+    pub module_semantic: Option<&'a oxc::semantic::Semantic<'a>>,
+    /// Byte offset in `source` where the instance script's content starts
+    /// (i.e. just after the `<script ...>` open tag's `>`). 0 if no instance.
+    pub instance_content_offset: u32,
+    /// Byte offset in `source` where the module script's content starts.
+    pub module_content_offset: u32,
     diagnostics: Vec<LintDiagnostic>,
     current_rule: &'static str,
 }
 
 impl<'a> LintContext<'a> {
     pub fn new(ast: &'a SvelteAst, source: &'a str) -> Self {
-        Self { ast, source, config: RuleConfig::default(), file_path: None, is_svelte_module: false, diagnostics: Vec::new(), current_rule: "" }
+        Self {
+            ast, source, config: RuleConfig::default(), file_path: None, is_svelte_module: false,
+            instance_semantic: None, module_semantic: None,
+            instance_content_offset: 0, module_content_offset: 0,
+            diagnostics: Vec::new(), current_rule: "",
+        }
     }
 
     pub fn with_config(ast: &'a SvelteAst, source: &'a str, config: RuleConfig) -> Self {
-        Self { ast, source, config, file_path: None, is_svelte_module: false, diagnostics: Vec::new(), current_rule: "" }
+        Self {
+            ast, source, config, file_path: None, is_svelte_module: false,
+            instance_semantic: None, module_semantic: None,
+            instance_content_offset: 0, module_content_offset: 0,
+            diagnostics: Vec::new(), current_rule: "",
+        }
+    }
+
+    /// Semantic model for the "primary" script in the current lint mode.
+    /// For a normal component lint, returns the instance script's semantic.
+    /// For a `.svelte.js/.ts` module lint (`is_svelte_module`), returns the instance
+    /// script's semantic (we stash the file's content in `instance` for module lints).
+    pub fn primary_semantic(&self) -> Option<&'a oxc::semantic::Semantic<'a>> {
+        self.instance_semantic
+    }
+
+    /// Content offset paired with `primary_semantic`.
+    pub fn primary_content_offset(&self) -> u32 {
+        self.instance_content_offset
     }
 
     #[inline]
@@ -118,12 +151,7 @@ impl Linter {
     }
 
     pub fn lint(&self, ast: &SvelteAst, source: &str) -> Vec<LintDiagnostic> {
-        let mut ctx = LintContext::new(ast, source);
-        for rule in &self.rules {
-            ctx.set_rule(rule.name());
-            rule.run(&mut ctx);
-        }
-        filter_suppressed(ctx.into_diagnostics(), source)
+        self.lint_impl(ast, source, RuleConfig::default(), None, ScriptMode::Full, /*is_svelte_module*/ false)
     }
 
     /// Lint a plain JS/TS file. Only runs rules marked with `applies_to_scripts`.
@@ -142,13 +170,7 @@ impl Linter {
             module: None,
             css: None,
         };
-        let mut ctx = LintContext::new(&ast, source);
-        for rule in &self.rules {
-            if !rule.applies_to_scripts() { continue; }
-            ctx.set_rule(rule.name());
-            rule.run(&mut ctx);
-        }
-        filter_suppressed(ctx.into_diagnostics(), source)
+        self.lint_impl(&ast, source, RuleConfig::default(), None, ScriptMode::ScriptOnly, /*is_svelte_module*/ false)
     }
 
     /// Lint a `.svelte.js` or `.svelte.ts` module. Runs rules marked with
@@ -165,34 +187,98 @@ impl Linter {
             module: None,
             css: None,
         };
-        let mut ctx = LintContext::new(&ast, source);
-        ctx.is_svelte_module = true;
-        for rule in &self.rules {
-            if !rule.applies_to_scripts() && !rule.applies_to_svelte_scripts() { continue; }
-            ctx.set_rule(rule.name());
-            rule.run(&mut ctx);
-        }
-        filter_suppressed(ctx.into_diagnostics(), source)
+        self.lint_impl(&ast, source, RuleConfig::default(), None, ScriptMode::SvelteModule, /*is_svelte_module*/ true)
     }
 
     pub fn lint_with_config(&self, ast: &SvelteAst, source: &str, config: RuleConfig) -> Vec<LintDiagnostic> {
-        let mut ctx = LintContext::with_config(ast, source, config);
-        for rule in &self.rules {
-            ctx.set_rule(rule.name());
-            rule.run(&mut ctx);
-        }
-        filter_suppressed(ctx.into_diagnostics(), source)
+        self.lint_impl(ast, source, config, None, ScriptMode::Full, false)
     }
 
     pub fn lint_with_config_and_path(&self, ast: &SvelteAst, source: &str, config: RuleConfig, file_path: &str) -> Vec<LintDiagnostic> {
+        self.lint_impl(ast, source, config, Some(file_path.to_string()), ScriptMode::Full, false)
+    }
+
+    /// Central lint driver. Creates an allocator, parses script blocks into oxc ASTs
+    /// (with semantic), populates `LintContext`, runs each applicable rule, and filters
+    /// suppressed diagnostics.
+    fn lint_impl(
+        &self,
+        ast: &SvelteAst,
+        source: &str,
+        config: RuleConfig,
+        file_path: Option<String>,
+        script_mode: ScriptMode,
+        is_svelte_module: bool,
+    ) -> Vec<LintDiagnostic> {
+        use oxc::allocator::Allocator;
+        use oxc::parser::Parser;
+        use oxc::semantic::SemanticBuilder;
+        use oxc::span::SourceType;
+
+        let alloc = Allocator::default();
+
+        // Compute content offsets first (don't depend on parse success).
+        let instance_offset = ast.instance.as_ref().map(|s| {
+            if is_svelte_module { s.span.start } else { script_content_offset(s, source) }
+        }).unwrap_or(0);
+        let module_offset = ast.module.as_ref().map(|s| script_content_offset(s, source)).unwrap_or(0);
+
+        // Parse each script. On parse error we just leave semantic as None — rules that
+        // need a semantic model early-return, matching existing behavior.
+        let instance_parse = ast.instance.as_ref().and_then(|s| {
+            if s.content.trim().is_empty() { return None; }
+            let st = if matches!(s.lang.as_deref(), Some("ts" | "typescript")) { SourceType::ts() } else { SourceType::mjs() };
+            let r = Parser::new(&alloc, &s.content, st).parse();
+            if !r.errors.is_empty() { None } else { Some(r) }
+        });
+        let module_parse = ast.module.as_ref().and_then(|s| {
+            if s.content.trim().is_empty() { return None; }
+            let st = if matches!(s.lang.as_deref(), Some("ts" | "typescript")) { SourceType::ts() } else { SourceType::mjs() };
+            let r = Parser::new(&alloc, &s.content, st).parse();
+            if !r.errors.is_empty() { None } else { Some(r) }
+        });
+        let instance_semantic = instance_parse.as_ref().map(|p| SemanticBuilder::new().build(&p.program).semantic);
+        let module_semantic = module_parse.as_ref().map(|p| SemanticBuilder::new().build(&p.program).semantic);
+
         let mut ctx = LintContext::with_config(ast, source, config);
-        ctx.file_path = Some(file_path.to_string());
+        ctx.file_path = file_path;
+        ctx.is_svelte_module = is_svelte_module;
+        ctx.instance_semantic = instance_semantic.as_ref();
+        ctx.module_semantic = module_semantic.as_ref();
+        ctx.instance_content_offset = instance_offset;
+        ctx.module_content_offset = module_offset;
+
         for rule in &self.rules {
+            let include = match script_mode {
+                ScriptMode::Full => true,
+                ScriptMode::ScriptOnly => rule.applies_to_scripts(),
+                ScriptMode::SvelteModule => rule.applies_to_scripts() || rule.applies_to_svelte_scripts(),
+            };
+            if !include { continue; }
             ctx.set_rule(rule.name());
             rule.run(&mut ctx);
         }
         filter_suppressed(ctx.into_diagnostics(), source)
     }
+}
+
+/// Which subset of rules to run, based on the kind of file being linted.
+#[derive(Clone, Copy)]
+enum ScriptMode {
+    /// Normal `.svelte` component — run every rule.
+    Full,
+    /// Plain `.js`/`.ts` — run only `applies_to_scripts` rules.
+    ScriptOnly,
+    /// `.svelte.js`/`.svelte.ts` module — run `applies_to_scripts` or `applies_to_svelte_scripts`.
+    SvelteModule,
+}
+
+/// Byte offset in the original source where a `<script ...>` block's content starts
+/// (i.e. just after the open tag's `>`).
+fn script_content_offset(script: &Script, source: &str) -> u32 {
+    let tag_text = &source[script.span.start as usize..script.span.end as usize];
+    let gt = tag_text.find('>').unwrap_or(0);
+    script.span.start + gt as u32 + 1
 }
 
 // ---------------------------------------------------------------------------
