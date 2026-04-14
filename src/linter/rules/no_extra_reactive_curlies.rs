@@ -4,6 +4,8 @@
 //! Detects `$: { single_statement; }` patterns where the braces are unnecessary.
 
 use crate::linter::{LintContext, Rule};
+use oxc::ast::ast::Statement;
+use oxc::span::Span;
 
 pub struct NoExtraReactiveCurlies;
 
@@ -13,31 +15,26 @@ impl Rule for NoExtraReactiveCurlies {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let Some(script) = &ctx.ast.instance else { return };
-        let content = &script.content;
-        let base = script.span.start as usize;
-        let gt = ctx.source[base..script.span.end as usize].find('>').unwrap_or(0);
+        let Some(semantic) = ctx.instance_semantic else { return };
+        let content_offset = ctx.instance_content_offset;
 
-        let mut from = 0;
-        while let Some(pos) = content[from..].find("$:") {
-            let abs = from + pos;
-            let after = content[abs + 2..].trim_start();
-            if after.starts_with('{') {
-                let mut depth = 0i32;
-                let close = after.char_indices().find_map(|(i, ch)| {
-                    match ch { '{' => depth += 1, '}' => { depth -= 1; if depth == 0 { return Some(i); } } _ => {} }
-                    None
-                });
-                if let Some(close) = close {
-                    if after[1..close].trim().matches(';').count() <= 1 {
-                        let ws = content[abs + 2..].len() - after.len();
-                        let sp = base + gt + 1 + abs + 2 + ws;
-                        ctx.diagnostic("Do not wrap reactive statements in curly braces unless necessary.",
-                            oxc::span::Span::new(sp as u32, (sp + 1) as u32));
-                    }
-                }
+        for stmt in &semantic.nodes().program().body {
+            let Statement::LabeledStatement(ls) = stmt else { continue };
+            if ls.label.name != "$" {
+                continue;
             }
-            from = abs + 2;
+            let Statement::BlockStatement(b) = &ls.body else { continue };
+            // Flag only when the block contains a single statement — the braces
+            // are unnecessary wrapper in that case.
+            if b.body.len() != 1 {
+                continue;
+            }
+            let s = content_offset + b.span.start;
+            let e = content_offset + b.span.start + 1; // just the `{`
+            ctx.diagnostic(
+                "Do not wrap reactive statements in curly braces unless necessary.",
+                Span::new(s, e),
+            );
         }
     }
 }
