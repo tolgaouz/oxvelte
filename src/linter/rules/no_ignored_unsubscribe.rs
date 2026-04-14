@@ -1,6 +1,9 @@
 //! `svelte/no-ignored-unsubscribe` — disallow ignoring store subscribe return value.
 
 use crate::linter::{LintContext, Rule};
+use oxc::ast::ast::Expression;
+use oxc::ast::AstKind;
+use oxc::span::Span;
 
 pub struct NoIgnoredUnsubscribe;
 
@@ -10,21 +13,30 @@ impl Rule for NoIgnoredUnsubscribe {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let Some(script) = &ctx.ast.instance else { return };
-        let content = &script.content;
-        let base = script.span.start as usize;
-        let gt = ctx.source[base..script.span.end as usize].find('>').unwrap_or(0);
+        let Some(semantic) = ctx.instance_semantic else { return };
+        let content_offset = ctx.instance_content_offset;
+        let nodes = semantic.nodes();
 
-        for (i, _) in content.match_indices(".subscribe(") {
-            let bt = content[..i].trim_end();
-            let vs = bt.rfind(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '.').map(|p| p + 1).unwrap_or(0);
-            let sb = bt[..vs].trim_end();
-            let standalone = sb.is_empty() || sb.ends_with(';') || sb.ends_with('{') || sb.ends_with('}') || sb.ends_with('\n');
-            let assigned = sb.ends_with('=') || sb.ends_with("const") || sb.ends_with("let") || sb.ends_with("var");
-            if standalone && !assigned {
-                ctx.diagnostic("Store subscribe() return value (unsubscribe function) is being ignored.",
-                    oxc::span::Span::new((base + gt + 1 + vs) as u32, (base + gt + 1 + i + 11) as u32));
+        for node in nodes.iter() {
+            let AstKind::CallExpression(ce) = node.kind() else { continue };
+            let Expression::StaticMemberExpression(mem) = &ce.callee else { continue };
+            if mem.property.name != "subscribe" {
+                continue;
             }
+            // Report only when the call's value is ignored — i.e. its parent is
+            // an `ExpressionStatement` directly. Assignments, declarations,
+            // returns, or being passed as arguments all keep the unsubscribe
+            // function reachable.
+            let parent_kind = nodes.parent_kind(node.id());
+            if !matches!(parent_kind, AstKind::ExpressionStatement(_)) {
+                continue;
+            }
+            let s = content_offset + ce.span.start;
+            let e = content_offset + ce.span.end;
+            ctx.diagnostic(
+                "Store subscribe() return value (unsubscribe function) is being ignored.",
+                Span::new(s, e),
+            );
         }
     }
 }

@@ -2,6 +2,8 @@
 //! ⭐ Recommended
 
 use crate::linter::{LintContext, Rule};
+use oxc::ast::ast::{Argument, Expression};
+use oxc::ast::AstKind;
 use oxc::span::Span;
 
 pub struct NoStoreAsync;
@@ -15,32 +17,44 @@ impl Rule for NoStoreAsync {
         true
     }
 
-    fn applies_to_scripts(&self) -> bool { true }
+    fn applies_to_scripts(&self) -> bool {
+        true
+    }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let Some(script) = &ctx.ast.instance else { return };
-        let content = &script.content;
-        let base = script.span.start as usize;
+        let Some(semantic) = ctx.instance_semantic else { return };
+        let content_offset = ctx.instance_content_offset;
 
-        for factory in &["readable(", "writable(", "derived("] {
-            for (offset, _) in content.match_indices(factory) {
-                if offset > 0 && { let p = content.as_bytes()[offset - 1]; p.is_ascii_alphanumeric() || p == b'_' } { continue; }
-                let rest = &content[offset + factory.len()..];
-                let (mut depth, mut found, mut cb_start) = (0i32, false, 0);
-                for (i, ch) in rest.char_indices() {
-                    match ch {
-                        '(' | '[' | '{' => depth += 1,
-                        ')' | ']' | '}' => { depth -= 1; if depth < 0 { break; } }
-                        ',' if depth == 0 && !found => { found = true; cb_start = i + 1; }
-                        _ => {}
+        for node in semantic.nodes().iter() {
+            let AstKind::CallExpression(ce) = node.kind() else { continue };
+            let Expression::Identifier(callee) = &ce.callee else { continue };
+            let factory_name = callee.name.as_str();
+            if !matches!(factory_name, "readable" | "writable" | "derived") {
+                continue;
+            }
+            // Check the 2nd argument (callback). For readable/writable: (value, setter_fn).
+            // For derived: (stores, fn, initial?).
+            let Some(Argument::ArrowFunctionExpression(arr)) = ce.arguments.get(1).map(|a| &*a) else {
+                // Also check function expressions
+                if let Some(Argument::FunctionExpression(f)) = ce.arguments.get(1).map(|a| &*a) {
+                    if f.r#async {
+                        let s = content_offset + callee.span.start;
+                        let e = content_offset + callee.span.end + 1; // include "("
+                        ctx.diagnostic(
+                            "Do not pass async functions to svelte stores.",
+                            Span::new(s, e),
+                        );
                     }
                 }
-                if !found { continue; }
-                let cb = rest[cb_start..].trim_start();
-                if cb.starts_with("async ") || cb.starts_with("async(") {
-                    let start = (base + offset) as u32;
-                    ctx.diagnostic("Do not pass async functions to svelte stores.", Span::new(start, start + factory.len() as u32));
-                }
+                continue;
+            };
+            if arr.r#async {
+                let s = content_offset + callee.span.start;
+                let e = content_offset + callee.span.end + 1; // include "("
+                ctx.diagnostic(
+                    "Do not pass async functions to svelte stores.",
+                    Span::new(s, e),
+                );
             }
         }
     }
