@@ -2,76 +2,15 @@
 //! ⭐ Recommended
 
 use crate::linter::{walk_template_nodes, LintContext, Rule};
-use crate::ast::{TemplateNode, Attribute, DirectiveKind};
-use oxc::span::Span;
-use std::collections::HashMap;
+use crate::ast::{Attribute, DirectiveKind, TemplateNode};
+use oxc::allocator::Allocator;
+use oxc::ast::ast::{Expression, VariableDeclarationKind};
+use oxc::ast::AstKind;
+use oxc::parser::Parser;
+use oxc::semantic::Semantic;
+use oxc::span::{Ident, SourceType, Span};
 
 pub struct NoNotFunctionHandler;
-
-fn is_non_function_literal(expr: &str) -> bool {
-    let s = expr.trim();
-    matches!(s, "true" | "false" | "undefined")
-        || s.parse::<f64>().is_ok()
-        || (s.ends_with('n') && s[..s.len()-1].parse::<i64>().is_ok())
-        || matches!(s.as_bytes(), [b'"', .., b'"'] | [b'\'', .., b'\''] | [b'`', .., b'`']
-            | [b'[', .., b']'] | [b'{', .., b'}'])
-        || s.starts_with("class ") || s.starts_with("new ")
-        || (s.starts_with('/') && s.len() > 1 && s[1..].rfind('/').map_or(false, |e| s[e+2..].chars().all(|c| "gimsuy".contains(c))))
-}
-
-fn non_function_phrase(expr: &str) -> &'static str {
-    let s = expr.trim();
-    match s.as_bytes().first() {
-        Some(b'[') => "array", Some(b'{') => "object",
-        Some(b'"' | b'\'' | b'`') => "string value", Some(b'/') => "regex value",
-        _ if s == "true" || s == "false" => "boolean value",
-        _ if s.starts_with("new ") => "new expression",
-        _ if s.starts_with("class ") => "class",
-        _ if s.ends_with('n') && s[..s.len()-1].parse::<i64>().is_ok() => "bigint value",
-        _ if s.parse::<f64>().is_ok() => "number value",
-        _ => "non-function value",
-    }
-}
-
-fn find_non_function_vars(content: &str) -> HashMap<String, &'static str> {
-    let mut vars = HashMap::new();
-    for line in content.lines() {
-        let t = line.trim();
-        for kw in &["const ", "let ", "var "] {
-            if let Some(rest) = t.strip_prefix(kw) {
-                let ne = rest.find(|c: char| c == '=' || c == ' ' || c == ':').unwrap_or(rest.len());
-                let name = rest[..ne].trim();
-                if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') { continue; }
-                if let Some(eq) = rest.find('=') {
-                    let init = rest[eq + 1..].trim().strip_suffix(';').unwrap_or(rest[eq + 1..].trim()).trim();
-                    if !init.is_empty() && is_non_function_literal(init) { vars.insert(name.to_string(), non_function_phrase(init)); }
-                }
-            }
-        }
-    }
-    vars
-}
-
-fn check_handler_value(ctx: &mut LintContext, non_fn_vars: &HashMap<String, &'static str>, span: Span) {
-    let region = &ctx.source[span.start as usize..span.end as usize];
-    let Some(eq_pos) = region.find('=') else { return };
-    let value = region[eq_pos + 1..].trim();
-    if !value.starts_with('{') || !value.ends_with('}') { return; }
-    let expr = value[1..value.len()-1].trim();
-    let bo = span.start as usize + region.find('{').unwrap_or(eq_pos + 1);
-    let es = &ctx.source[bo + 1..span.end as usize];
-    let ts = es.len() - es.trim_start().len();
-    let expr_span = Span::new((bo + 1 + ts) as u32, (bo + 1 + ts + expr.len()) as u32);
-
-    if is_non_function_literal(expr) {
-        let phrase = non_function_phrase(expr);
-        ctx.diagnostic(format!("Unexpected {} in event handler.", phrase), expr_span);
-    } else if expr.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
-        if let Some(phrase) = non_fn_vars.get(expr) {
-            ctx.diagnostic(format!("Unexpected {} in event handler.", phrase), expr_span);
-        }
-    }
-}
 
 impl Rule for NoNotFunctionHandler {
     fn name(&self) -> &'static str {
@@ -83,18 +22,118 @@ impl Rule for NoNotFunctionHandler {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let vars = ctx.ast.instance.as_ref().map(|s| find_non_function_vars(&s.content)).unwrap_or_default();
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             let TemplateNode::Element(el) = node else { return };
             for attr in &el.attributes {
-                let span = match attr {
+                let handler_span = match attr {
                     Attribute::Directive { kind: DirectiveKind::EventHandler, span, .. } => *span,
                     Attribute::NormalAttribute { name, span, .. }
-                        if name.starts_with("on") && name.len() > 2 && name.as_bytes()[2].is_ascii_lowercase() => *span,
+                        if name.starts_with("on")
+                            && name.len() > 2
+                            && name.as_bytes()[2].is_ascii_lowercase() =>
+                    {
+                        *span
+                    }
                     _ => continue,
                 };
-                check_handler_value(ctx, &vars, span);
+                check_handler_value(ctx, handler_span);
             }
         });
     }
+}
+
+fn check_handler_value(ctx: &mut LintContext<'_>, span: Span) {
+    let region = &ctx.source[span.start as usize..span.end as usize];
+    // Handler value is expected as `={...}`. Extract the expression text.
+    let Some(eq_pos) = region.find('=') else { return };
+    let value = region[eq_pos + 1..].trim();
+    if !(value.starts_with('{') && value.ends_with('}')) {
+        return;
+    }
+    let expr_text = value[1..value.len() - 1].trim();
+    if expr_text.is_empty() {
+        return;
+    }
+
+    let alloc = Allocator::default();
+    let parsed = Parser::new(&alloc, expr_text, SourceType::mjs()).parse_expression();
+    let Ok(expr) = parsed else { return };
+
+    let expr_span_start = span.start + region.find('{').map(|p| p + 1).unwrap_or(0) as u32;
+    let ws_prefix_len = region[region.find('{').map(|p| p + 1).unwrap_or(0)..]
+        .len()
+        .saturating_sub(region[region.find('{').map(|p| p + 1).unwrap_or(0)..].trim_start().len());
+    let expr_span_start = expr_span_start + ws_prefix_len as u32;
+    let expr_span = Span::new(expr_span_start, expr_span_start + expr_text.len() as u32);
+
+    if let Some(phrase) = non_function_phrase(&expr) {
+        ctx.diagnostic(
+            format!("Unexpected {} in event handler.", phrase),
+            expr_span,
+        );
+    } else if let Expression::Identifier(id) = &expr {
+        // Follow variable reference to its initializer in the instance script.
+        if let Some(sem) = ctx.instance_semantic {
+            if let Some(phrase) = identifier_non_function_phrase(id.name.as_str(), sem) {
+                ctx.diagnostic(
+                    format!("Unexpected {} in event handler.", phrase),
+                    expr_span,
+                );
+            }
+        }
+    }
+}
+
+/// If `expr` is a plainly non-function literal, return a descriptive phrase.
+fn non_function_phrase(expr: &Expression<'_>) -> Option<&'static str> {
+    match expr {
+        Expression::ArrayExpression(_) => Some("array"),
+        Expression::ObjectExpression(_) => Some("object"),
+        Expression::StringLiteral(_) => Some("string value"),
+        Expression::TemplateLiteral(_) => Some("string value"),
+        Expression::BooleanLiteral(_) => Some("boolean value"),
+        Expression::NumericLiteral(_) => Some("number value"),
+        Expression::BigIntLiteral(_) => Some("bigint value"),
+        Expression::RegExpLiteral(_) => Some("regex value"),
+        Expression::ClassExpression(_) => Some("class"),
+        Expression::NewExpression(_) => Some("new expression"),
+        _ => None,
+    }
+}
+
+/// Given an identifier name, look up its declaration in the instance-script
+/// root scope. If it's initialized with a non-function literal, return the
+/// descriptive phrase.
+fn identifier_non_function_phrase<'a>(
+    name: &str,
+    sem: &'a Semantic<'a>,
+) -> Option<&'static str> {
+    let scoping = sem.scoping();
+    let sid = scoping.find_binding(scoping.root_scope_id(), Ident::new_const(name))?;
+    // Skip function declarations (these ARE functions).
+    let flags = scoping.symbol_flags(sid);
+    if flags.intersects(oxc::semantic::SymbolFlags::Function) {
+        return None;
+    }
+    // Find the VariableDeclarator for this symbol.
+    let decl_node_id = scoping.symbol_declaration(sid);
+    let vd = std::iter::once(decl_node_id)
+        .chain(sem.nodes().ancestor_ids(decl_node_id))
+        .find_map(|aid| match sem.nodes().kind(aid) {
+            AstKind::VariableDeclarator(vd) => Some(vd),
+            _ => None,
+        })?;
+    // Only `const` initializers can be confidently classified (a `let`/`var`
+    // could be reassigned to a function later).
+    let decl_kind = std::iter::once(decl_node_id)
+        .chain(sem.nodes().ancestor_ids(decl_node_id))
+        .find_map(|aid| match sem.nodes().kind(aid) {
+            AstKind::VariableDeclaration(d) => Some(d.kind),
+            _ => None,
+        })?;
+    if decl_kind != VariableDeclarationKind::Const {
+        return None;
+    }
+    let init = vd.init.as_ref()?;
+    non_function_phrase(init)
 }
