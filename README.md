@@ -4,7 +4,7 @@
 
 # oxvelte
 
-A Svelte linter written in Rust. Drop-in replacement for [eslint-plugin-svelte](https://github.com/sveltejs/eslint-plugin-svelte) — same rules, same diagnostics, **4-25x faster**.
+A Svelte linter written in Rust. Drop-in replacement for [eslint-plugin-svelte](https://github.com/sveltejs/eslint-plugin-svelte) — same rules, same diagnostics, **50-1000x faster**.
 
 <p align="center">
   <img src="assets/compare.gif" alt="Side-by-side benchmark linting shadcn-svelte (1,603 files): eslint-plugin-svelte takes ~15s while oxvelte completes the same lint hundreds of times in the same window" width="900">
@@ -14,14 +14,14 @@ A Svelte linter written in Rust. Drop-in replacement for [eslint-plugin-svelte](
 
 ## Results
 
-Tested against 4 real-world Svelte codebases (3,428 files total):
+Tested against 4 real-world Svelte codebases (3,466 files total), each installed with its own production eslint config and plugin chain:
 
 | Repo | Files | eslint-plugin-svelte | oxvelte | Speedup | Parity |
 |------|------:|---------------------:|--------:|--------:|--------|
-| [shadcn-svelte](https://github.com/huntabyte/shadcn-svelte) | 1,603 | 136ms | **34ms** | **4x** | 0/0 exact |
-| [open-webui](https://github.com/open-webui/open-webui) | 549 | 3,702ms | **267ms** | **14x** | 7/9 rules exact (compile related rules excluded) |
-| [immich](https://github.com/immich-app/immich) | 400 | 492ms | **20ms** | **25x** | 0/0 exact |
-| [sveltejs/kit](https://github.com/sveltejs/kit) | 876 | 45ms | **33ms** | **1.4x** | 3/3 rules exact |
+| [shadcn-svelte](https://github.com/huntabyte/shadcn-svelte) | 1,641 | 2,385ms | **44ms** | **54x** | 0/0 exact |
+| [open-webui](https://github.com/open-webui/open-webui) | 549 | 11,297ms | **60ms** | **188x** | 7/9 rules exact (compile related rules excluded) |
+| [immich](https://github.com/immich-app/immich) | 400 | 32,138ms | **32ms** | **1,004x** | 0/0 exact |
+| [sveltejs/kit](https://github.com/sveltejs/kit) | 876 | 16,772ms | **30ms** | **559x** | 3/3 rules exact |
 
 ## Using with oxlint (recommended setup)
 
