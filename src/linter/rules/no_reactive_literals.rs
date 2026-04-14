@@ -2,6 +2,8 @@
 //! ⭐ Recommended 💡
 
 use crate::linter::{LintContext, Rule};
+use oxc::ast::ast::{Expression, Statement};
+use oxc::span::Span;
 
 pub struct NoReactiveLiterals;
 
@@ -15,42 +17,47 @@ impl Rule for NoReactiveLiterals {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let Some(script) = &ctx.ast.instance else { return };
-        let content = &script.content;
-        let base = script.span.start as usize;
-        let gt = ctx.source[base..script.span.end as usize].find('>').unwrap_or(0);
+        let Some(semantic) = ctx.instance_semantic else { return };
+        let content_offset = ctx.instance_content_offset;
 
-        let mut search_from = 0;
-        while let Some(pos) = content[search_from..].find("$:") {
-            let abs = search_from + pos;
-            let after = content[abs + 2..].trim_start();
-            if !after.starts_with('{') {
-                if let Some(eq) = after.find('=') {
-                    let rhs = after[eq + 1..].trim_start();
-                    let is_kw = |kw: &str| rhs == kw || rhs.starts_with(&format!("{};", kw)) || rhs.starts_with(&format!("{}\n", kw));
-                    let is_literal = rhs.starts_with('"') || rhs.starts_with('\'')
-                        || (rhs.starts_with('`') && !rhs.contains("${"))
-                        || is_kw("true") || is_kw("false") || is_kw("null") || is_kw("undefined")
-                        || is_numeric_literal(rhs) || rhs.starts_with("[]") || rhs.starts_with("{}");
-                    if is_literal && !after[..eq].contains('(') {
-                        let sp = base + gt + 1 + abs;
-                        ctx.diagnostic("Do not assign literal values inside reactive statements unless absolutely necessary.",
-                            oxc::span::Span::new(sp as u32, (sp + 2) as u32));
-                    }
-                }
+        for stmt in &semantic.nodes().program().body {
+            let Statement::LabeledStatement(ls) = stmt else { continue };
+            if ls.label.name != "$" {
+                continue;
             }
-            search_from = abs + 2;
+            // Only flag the simple form `$: var = literal;` — not blocks, not
+            // computed RHS expressions.
+            let Statement::ExpressionStatement(es) = &ls.body else { continue };
+            let Expression::AssignmentExpression(ae) = &es.expression else { continue };
+            if !is_literal_rhs(&ae.right) {
+                continue;
+            }
+            let s = content_offset + ls.label.span.start;
+            let e = content_offset + ls.label.span.end + 1; // include ':'
+            ctx.diagnostic(
+                "Do not assign literal values inside reactive statements unless absolutely necessary.",
+                Span::new(s, e),
+            );
         }
     }
 }
 
-fn is_numeric_literal(rhs: &str) -> bool {
-    if !rhs.as_bytes().first().map_or(false, |&c| c.is_ascii_digit() || c == b'-') { return false; }
-    let end = rhs.find(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '_' && c != '-' && c != '+').unwrap_or(rhs.len());
-    if end == rhs.len() { return true; }
-    match rhs.as_bytes()[end] {
-        b';' | b'\n' | b'\r' => true,
-        b' ' | b'\t' => { let r = rhs[end..].trim_start(); r.is_empty() || r.starts_with(';') || r.starts_with('\n') }
+/// Is this expression a "literal" for the purposes of this rule?
+/// Matches: strings, numbers, booleans, null, `undefined`, empty arrays/objects,
+/// and template literals without interpolation.
+fn is_literal_rhs(expr: &Expression<'_>) -> bool {
+    match expr {
+        Expression::StringLiteral(_)
+        | Expression::NumericLiteral(_)
+        | Expression::BooleanLiteral(_)
+        | Expression::NullLiteral(_)
+        | Expression::BigIntLiteral(_) => true,
+        Expression::Identifier(id) => id.name == "undefined",
+        Expression::TemplateLiteral(t) => t.expressions.is_empty(),
+        Expression::ArrayExpression(a) => a.elements.is_empty(),
+        Expression::ObjectExpression(o) => o.properties.is_empty(),
+        // `-1`, `+5`, `!true` on literals.
+        Expression::UnaryExpression(u) => is_literal_rhs(&u.argument),
         _ => false,
     }
 }
