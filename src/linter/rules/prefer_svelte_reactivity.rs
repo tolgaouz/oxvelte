@@ -73,27 +73,24 @@ impl Rule for PreferSvelteReactivity {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        for script in [&ctx.ast.instance, &ctx.ast.module].into_iter().flatten() {
-            let content = &script.content;
-            if content.trim().is_empty() { continue; }
-            // Skip OXC parsing if no "new ClassName" patterns appear
-            if !BUILTIN_CLASSES.iter().any(|c| {
-                let pat = format!("new {}", c.name);
-                content.contains(&pat)
-            }) { continue; }
-
-            let content_offset = if ctx.is_svelte_module {
-                0
-            } else {
-                let tag_text = &ctx.source[script.span.start as usize..script.span.end as usize];
-                let gt = tag_text.find('>').unwrap_or(0);
-                script.span.start as usize + gt + 1
-            };
-
-            let is_ts = script.lang.as_deref() == Some("ts")
-                || script.lang.as_deref() == Some("typescript");
-
-            self.check_script(ctx, content, content_offset, is_ts, ctx.is_svelte_module);
+        let is_svelte_module = ctx.is_svelte_module;
+        for (sem, content, offset) in [
+            (
+                ctx.instance_semantic,
+                ctx.ast.instance.as_ref().map(|s| s.content.as_str()),
+                ctx.instance_content_offset as usize,
+            ),
+            (
+                ctx.module_semantic,
+                ctx.ast.module.as_ref().map(|s| s.content.as_str()),
+                ctx.module_content_offset as usize,
+            ),
+        ] {
+            let (Some(sem), Some(content)) = (sem, content) else { continue };
+            if content.trim().is_empty() {
+                continue;
+            }
+            self.check_script(ctx, sem, content, offset, is_svelte_module);
         }
 
         if !ctx.is_svelte_module {
@@ -103,28 +100,18 @@ impl Rule for PreferSvelteReactivity {
 }
 
 impl PreferSvelteReactivity {
-    fn check_script(
+    fn check_script<'a>(
         &self,
-        ctx: &mut LintContext,
+        ctx: &mut LintContext<'a>,
+        semantic: &'a oxc::semantic::Semantic<'a>,
         content: &str,
         content_offset: usize,
-        is_ts: bool,
         is_svelte_module: bool,
     ) {
-        use oxc::allocator::Allocator;
         use oxc::ast::ast::Expression;
         use oxc::ast::AstKind;
-        use oxc::parser::Parser;
-        use oxc::semantic::{SemanticBuilder, SymbolId};
-        use oxc::span::SourceType;
+        use oxc::semantic::SymbolId;
 
-        let alloc = Allocator::default();
-        let source_type = if is_ts { SourceType::ts() } else { SourceType::mjs() };
-        let parse_result = Parser::new(&alloc, content, source_type).parse();
-        if !parse_result.errors.is_empty() { return; }
-
-        let semantic_ret = SemanticBuilder::new().build(&parse_result.program);
-        let semantic = semantic_ret.semantic;
         let scoping = semantic.scoping();
         let nodes = semantic.nodes();
 
