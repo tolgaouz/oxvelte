@@ -1,8 +1,19 @@
 //! `svelte/infinite-reactive-loop` — detect reactive statements that may cause infinite loops.
 //! ⭐ Recommended
+//!
+//! Walks each `$: ...` reactive statement's AST. Flags assignments to top-level variables
+//! that are also referenced (non-call) in the same reactive statement, when the assignment
+//! is separated from the reactive statement's start by a "microtask boundary": `await`,
+//! Promise `.then`/`.catch` callbacks, or scheduled callbacks of `setTimeout`,
+//! `setInterval`, `queueMicrotask`, and Svelte's `tick` (including local aliases/imports).
 
 use crate::linter::{LintContext, Rule};
-use oxc::span::Span;
+use oxc::ast::ast::*;
+use oxc::ast::AstKind;
+use oxc::ast_visit::Visit;
+use oxc::semantic::{NodeId, Semantic, SymbolId};
+use oxc::span::{GetSpan, Ident, Span};
+use rustc_hash::FxHashSet;
 
 pub struct InfiniteReactiveLoop;
 
@@ -16,987 +27,650 @@ impl Rule for InfiniteReactiveLoop {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let script = match &ctx.ast.instance {
-            Some(s) => s,
-            None => return,
-        };
-        let content = &script.content;
-        // Fast bail: no reactive statements means nothing to check
-        if !content.contains("$:") { return; }
-        let base = script.span.start as usize;
-        let source = ctx.source;
-        let tag_text = &source[base..script.span.end as usize];
-        let content_offset = tag_text.find('>').map(|p| base + p + 1).unwrap_or(base);
+        let Some(semantic) = ctx.instance_semantic else { return };
+        let program = semantic.nodes().program();
 
-        let (mut top_vars, mut implicit_reactive) = collect_top_level_vars(content);
-        if let Some(module) = &ctx.ast.module {
-            let (mut module_vars, module_implicit) = collect_top_level_vars(&module.content);
-            top_vars.append(&mut module_vars);
-            implicit_reactive.extend(module_implicit);
+        // Fast bail: no `$:` labeled statements.
+        let has_reactive = program
+            .body
+            .iter()
+            .any(|s| matches!(s, Statement::LabeledStatement(ls) if ls.label.name == "$"));
+        if !has_reactive {
+            return;
         }
-        let aliases = collect_store_refs_and_aliases(content, &mut top_vars);
-        let func_info = collect_func_info(content, &top_vars, &implicit_reactive);
 
-        let mut search_pos = 0;
-        while let Some((bs, be)) = find_reactive_block(content, search_pos) {
-            let block = &content[bs..be];
-            analyze_block(ctx, block, bs, content_offset, &top_vars, &aliases, &func_info);
-            search_pos = be;
-        }
-    }
-}
+        // Pre-compute spans that mark "different microtask" regions: calls to `tick`,
+        // `setTimeout`, `setInterval`, `queueMicrotask` and their top-level aliases.
+        let task_call_spans = collect_task_scheduler_call_spans(semantic);
+        // Module-script top-level names (used for cross-script name matching).
+        let module_top_names = collect_module_top_level_names(ctx.module_semantic);
+        // Names implicitly declared via reactive assignments `$: foo = ...`. These
+        // track only within their declaring reactive body (no recursion).
+        let reactive_declared_names = collect_reactive_declared_names(semantic);
 
-fn collect_top_level_vars(content: &str) -> (Vec<String>, std::collections::HashSet<String>) {
-    let mut vars = Vec::new();
-    let mut implicit_reactive = std::collections::HashSet::new();
-    for line in content.lines() {
-        let t = line.trim();
-        let t = t.strip_prefix("export ").unwrap_or(t);
-        for kw in &["let ", "var ", "const "] {
-            if let Some(rest) = t.strip_prefix(kw) {
-                extract_declared_names(rest, &mut vars);
+        let content_offset = ctx.instance_content_offset;
+        for stmt in &program.body {
+            let Statement::LabeledStatement(ls) = stmt else { continue };
+            if ls.label.name != "$" {
+                continue;
             }
-        }
-        if let Some(after) = t.strip_prefix("$:") {
-            let after = after.trim_start();
-            if let Some(eq_pos) = after.find('=') {
-                let name = after[..eq_pos].trim();
-                let post_eq = &after[eq_pos + 1..];
-                if !name.is_empty()
-                    && name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
-                    && !matches!(name.as_bytes()[0], b'{' | b'[')
-                    && !matches!(post_eq.as_bytes().first(), Some(b'=' | b'>'))
-                    && !vars.contains(&name.to_string())
-                {
-                    vars.push(name.to_string());
-                    implicit_reactive.insert(name.to_string());
-                }
-            }
-        }
-    }
-    (vars, implicit_reactive)
-}
-
-fn extract_declared_names(decl: &str, vars: &mut Vec<String>) {
-    let trimmed = decl.trim();
-    if trimmed.starts_with('{') || trimmed.starts_with('[') {
-        let close = if trimmed.starts_with('{') { '}' } else { ']' };
-        if let Some(end) = trimmed.find(close) {
-            let inner = &trimmed[1..end];
-            for part in inner.split(',') {
-                let p = part.trim();
-                let name_part = if let Some(colon) = p.find(':') {
-                    p[colon + 1..].trim()
-                } else {
-                    p
-                };
-                let name_part = if let Some(eq) = name_part.find('=') {
-                    name_part[..eq].trim()
-                } else {
-                    name_part
-                };
-                let name_part = name_part.strip_prefix("...").unwrap_or(name_part);
-                let name: String = name_part.chars()
-                    .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
-                    .collect();
-                if !name.is_empty() { vars.push(name); }
-            }
-        }
-    } else {
-        let (mut depth, mut seg_start, bytes) = (0i32, 0, trimmed.as_bytes());
-        for i in 0..=bytes.len() {
-            if i == bytes.len() || (bytes[i] == b',' && depth == 0) {
-                let name: String = trimmed[seg_start..i].trim().chars()
-                    .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$').collect();
-                if !name.is_empty() { vars.push(name); }
-                seg_start = i + 1;
-            } else { match bytes[i] { b'(' | b'[' | b'{' => depth += 1, b')' | b']' | b'}' => depth -= 1, _ => {} } }
-        }
-    }
-}
-
-fn collect_store_refs_and_aliases(content: &str, vars: &mut Vec<String>) -> Vec<(String, String)> {
-    const FNS: &[&str] = &["setTimeout", "setInterval", "queueMicrotask", "tick"];
-    let mut aliases = Vec::new();
-    for line in content.lines() {
-        let t = line.trim();
-        if let Some(rest) = t.strip_prefix("const ") {
-            if let Some(eq) = rest.find(" = ") {
-                let val = rest[eq+3..].trim().trim_end_matches(';');
-                if FNS.contains(&val) { aliases.push((val.to_string(), rest[..eq].to_string())); }
-            }
-        }
-        if !t.starts_with("import ") { continue; }
-        let (Some(bs), Some(be)) = (t.find('{'), t.find('}')) else { continue };
-        for imp in t[bs+1..be].split(',') {
-            let imp = imp.trim();
-            let (orig, local) = imp.find(" as ").map_or((imp, imp), |ap| (imp[..ap].trim(), imp[ap+4..].trim()));
-            if !local.is_empty() {
-                let sr = format!("${}", local);
-                if content.contains(&sr) && !vars.contains(&sr) { vars.push(sr); }
-            }
-            if orig != local && FNS.contains(&orig) { aliases.push((orig.to_string(), local.to_string())); }
-        }
-    }
-    aliases
-}
-
-struct FuncInfo {
-    name: String,
-    assigns: Vec<String>,
-    has_await: bool,
-    assigns_after_await: Vec<String>,
-    assign_positions_after_await: Vec<(String, usize)>,
-    all_assign_positions: Vec<(String, usize)>,
-    calls_after_await: Vec<String>,
-    all_calls: Vec<String>,
-    body_range: (usize, usize),
-    has_then_catch_assigns: bool,
-}
-
-fn merge_var(vec: &mut Vec<String>, val: &str) {
-    if !vec.iter().any(|v| v == val) { vec.push(val.to_string()); }
-}
-
-fn merge_pos(vec: &mut Vec<(String, usize)>, var: &str, pos: usize, body_range: Option<(usize, usize)>) {
-    if let Some((bs, be)) = body_range { if pos >= bs && pos < be { return; } }
-    if !vec.iter().any(|(v, p)| v == var && *p == pos) { vec.push((var.to_string(), pos)); }
-}
-
-#[inline]
-fn extract_line_idents<'a>(line: &'a str) -> Vec<&'a str> {
-    let mut idents = Vec::new();
-    let bytes = line.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' || bytes[i] == b'$' {
-            let start = i;
-            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') { i += 1; }
-            idents.push(&line[start..i]);
-        } else {
-            i += 1;
-        }
-    }
-    idents
-}
-
-fn collect_func_info(content: &str, top_vars: &[String], implicit_reactive: &std::collections::HashSet<String>) -> Vec<FuncInfo> {
-    let mut results = Vec::new();
-    let lines: Vec<&str> = content.lines().collect();
-    let top_var_set: std::collections::HashSet<&str> = top_vars.iter().map(|s| s.as_str()).collect();
-
-    let mut line_offsets = Vec::with_capacity(lines.len());
-    let mut line_depths = Vec::with_capacity(lines.len());
-    let mut depth = 0i32;
-    let mut offset = 0usize;
-    for &line in &lines {
-        line_offsets.push(offset);
-        line_depths.push(depth);
-        for ch in line.bytes() {
-            match ch { b'{' => depth += 1, b'}' => depth -= 1, _ => {} }
-        }
-        offset += line.len() + 1;
-    }
-
-    let func_names_seen: Vec<String> = lines.iter().enumerate()
-        .filter(|(idx, _)| line_depths[*idx] == 0)
-        .filter_map(|(_, line)| extract_func_name(line.trim()))
-        .collect();
-    let func_name_set: std::collections::HashSet<&str> = func_names_seen.iter().map(|s| s.as_str()).collect();
-
-    let mut i = 0;
-    while i < lines.len() {
-        let t = lines[i].trim();
-        if line_depths[i] > 0 { i += 1; continue; }
-        if let Some(name) = extract_func_name(t) {
-            let mut depth = 0i32;
-            let mut started = false;
-            let mut end_line = i;
-            let mut has_await = false;
-            for j in i..lines.len() {
-                let line = lines[j];
-                if line.contains("await ") { has_await = true; }
-                for ch in line.bytes() {
-                    if ch == b'{' { depth += 1; started = true; }
-                    if ch == b'}' { depth -= 1; }
-                }
-                end_line = j;
-                if started && depth <= 0 { break; }
-            }
-            let func_start_offset = line_offsets[i];
-
-            let mut assigns = Vec::new();
-            let mut all_assign_positions = Vec::new();
-            let mut assigns_after_await = Vec::new();
-            let mut assign_positions_after_await = Vec::new();
-            let mut calls_after_await = Vec::new();
-            let mut all_calls = Vec::new();
-            let mut seen_await = false;
-
-            for j in i..=end_line {
-                let line = lines[j];
-                let t = line.trim();
-                let indent = line.len() - t.len();
-                let line_pos = line_offsets[j];
-
-                if j == i { continue; }
-
-                // Extract identifiers once per line for fast membership checks
-                let line_idents = extract_line_idents(t);
-                let vars_in_line: Vec<&String> = top_vars.iter()
-                    .filter(|v| *v != &name && line_idents.contains(&v.as_str()))
-                    .collect();
-
-                if t.contains("await ") {
-                    if seen_await || j > i {
-                        for var in &vars_in_line {
-                            if let Some(_) = find_var_op(t, var, " = await ") {
-                                if is_local_declaration(t, var) { continue; }
-                                if !assigns_after_await.contains(*var) { assigns_after_await.push((*var).clone()); }
-                                assign_positions_after_await.push(((*var).clone(), line_pos + indent));
-                                if !assigns.contains(*var) { assigns.push((*var).clone()); }
-                                all_assign_positions.push(((*var).clone(), line_pos + indent));
-                            }
-                        }
-                    }
-                    seen_await = true;
-                }
-
-                for var in &vars_in_line {
-                    if is_local_declaration(t, var) { continue; }
-                    if has_assign(t, var) {
-                        if !assigns.contains(*var) { assigns.push((*var).clone()); }
-                        all_assign_positions.push(((*var).clone(), line_pos + indent));
-                        if seen_await {
-                            if !assigns_after_await.contains(*var) { assigns_after_await.push((*var).clone()); }
-                            assign_positions_after_await.push(((*var).clone(), line_pos + indent));
-                        }
-                    }
-                }
-
-                // Check function calls using identifier extraction
-                for ident in &line_idents {
-                    if func_name_set.contains(ident) && *ident != name.as_str() {
-                        let call_pat = format!("{}(", ident);
-                        if let Some(cp) = t.find(&call_pat) {
-                            if is_word_start(t, cp) {
-                                let other = ident.to_string();
-                                if !all_calls.contains(&other) { all_calls.push(other.clone()); }
-                                if seen_await && !calls_after_await.contains(&other) {
-                                    calls_after_await.push(other);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            let body_start = func_start_offset;
-            let body_end = if end_line < line_offsets.len() { line_offsets[end_line] + lines[end_line].len() } else { content.len() };
-
-            let func_body = &content[body_start..body_end];
-            let then_catch_regions = find_callback_regions(func_body, &[".then(", ".catch("], false, false);
-            let timer_regions = find_callback_regions(func_body, &["setTimeout(", "setInterval(", "queueMicrotask("], true, true);
-            let mut has_then_catch_assigns = false;
-            let mut all_async_regions = then_catch_regions;
-            all_async_regions.extend_from_slice(&timer_regions);
-            if !all_async_regions.is_empty() {
-                for j in i+1..=end_line {
-                    let line = lines[j];
-                    let lt = line.trim();
-                    let indent = line.len() - lt.len();
-                    let lpos = line_offsets[j] - body_start;
-                    let lt_idents = extract_line_idents(lt);
-                    for var in top_vars {
-                        if implicit_reactive.contains(var) { continue; }
-                        if !lt_idents.contains(&var.as_str()) { continue; }
-                        if is_local_declaration(lt, var) { continue; }
-                        if !has_assign(lt, var) { continue; }
-                        let in_region = all_async_regions.iter()
-                            .any(|&(start, end)| lpos + indent >= start && lpos + indent < end);
-                        if in_region {
-                            has_then_catch_assigns = true;
-                            if !assigns_after_await.contains(var) {
-                                assigns_after_await.push(var.clone());
-                            }
-                            assign_positions_after_await.push((var.clone(), line_offsets[j] + indent));
-                        }
-                    }
-                }
-            }
-
-            results.push(FuncInfo { name, assigns, has_await, assigns_after_await, assign_positions_after_await, all_assign_positions, calls_after_await, all_calls, body_range: (body_start, body_end), has_then_catch_assigns });
-        }
-        i += 1;
-    }
-
-    for _ in 0..4 {
-        let snap: Vec<FuncInfo> = results.iter().map(|fi| FuncInfo {
-            name: fi.name.clone(), assigns: fi.assigns.clone(), has_await: fi.has_await,
-            assigns_after_await: fi.assigns_after_await.clone(), assign_positions_after_await: fi.assign_positions_after_await.clone(),
-            all_assign_positions: fi.all_assign_positions.clone(), calls_after_await: vec![], all_calls: vec![],
-            body_range: fi.body_range, has_then_catch_assigns: fi.has_then_catch_assigns,
-        }).collect();
-        for fi in results.iter_mut() {
-            let br = fi.body_range;
-            for callee_name in fi.calls_after_await.clone() {
-                let Some(c) = snap.iter().find(|s| s.name == callee_name) else { continue };
-                let (vi, pi) = if c.has_await { (&c.assigns_after_await, &c.assign_positions_after_await) } else { (&c.assigns, &c.all_assign_positions) };
-                for v in vi { merge_var(&mut fi.assigns_after_await, v); }
-                for v in &c.assigns { merge_var(&mut fi.assigns, v); }
-                for (v, p) in pi { merge_pos(&mut fi.assign_positions_after_await, v, *p, Some(br)); }
-                for (v, p) in &c.all_assign_positions { merge_pos(&mut fi.all_assign_positions, v, *p, None); }
-            }
-            for callee_name in fi.all_calls.clone() {
-                let Some(c) = snap.iter().find(|s| s.name == callee_name) else { continue };
-                for v in &c.assigns { merge_var(&mut fi.assigns, v); }
-                for (v, p) in &c.all_assign_positions { merge_pos(&mut fi.all_assign_positions, v, *p, None); }
-                if !c.assigns_after_await.is_empty() {
-                    for v in &c.assigns_after_await { merge_var(&mut fi.assigns_after_await, v); }
-                    for (v, p) in &c.assign_positions_after_await { merge_pos(&mut fi.assign_positions_after_await, v, *p, Some(br)); }
-                    fi.has_await |= c.has_await;
-                    fi.has_then_catch_assigns |= c.has_then_catch_assigns;
-                }
-            }
-        }
-    }
-
-    results
-}
-
-fn extract_func_name(line: &str) -> Option<String> {
-    for prefix in &["const ", "let "] {
-        if let Some(rest) = line.strip_prefix(prefix) {
-            if let Some(eq) = rest.find(" = ") {
-                if is_direct_function_expr(rest[eq+3..].trim()) {
-                    return Some(rest[..eq].to_string());
-                }
-            }
-        }
-    }
-    let rest = line.strip_prefix("function ")
-        .or_else(|| line.strip_prefix("async function "))?;
-    let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
-    if !name.is_empty() { Some(name) } else { None }
-}
-
-fn is_direct_function_expr(after: &str) -> bool {
-    if after.starts_with("function") || after.starts_with("async") { return true; }
-    if after.starts_with('(') {
-        let mut depth = 0i32;
-        for (i, ch) in after.char_indices() {
-            match ch { '(' => depth += 1, ')' => { depth -= 1; if depth == 0 {
-                let r = after[i + 1..].trim_start();
-                return r.starts_with("=>") || (r.starts_with(':') && r.contains("=>"));
-            }} _ => {} }
-        }
-        return false;
-    }
-    let end = after.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(after.len());
-    end > 0 && after[end..].trim_start().starts_with("=>")
-}
-
-fn is_local_declaration(line: &str, var: &str) -> bool {
-    for kw in &["const ", "let ", "var "] {
-        let Some(kw_pos) = line.find(kw) else { continue };
-        let after_kw = &line[kw_pos + kw.len()..];
-        if matches!(after_kw.as_bytes().first(), Some(b'{' | b'[')) {
-            if let Some(close) = after_kw.find(|c: char| c == '}' || c == ']') {
-                if after_kw[1..close].split(',').any(|p| p.trim() == var) { return true; }
-            }
-        } else {
-            let end = after_kw.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
-                .unwrap_or(after_kw.len());
-            if &after_kw[..end] == var { return true; }
-        }
-    }
-    false
-}
-
-fn has_assign(line: &str, var: &str) -> bool {
-    if !line.contains(var) { return false; }
-    const OPS: [&str; 5] = [" = ", " += ", " -= ", " *= ", " /= "];
-    for op in &OPS {
-        if let Some(pos) = find_var_op(line, var, op) {
-            if *op != " = " || pos + var.len() + 3 >= line.len() || line.as_bytes()[pos + var.len() + 3] != b'=' { return true; }
-        }
-    }
-    if let Some(pos) = find_var_op(line, var, " =") {
-        let after = pos + var.len() + 2;
-        if after >= line.len() || !matches!(line.as_bytes()[after], b'=' | b'>') { return true; }
-    }
-    has_member_assign(line, var, &OPS)
-}
-
-fn find_var_op(line: &str, var: &str, op: &str) -> Option<usize> {
-    let mut start = 0;
-    while let Some(pos) = line[start..].find(var) {
-        let abs = start + pos;
-        if is_word_start(line, abs) {
-            let after = abs + var.len();
-            if line[after..].starts_with(op) {
-                let before = line[..abs].trim_end();
-                if before.ends_with("typeof") {
-                    start = abs + 1;
-                    continue;
-                }
-                return Some(abs);
-            }
-        }
-        start = abs + 1;
-    }
-    None
-}
-
-fn has_member_assign(line: &str, var: &str, ops: &[&str]) -> bool {
-    for sep in [".", "["] {
-        let mut start = 0;
-        while start + var.len() + sep.len() <= line.len() {
-            let Some(p) = line[start..].find(var) else { break };
-            let pos = start + p;
-            if !is_word_start(line, pos) || !line[pos + var.len()..].starts_with(sep) { start = pos + 1; continue; }
-            let rest = &line[pos + var.len() + sep.len()..];
-            let mut r = if sep == "." {
-                &rest[rest.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(rest.len())..]
-            } else { rest.find(']').map(|p| &rest[p+1..]).unwrap_or("") };
-            loop {
-                if r.starts_with('[') { match r.find(']') { Some(c) => r = &r[c+1..], None => break } }
-                else if r.starts_with('.') { r = &r[r[1..].find(|c: char| !c.is_alphanumeric() && c != '_').map(|e| e+1).unwrap_or(r.len())..]; }
-                else { break; }
-            }
-            let r = r.trim_start();
-            if ops.iter().any(|op| r.starts_with(op.trim()) && !(*op == " = " && r.len() > 1 && r.as_bytes()[1] == b'=')) { return true; }
-            start = pos + 1;
-        }
-    }
-    false
-}
-
-#[inline]
-fn is_word_start(text: &str, pos: usize) -> bool {
-    if pos == 0 { return true; }
-    let b = text.as_bytes()[pos - 1];
-    !(b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b == b'.')
-}
-
-fn find_assign_pos(line: &str, var: &str) -> Option<usize> {
-    [" = ", " += ", " -= "].iter().find_map(|op| {
-        let pos = find_var_op(line, var, op)?;
-        if *op == " = " && pos + var.len() + 3 < line.len() && line.as_bytes()[pos + var.len() + 3] == b'=' { return None; }
-        Some(pos)
-    }).or_else(|| {
-        let mut s = 0;
-        while let Some(p) = line[s..].find(var) {
-            let pos = s + p;
-            if is_word_start(line, pos) && line[pos + var.len()..].starts_with('.')
-                && [" = ", " += ", " -= "].iter().any(|op| line[pos + var.len() + 1..].contains(op)) { return Some(pos); }
-            s = pos + 1;
-        }
-        None
-    })
-}
-
-fn find_reactive_block(content: &str, from: usize) -> Option<(usize, usize)> {
-    let remaining = &content[from..];
-    let mut ls = 0usize;
-    for line in remaining.lines() {
-        let t = line.trim();
-        if t.starts_with("$:") {
-            let abs = from + ls + (line.len() - t.len());
-            let end = find_block_end(content, abs);
-            return Some((abs, end));
-        }
-        ls += line.len() + 1;
-    }
-    None
-}
-
-fn find_block_end(content: &str, dollar: usize) -> usize {
-    let after = &content[dollar + 2..];
-    let trimmed = after.trim_start();
-    if trimmed.starts_with('{') {
-        find_matching_brace(content, dollar + 2 + (after.len() - trimmed.len()))
-    } else {
-        find_stmt_end(content, dollar)
-    }
-}
-
-fn find_matching_brace(content: &str, start: usize) -> usize {
-    let bytes = content.as_bytes();
-    let mut i = start;
-    let mut depth = 0i32;
-    while i < bytes.len() {
-        if let Some(end) = skip_comment_raw(bytes, i) { i = end; continue; }
-        match bytes[i] {
-            b'\'' | b'"' | b'`' => { i = skip_string_raw(bytes, i); continue; }
-            b'{' => depth += 1,
-            b'}' => { depth -= 1; if depth == 0 { return i + 1; } }
-            _ => {}
-        }
-        i += 1;
-    }
-    content.len()
-}
-
-fn find_stmt_end(content: &str, dollar: usize) -> usize {
-    let mut pdepth = 0i32;
-    let mut bdepth = 0i32;
-    let mut has_c = false;
-    let bytes = content.as_bytes();
-    let mut i = dollar + 2;
-    while i < bytes.len() {
-        if let Some(end) = skip_comment_raw(bytes, i) {
-            if bytes[end.min(bytes.len()) - 1] == b'\n' && pdepth <= 0 && bdepth <= 0 && has_c {
-                // line comment ended with newline — check newline logic below
-            }
-            i = end;
-            continue;
-        }
-        let b = bytes[i];
-        match b {
-            b'\'' | b'"' | b'`' => { has_c = true; i = skip_string_raw(bytes, i); continue; }
-            b'{' => { bdepth += 1; has_c = true; }
-            b'}' => {
-                bdepth -= 1;
-                if bdepth <= 0 && pdepth <= 0 && has_c {
-                    let rest = content[i + 1..].trim_start();
-                    if !rest.starts_with("else") { return i + 1; }
-                }
-            }
-            b'(' => { pdepth += 1; has_c = true; }
-            b')' => {
-                pdepth -= 1;
-                if pdepth <= 0 && bdepth <= 0 && has_c {
-                    let rest = &content[i + 1..];
-                    let nt = rest.trim_start_matches(|c: char| c == ' ' || c == '\t');
-                    if nt.starts_with(';') {
-                        return i + 1 + (rest.len() - nt.len()) + 1;
-                    }
-                    if nt.starts_with('\n') || nt.is_empty() {
-                        let after_ws = nt.trim_start();
-                        let is_continuation = after_ws.as_bytes().first().is_some_and(|b|
-                            matches!(b, b'.' | b'?' | b':' | b'+' | b'-' | b'*' | b'/'
-                                | b'%' | b'&' | b'|' | b'^' | b'<' | b'>' | b'=' | b'!' | b',' | b'('));
-                        if !is_continuation { return i + 1 + (rest.len() - nt.len()); }
-                    }
-                }
-            }
-            b';' if pdepth <= 0 && bdepth <= 0 && has_c => return i + 1,
-            b'\n' if pdepth <= 0 && bdepth <= 0 && has_c => {
-                let rest = &content[i + 1..];
-                let next_line = rest.trim_start();
-                if next_line.is_empty() || rest.starts_with('\n')
-                    || (rest.starts_with("\r\n") && !next_line.is_empty()) { return i + 1; }
-                const STMT_STARTS: &[&str] = &["async ", "function ", "const ", "let ", "var ",
-                    "if ", "if(", "for ", "for(", "while ", "while(", "return ",
-                    "return;", "throw ", "class ", "import ", "export ",
-                    "try ", "try{", "switch ", "switch(", "$: "];
-                if STMT_STARTS.iter().any(|kw| next_line.starts_with(kw)) { return i + 1; }
-            }
-            _ if !b.is_ascii_whitespace() => has_c = true,
-            _ => {}
-        }
-        i += 1;
-    }
-    content.len()
-}
-
-fn block_has_var_ref(block: &str, var: &str) -> bool {
-    block.match_indices(var).any(|(pos, _)| {
-        is_word_start(block, pos) && {
-            let a = pos + var.len();
-            a >= block.len() || !matches!(block.as_bytes()[a], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$')
-        }
-    })
-}
-
-fn block_reads_var(block: &str, var: &str) -> bool {
-    for line in block.lines() {
-        let t = line.trim();
-        if t.is_empty() || t.starts_with("//") || t.starts_with("$:") || !t.contains(var) { continue; }
-        let count = t.match_indices(var).filter(|(pos, _)| is_word_start(t, *pos)).count();
-        if count == 0 { continue; }
-        if count > 1 { return true; }
-        let write_only = find_var_op(t, var, " = ").is_some_and(|pos| {
-            pos + var.len() + 3 >= t.len() || t.as_bytes()[pos + var.len() + 3] != b'='
-        }) || has_member_assign(t, var, &[" = ", " += ", " -= ", " *= ", " /= "]);
-        if !write_only { return true; }
-    }
-    false
-}
-
-fn is_in_async_callback(block: &str, pos: usize, all_triggers: &[String]) -> bool {
-    let before = &block[..pos.min(block.len())];
-    let bytes = before.as_bytes();
-    let mut pd = 0i32;
-    let mut i = bytes.len();
-    while i > 0 {
-        i -= 1;
-        match bytes[i] {
-            b')' => pd += 1,
-            b'(' if pd > 0 => pd -= 1,
-            b'(' => {
-                let bp = before[..i].trim_end();
-                if all_triggers.iter().any(|t| bp.ends_with(t.as_str()) && {
-                    let s = bp.len() - t.len();
-                    s == 0 || !matches!(bp.as_bytes()[s-1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$')
-                }) { return true; }
-            }
-            _ => {}
-        }
-    }
-    false
-}
-
-fn has_await_on_prev_line(block: &str, line_start_pos: usize) -> bool {
-    let before = &block[..line_start_pos.min(block.len())];
-    if !before.contains("async ") && !before.contains("async(") { return false; }
-    let bytes = before.as_bytes();
-    let (mut depth, mut in_str, mut sch, mut abd) = (0i32, false, b'"', 0i32);
-    let mut min_await_depth = i32::MAX;
-    for i in 0..bytes.len() {
-        if in_str {
-            if bytes[i] == sch && (i == 0 || bytes[i-1] != b'\\') { in_str = false; }
-            continue;
-        }
-        match bytes[i] {
-            b'\'' | b'"' | b'`' => { in_str = true; sch = bytes[i]; }
-            b'{' => depth += 1,
-            b'}' => depth -= 1,
-            _ => {}
-        }
-        if i + 6 <= bytes.len() && &before[i..i+6] == "async " { abd = depth + 1; }
-        if depth >= abd && i + 6 <= bytes.len() && &before[i..i+6] == "await "
-            && (i == 0 || !bytes[i-1].is_ascii_alphanumeric()) { min_await_depth = min_await_depth.min(depth); }
-    }
-    min_await_depth <= depth
-}
-
-#[inline]
-fn skip_string_raw(bytes: &[u8], start: usize) -> usize {
-    let q = bytes[start];
-    let mut j = start + 1;
-    while j < bytes.len() {
-        if bytes[j] == b'\\' { j += 2; continue; }
-        if bytes[j] == q { return j + 1; }
-        j += 1;
-    }
-    j
-}
-
-#[inline]
-fn skip_comment_raw(bytes: &[u8], i: usize) -> Option<usize> {
-    if i + 1 >= bytes.len() || bytes[i] != b'/' { return None; }
-    if bytes[i + 1] == b'/' {
-        let mut j = i + 2;
-        while j < bytes.len() && bytes[j] != b'\n' { j += 1; }
-        return Some(j);
-    }
-    if bytes[i + 1] == b'*' {
-        let mut j = i + 2;
-        while j + 1 < bytes.len() && !(bytes[j] == b'*' && bytes[j + 1] == b'/') { j += 1; }
-        return Some(if j + 1 < bytes.len() { j + 2 } else { j });
-    }
-    None
-}
-
-fn skip_brace_body(bytes: &[u8], start: usize) -> usize {
-    let mut i = start + 1;
-    let mut depth = 1i32;
-    while i < bytes.len() && depth > 0 {
-        if let Some(end) = skip_comment_raw(bytes, i) { i = end; continue; }
-        match bytes[i] {
-            b'\'' | b'"' | b'`' => { i = skip_string_raw(bytes, i); continue; }
-            b'{' => depth += 1,
-            b'}' => { depth -= 1; if depth == 0 { return i; } }
-            _ => {}
-        }
-        i += 1;
-    }
-    i
-}
-
-fn scan_callback_args(bytes: &[u8], after: usize, first_only: bool) -> Vec<(usize, usize)> {
-    let mut regions = Vec::new();
-    let mut i = after;
-    let mut paren_depth = 1i32;
-    while i < bytes.len() && paren_depth > 0 {
-        if let Some(end) = skip_comment_raw(bytes, i) { i = end; continue; }
-        match bytes[i] {
-            b'\'' | b'"' | b'`' => { i = skip_string_raw(bytes, i); }
-            b'(' => { paren_depth += 1; i += 1; }
-            b')' => { paren_depth -= 1; i += 1; }
-            b'=' if i + 1 < bytes.len() && bytes[i + 1] == b'>' && paren_depth == 1 => {
-                i += 2;
-                while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r') { i += 1; }
-                if i < bytes.len() && bytes[i] == b'{' {
-                    let body_start = i;
-                    i = skip_brace_body(bytes, i);
-                    regions.push((body_start, i));
-                    if i < bytes.len() { i += 1; }
-                } else if i < bytes.len() {
-                    let body_start = i;
-                    let mut pd = 0i32;
-                    while i < bytes.len() {
-                        if let Some(end) = skip_comment_raw(bytes, i) { i = end; continue; }
-                        match bytes[i] {
-                            b'\'' | b'"' | b'`' => { i = skip_string_raw(bytes, i); continue; }
-                            b'(' => { pd += 1; i += 1; }
-                            b')' if pd > 0 => { pd -= 1; i += 1; }
-                            b')' | b',' if pd == 0 => break,
-                            _ => { i += 1; }
-                        }
-                    }
-                    regions.push((body_start, i));
-                }
-                if first_only { break; }
-            }
-            b'{' if paren_depth == 1 => {
-                let body_start = i;
-                i = skip_brace_body(bytes, i);
-                regions.push((body_start, i));
-                if i < bytes.len() { i += 1; }
-                if first_only { break; }
-            }
-            _ => { i += 1; }
-        }
-    }
-    regions
-}
-
-fn find_callback_regions(block: &str, patterns: &[&str], check_boundary: bool, first_only: bool) -> Vec<(usize, usize)> {
-    let mut regions = Vec::new();
-    let bytes = block.as_bytes();
-    for pattern in patterns {
-        let mut search = 0;
-        while let Some(pos) = block[search..].find(pattern) {
-            let abs = search + pos;
-            if check_boundary && abs > 0
-                && matches!(bytes[abs - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$')
-            {
-                search = abs + pattern.len(); continue;
-            }
-            regions.extend(scan_callback_args(bytes, abs + pattern.len(), first_only));
-            search = abs + pattern.len();
-        }
-    }
-    regions
-}
-
-fn is_in_effective_then_catch(regions: &[(usize, usize)], pos: usize) -> bool {
-    let Some(inner) = regions.iter().filter(|(s, e)| pos >= *s && pos < *e).min_by_key(|(s, e)| e - s)
-    else { return false };
-    !regions.iter().any(|(s, e)| *s > inner.0 && *e < inner.1 && *e <= pos)
-}
-
-fn report_call_in_body(ctx: &mut LintContext, body: &str, body_offset: usize, callee: &str, var: &str) {
-    let pat = format!("{}(", callee);
-    if let Some(pos) = body.find(&pat) {
-        if is_word_start(body, pos) {
-            let abs = body_offset + pos;
-            ctx.diagnostic(
-                format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", var),
-                Span::new(abs as u32, abs as u32 + 1),
+            check_reactive_statement(
+                ctx, semantic, content_offset, ls,
+                &task_call_spans, &module_top_names, &reactive_declared_names,
             );
         }
     }
 }
 
-fn report_intermediate_calls(ctx: &mut LintContext, fi: &FuncInfo, func_info: &[FuncInfo], pos_var: &str, base: usize) {
-    let (body_start, body_end) = fi.body_range;
-    if body_end > ctx.source.len().saturating_sub(base) { return; }
-    let body = &ctx.source[base + body_start..base + body_end];
-    let mut reported = std::collections::HashSet::new();
-    let mut stack: Vec<&str> = fi.all_calls.iter().chain(fi.calls_after_await.iter())
-        .map(|s| s.as_str()).collect::<std::collections::HashSet<_>>().into_iter().collect();
-    while let Some(callee_name) = stack.pop() {
-        if !reported.insert(callee_name) { continue; }
-        let Some(callee_fi) = func_info.iter().find(|cf| cf.name == callee_name) else { continue };
-        if !callee_fi.assigns.contains(&pos_var.to_string()) { continue; }
-        report_call_in_body(ctx, body, base + body_start, callee_name, pos_var);
-        let (cb_start, cb_end) = callee_fi.body_range;
-        if cb_end <= ctx.source.len().saturating_sub(base) {
-            let callee_body = &ctx.source[base + cb_start..base + cb_end];
-            for deeper_callee in callee_fi.all_calls.iter() {
-                if reported.contains(deeper_callee.as_str()) { continue; }
-                let Some(deeper_fi) = func_info.iter().find(|cf| cf.name == *deeper_callee) else { continue };
-                if !deeper_fi.assigns.contains(&pos_var.to_string()) { continue; }
-                report_call_in_body(ctx, callee_body, base + cb_start, deeper_callee, pos_var);
-                reported.insert(deeper_callee.as_str());
+// ─── Task-scheduler discovery ────────────────────────────────────────────────
+
+/// Collect spans of all call expressions whose callee resolves to a task-scheduling
+/// function: `tick` (from `svelte`), `setTimeout`, `setInterval`, `queueMicrotask`,
+/// or a top-level `const` alias of any of these.
+fn collect_task_scheduler_call_spans<'a>(semantic: &'a Semantic<'a>) -> Vec<Span> {
+    let nodes = semantic.nodes();
+    let program = nodes.program();
+
+    // Names considered task schedulers. Seeded with the three globals; augmented
+    // with imports of `tick` from `svelte` and top-level aliases.
+    let mut names: FxHashSet<&str> = ["setTimeout", "setInterval", "queueMicrotask"]
+        .iter()
+        .copied()
+        .collect();
+
+    // 1) Imports of `tick` from `svelte`.
+    for stmt in &program.body {
+        if let Statement::ImportDeclaration(imp) = stmt {
+            if imp.source.value == "svelte" {
+                if let Some(specifiers) = &imp.specifiers {
+                    for spec in specifiers {
+                        if let ImportDeclarationSpecifier::ImportSpecifier(s) = spec {
+                            let imported = match &s.imported {
+                                ModuleExportName::IdentifierName(n) => n.name.as_str(),
+                                ModuleExportName::IdentifierReference(n) => n.name.as_str(),
+                                ModuleExportName::StringLiteral(l) => l.value.as_str(),
+                            };
+                            if imported == "tick" {
+                                names.insert(s.local.name.as_str());
+                            }
+                        }
+                    }
+                }
             }
         }
     }
-}
 
-fn analyze_block(
-    ctx: &mut LintContext,
-    block: &str,
-    block_start: usize,
-    base: usize,
-    top_vars: &[String],
-    aliases: &[(String, String)],
-    func_info: &[FuncInfo],
-) {
-    let mut all_triggers: Vec<String> = ["setTimeout", "setInterval", "queueMicrotask", "tick"]
-        .iter().map(|s| s.to_string()).collect();
-    all_triggers.extend(aliases.iter().map(|(_, a)| a.clone()));
-
-    let local_names: Vec<String> = block.lines().filter_map(|line| {
-        let t = line.trim();
-        let rest = ["let ", "const ", "var ", "function "].iter().find_map(|kw| t.strip_prefix(kw))?;
-        let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$').collect();
-        if !name.is_empty() { Some(name) } else { None }
-    }).collect();
-
-    let async_callback_regions = find_callback_regions(block, &[".then(", ".catch("], false, false);
-
-    let tracked_vars: std::collections::HashSet<String> = {
-        let mut tracked = std::collections::HashSet::new();
-        let bytes = block.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            match bytes[i] {
-                b'\'' | b'"' | b'`' => { i = skip_string_raw(bytes, i); continue; }
-                b'/' => { if let Some(end) = skip_comment_raw(bytes, i) { i = end; } else { i += 1; } continue; }
-                b if b.is_ascii_alphabetic() || b == b'_' || b == b'$' => {
-                    if i > 0 && bytes[i-1] == b'.' && !(i >= 3 && bytes[i-2] == b'.' && bytes[i-3] == b'.') {
-                        while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') { i += 1; }
-                        continue;
-                    }
-                    let start = i;
-                    while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] == b'$') { i += 1; }
-                    let ident = &block[start..i];
-                    let after_ident = block[i..].trim_start();
-                    if after_ident.starts_with(':') && !after_ident.starts_with("::") {
-                        let before_start = block[..start].trim_end();
-                        if before_start.ends_with('{') || before_start.ends_with(',')
-                            || before_start.ends_with('\n') { continue; }
-                    }
-                    if top_vars.iter().any(|v| v == ident) && !local_names.contains(&ident.to_string()) {
-                        tracked.insert(ident.to_string());
+    // 2) Top-level `const foo = tick;` / `const foo = setTimeout;` aliases.
+    //    Multi-pass until fixpoint so chains (`const a = setTimeout; const b = a`) resolve.
+    loop {
+        let before = names.len();
+        for stmt in &program.body {
+            let Statement::VariableDeclaration(vd) = stmt else { continue };
+            for d in &vd.declarations {
+                let BindingPattern::BindingIdentifier(local) = &d.id else { continue };
+                let Some(init) = &d.init else { continue };
+                if let Expression::Identifier(src) = init {
+                    if names.contains(src.name.as_str()) {
+                        names.insert(local.name.as_str());
                     }
                 }
-                _ => { i += 1; }
             }
         }
-        tracked
+        if names.len() == before {
+            break;
+        }
+    }
+
+    // 3) Walk all CallExpressions; record span if callee is one of our names.
+    let mut spans = Vec::new();
+    for node in nodes.iter() {
+        let AstKind::CallExpression(ce) = node.kind() else { continue };
+        if let Expression::Identifier(callee) = &ce.callee {
+            if names.contains(callee.name.as_str()) {
+                spans.push(ce.span);
+            }
+        }
+    }
+    spans
+}
+
+// ─── Tracked reference discovery ─────────────────────────────────────────────
+
+/// Names of top-level variables declared in the *module* script only (the
+/// `<script module>` / `<script context="module">` block). These are visible to
+/// the instance script as unresolved references, so we track them by name.
+fn collect_module_top_level_names<'a>(module: Option<&'a Semantic<'a>>) -> FxHashSet<String> {
+    let mut names = FxHashSet::default();
+    let Some(sem) = module else { return names };
+    let scoping = sem.scoping();
+    for sid in scoping.iter_bindings_in(scoping.root_scope_id()) {
+        names.insert(scoping.symbol_name(sid).to_string());
+    }
+    names
+}
+
+/// Names of variables implicitly declared via reactive assignments at the top
+/// level: `$: foo = expr;`. oxc doesn't create a binding for `foo` in that case
+/// (it's a write to an undeclared identifier syntactically), but Svelte treats
+/// `foo` as a reactive variable, and vendor tracks it as top-level.
+fn collect_reactive_declared_names<'a>(semantic: &'a Semantic<'a>) -> FxHashSet<String> {
+    let mut names = FxHashSet::default();
+    let program = semantic.nodes().program();
+    for stmt in &program.body {
+        let Statement::LabeledStatement(ls) = stmt else { continue };
+        if ls.label.name != "$" {
+            continue;
+        }
+        // Direct form: `$: foo = expr` → body is ExpressionStatement(AssignmentExpression)
+        if let Statement::ExpressionStatement(es) = &ls.body {
+            if let Expression::AssignmentExpression(ae) = &es.expression {
+                if let AssignmentTarget::AssignmentTargetIdentifier(id) = &ae.left {
+                    names.insert(id.name.to_string());
+                }
+            }
+        }
+    }
+    names
+}
+
+/// For a given reactive-statement range, collect the sets used for tracking:
+///  - `tracked_symbols`: instance-script top-level symbols whose (resolved)
+///    references appear non-call inside the range.
+///  - `tracked_names_module`: names referencing cross-script (module-script)
+///    top-level vars or `$store` auto-subscriptions. Matched against unresolved
+///    refs both inside the reactive body AND inside recursed helper functions.
+///  - `tracked_names_reactive_all`: reactive-declared names (`$: foo = ...`)
+///    referenced *anywhere* (read or write) in the reactive body. Matched
+///    against unresolved refs inside the reactive body (`is_outer` walk).
+///  - `tracked_names_reactive_read`: subset with at least one NON-WRITE
+///    reference. Matched against unresolved refs inside recursed helpers.
+///    Matches vendor behavior: a write-only reactive-declared name
+///    (like `$: foo = expr;` with no re-read) does NOT propagate through
+///    helper-function recursion.
+fn collect_tracked<'a>(
+    semantic: &'a Semantic<'a>,
+    range: Span,
+    module_top_names: &FxHashSet<String>,
+    reactive_declared_names: &FxHashSet<String>,
+) -> (FxHashSet<SymbolId>, FxHashSet<String>, FxHashSet<String>, FxHashSet<String>) {
+    let scoping = semantic.scoping();
+    let nodes = semantic.nodes();
+    let root_scope = scoping.root_scope_id();
+
+    let mut tracked_symbols = FxHashSet::default();
+    let mut tracked_names_module: FxHashSet<String> = FxHashSet::default();
+    let mut tracked_names_reactive_all: FxHashSet<String> = FxHashSet::default();
+    let mut tracked_names_reactive_read: FxHashSet<String> = FxHashSet::default();
+
+    // (a) Scope-aware tracking of instance-script top-level symbols.
+    for sid in scoping.iter_bindings_in(root_scope) {
+        for reference in scoping.get_resolved_references(sid) {
+            let ref_node_id = reference.node_id();
+            let ref_span = nodes.kind(ref_node_id).span();
+            if ref_span.start < range.start || ref_span.end > range.end {
+                continue;
+            }
+            let parent_kind = nodes.parent_kind(ref_node_id);
+            let is_call_callee = matches!(parent_kind,
+                AstKind::CallExpression(ce) if ce.callee.span() == ref_span);
+            if is_call_callee {
+                continue;
+            }
+            tracked_symbols.insert(sid);
+            break;
+        }
+    }
+
+    let is_write_ref = |id_span: Span, parent: AstKind<'a>| -> bool {
+        match parent {
+            AstKind::AssignmentExpression(ae) => ae.left.span() == id_span,
+            AstKind::UpdateExpression(ue) => ue.argument.span() == id_span,
+            _ => false,
+        }
     };
 
-    let lines: Vec<&str> = block.lines().collect();
-    let mut line_offsets = Vec::new();
-    let mut off = 0usize;
-    for l in &lines { line_offsets.push(off); off += l.len() + 1; }
-
-    let mut reported_funcs: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let s = |p: usize| Span::new(p as u32, p as u32 + 1);
-    let fmsg = |v: &str| format!("Possibly it may occur an infinite reactive loop because this function may update `{}`.", v);
-    const LOOP_MSG: &str = "Possibly it may occur an infinite reactive loop.";
-
-    for (idx, line) in lines.iter().enumerate() {
-        let t = line.trim();
-        if t.is_empty() || t.starts_with("//") { continue; }
-        let is_dollar_line = t.starts_with("$:");
-        let line_byte_start = line_offsets[idx];
-        let in_callback = is_in_async_callback(block, line_byte_start, &all_triggers);
-        let after_await = has_await_on_prev_line(block, line_byte_start);
-        let in_then_catch = is_in_effective_then_catch(&async_callback_regions, line_byte_start);
-        let line_end = line_byte_start + line.len();
-        let line_overlaps_then_catch = async_callback_regions.iter()
-            .any(|&(start, end)| start < line_end && end > line_byte_start);
-        let in_async_ctx = in_callback || after_await || in_then_catch;
-        let line_base = base + block_start + line_offsets[idx] + line.len() - t.len();
-
-        if in_async_ctx && !is_dollar_line {
-            for var in top_vars {
-                if local_names.contains(var) || !tracked_vars.contains(var.as_str()) || !has_assign(t, var) { continue; }
-                ctx.diagnostic(format!("Possibly it may occur an infinite reactive loop because `{}` is updated in an async callback.", var), s(line_base));
+    for node in nodes.iter() {
+        let AstKind::IdentifierReference(id) = node.kind() else { continue };
+        let span = id.span;
+        if span.start < range.start || span.end > range.end {
+            continue;
+        }
+        let parent_kind = nodes.parent_kind(id.node_id.get());
+        let is_call_callee = matches!(parent_kind,
+            AstKind::CallExpression(ce) if ce.callee.span() == span);
+        if is_call_callee {
+            continue;
+        }
+        if scoping.get_reference(id.reference_id()).symbol_id().is_some() {
+            continue;
+        }
+        let name = id.name.as_str();
+        if module_top_names.contains(name) {
+            tracked_names_module.insert(name.to_string());
+        }
+        if reactive_declared_names.contains(name) {
+            tracked_names_reactive_all.insert(name.to_string());
+            if !is_write_ref(span, parent_kind) {
+                tracked_names_reactive_read.insert(name.to_string());
             }
+        }
+        if name.starts_with('$') && name.len() > 1 {
+            let base = &name[1..];
+            if scoping.find_binding(root_scope, Ident::new_const(base)).is_some()
+                || module_top_names.contains(base)
+            {
+                tracked_names_module.insert(name.to_string());
+            }
+        }
+    }
 
-            for fi in func_info {
-                if fi.assigns.is_empty() || local_names.contains(&fi.name) || reported_funcs.contains(&fi.name) { continue; }
-                let call_pat = format!("{}(", fi.name);
-                if !t.contains(&call_pat) { continue; }
-                for av in &fi.assigns {
-                    if tracked_vars.contains(av.as_str()) && block_has_var_ref(block, av) {
-                        ctx.diagnostic(fmsg(av), s(line_base + t.find(&call_pat).unwrap_or(0)));
-                        for (pv, po) in &fi.all_assign_positions {
-                            if pv == av { ctx.diagnostic(LOOP_MSG.to_string(), s(base + po)); }
+    (tracked_symbols, tracked_names_module, tracked_names_reactive_all, tracked_names_reactive_read)
+}
+
+// ─── Reactive-statement walk ────────────────────────────────────────────────
+
+fn check_reactive_statement<'a>(
+    ctx: &mut LintContext<'a>,
+    semantic: &'a Semantic<'a>,
+    content_offset: u32,
+    ls: &'a LabeledStatement<'a>,
+    task_call_spans: &[Span],
+    module_top_names: &FxHashSet<String>,
+    reactive_declared_names: &FxHashSet<String>,
+) {
+    let (tracked_symbols, tracked_names_module, tracked_names_reactive_all, tracked_names_reactive_read) =
+        collect_tracked(semantic, ls.span, module_top_names, reactive_declared_names);
+    if tracked_symbols.is_empty()
+        && tracked_names_module.is_empty()
+        && tracked_names_reactive_all.is_empty()
+    {
+        return;
+    }
+
+    // Pre-compute Promise `.then`/`.catch` callback spans. A "callback" is the
+    // argument function (arrow or function expression) passed to `.then`/`.catch`.
+    let promise_cb_spans = collect_promise_callback_spans(semantic);
+    // Pre-compute LHS spans of `x = await y` style assignments. The LHS is
+    // considered microtask-different (the value being written was computed after
+    // an await boundary).
+    let await_lhs_spans = collect_await_lhs_spans(semantic);
+
+    let mut v = MicrotaskVisitor {
+        ctx,
+        semantic,
+        content_offset,
+        tracked_symbols: &tracked_symbols,
+        tracked_names_module: &tracked_names_module,
+        tracked_names_reactive_all: &tracked_names_reactive_all,
+        tracked_names_reactive_read: &tracked_names_reactive_read,
+        task_call_spans,
+        promise_cb_spans: &promise_cb_spans,
+        await_lhs_spans: &await_lhs_spans,
+        node_stack: Vec::with_capacity(32),
+        frames: vec![FunctionFrame::default()],
+        call_chain: Vec::new(),
+        visited_function_bodies: FxHashSet::default(),
+        is_outer: true,
+        is_same_microtask: true,
+    };
+    v.visit_statement(&ls.body);
+}
+
+/// Spans of function arguments to `.then` / `.catch` calls, i.e. Promise callbacks.
+fn collect_promise_callback_spans<'a>(semantic: &'a Semantic<'a>) -> Vec<Span> {
+    let mut out = Vec::new();
+    for node in semantic.nodes().iter() {
+        let AstKind::CallExpression(ce) = node.kind() else { continue };
+        let Expression::StaticMemberExpression(mem) = &ce.callee else { continue };
+        let prop = mem.property.name.as_str();
+        if prop != "then" && prop != "catch" {
+            continue;
+        }
+        for arg in &ce.arguments {
+            let Some(expr) = arg.as_expression() else { continue };
+            match expr {
+                Expression::ArrowFunctionExpression(a) => out.push(a.span),
+                Expression::FunctionExpression(f) => out.push(f.span),
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// Spans of LHS expressions of `x = await y` / `x.p += await y` / etc. — the value
+/// being assigned was produced after an await, so the LHS-at-write is microtask-different.
+fn collect_await_lhs_spans<'a>(semantic: &'a Semantic<'a>) -> Vec<Span> {
+    let mut out = Vec::new();
+    for node in semantic.nodes().iter() {
+        let AstKind::AssignmentExpression(ae) = node.kind() else { continue };
+        if matches!(&ae.right, Expression::AwaitExpression(_)) {
+            out.push(ae.left.span());
+        }
+    }
+    out
+}
+
+// ─── Visitor ─────────────────────────────────────────────────────────────────
+
+#[derive(Default)]
+struct FunctionFrame {
+    /// Has an AwaitExpression been passed (in document order) inside this function frame?
+    await_seen: bool,
+}
+
+struct MicrotaskVisitor<'a, 'ctx> {
+    ctx: &'ctx mut LintContext<'a>,
+    semantic: &'a Semantic<'a>,
+    content_offset: u32,
+    tracked_symbols: &'ctx FxHashSet<SymbolId>,
+    /// Names matched both in syntactic walks AND recursion (cross-script + stores).
+    tracked_names_module: &'ctx FxHashSet<String>,
+    /// Reactive-declared names (`$: foo = ...`) referenced anywhere in the
+    /// reactive body. Matched against refs inside the reactive body (is_outer).
+    tracked_names_reactive_all: &'ctx FxHashSet<String>,
+    /// Subset of `tracked_names_reactive_all` with at least one non-write ref.
+    /// Matched against refs inside recursed helper functions.
+    tracked_names_reactive_read: &'ctx FxHashSet<String>,
+    task_call_spans: &'ctx [Span],
+    promise_cb_spans: &'ctx [Span],
+    await_lhs_spans: &'ctx [Span],
+    node_stack: Vec<AstKind<'a>>,
+    frames: Vec<FunctionFrame>,
+    /// Ordered list of outer call-callee identifier spans (innermost last). When we
+    /// report an assignment inside a recursively-traversed function, each caller in
+    /// the chain also gets an "unexpectedCall" diagnostic.
+    call_chain: Vec<CallChainEntry<'a>>,
+    visited_function_bodies: FxHashSet<NodeId>,
+    /// True while walking the direct body of the reactive statement (the initial
+    /// traversal). False inside recursed-into function bodies.
+    is_outer: bool,
+    /// Single boolean tracking "is current node in a microtask-different region".
+    /// Flipped on enter/leave of marker nodes (promise callbacks, task-call
+    /// descendants, await-LHS). Mirrors vendor's buggy-but-observed behavior
+    /// where leaving a nested marker restores to true even while still inside an
+    /// outer marker region.
+    is_same_microtask: bool,
+}
+
+struct CallChainEntry<'a> {
+    id: &'a IdentifierReference<'a>,
+}
+
+impl<'a, 'ctx> MicrotaskVisitor<'a, 'ctx> {
+    /// Is the current node positioned such that execution reaches it only after
+    /// a microtask boundary relative to the reactive-statement start?
+    fn is_microtask_different(&self, _span: Span) -> bool {
+        !self.is_same_microtask
+            || self.frames.last().map_or(false, |f| f.await_seen)
+    }
+
+    /// Does `kind` qualify as a "different-microtask boundary marker"? Matches
+    /// vendor's three conditions:
+    ///   1. The node is a promise `.then`/`.catch` callback function.
+    ///   2. The node is strictly inside a task-scheduler call (setTimeout, tick, ...).
+    ///   3. The node's span equals a LHS of `x = await y`.
+    fn is_marker_node(&self, kind: AstKind<'a>) -> bool {
+        let span = kind.span();
+        if self.promise_cb_spans.iter().any(|s| *s == span) {
+            return true;
+        }
+        if self.task_call_spans.iter().any(|s| span.start > s.start && span.end <= s.end) {
+            return true;
+        }
+        if self.await_lhs_spans.iter().any(|s| *s == span) {
+            return true;
+        }
+        false
+    }
+
+    fn parent(&self) -> Option<AstKind<'a>> {
+        let n = self.node_stack.len();
+        if n < 2 {
+            return None;
+        }
+        Some(self.node_stack[n - 2])
+    }
+
+    /// True if any ancestor is an async `FunctionDeclaration` or an async function
+    /// expression assigned to a `VariableDeclarator` (`const f = async () => ...`).
+    /// Awaits inside these don't propagate the microtask-different state outward.
+    fn is_inside_named_async_function(&self) -> bool {
+        for ancestor in self.node_stack.iter().rev() {
+            match ancestor {
+                AstKind::Function(f) if f.is_declaration() && f.r#async => return true,
+                AstKind::VariableDeclarator(vd) => {
+                    if let Some(init) = &vd.init {
+                        match init {
+                            Expression::ArrowFunctionExpression(a) if a.r#async => return true,
+                            Expression::FunctionExpression(f) if f.r#async => return true,
+                            _ => {}
                         }
-                        if after_await {
-                            let (bs, be) = fi.body_range;
-                            if be <= ctx.source.len().saturating_sub(base) {
-                                let body = &ctx.source[base + bs..base + be];
-                                let ap = format!("{} = ", av);
-                                for (pos, _) in body.match_indices(&ap) {
-                                    if is_word_start(body, pos) && !(pos + ap.len() < body.len() && body.as_bytes()[pos + ap.len()] == b'=') {
-                                        ctx.diagnostic(LOOP_MSG.to_string(), s(base + bs + pos));
-                                    }
-                                }
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn report_assignment(&mut self, id_span: Span, var_name: &str) {
+        let abs_start = self.content_offset + id_span.start;
+        let abs_end = self.content_offset + id_span.end;
+        self.ctx.diagnostic(
+            "Possibly it may occur an infinite reactive loop.",
+            Span::new(abs_start, abs_end),
+        );
+        // Also report each caller in the chain.
+        for entry in &self.call_chain {
+            let s = self.content_offset + entry.id.span.start;
+            let e = self.content_offset + entry.id.span.end;
+            self.ctx.diagnostic(
+                format!(
+                    "Possibly it may occur an infinite reactive loop because this function may update `{}`.",
+                    var_name
+                ),
+                Span::new(s, e),
+            );
+        }
+    }
+
+    /// True if this identifier is on the left-hand-side of any assignment
+    /// (direct identifier LHS, or `id.prop = ...` / `id[x] = ...`).
+    fn is_assignment_target(&self, id_span: Span) -> bool {
+        let Some(parent) = self.parent() else { return false };
+        match parent {
+            // Direct: `id = ...`, `id += ...`
+            AstKind::AssignmentExpression(ae) => ae.left.span() == id_span,
+            // `id.prop = ...` or `id[x] = ...`
+            AstKind::StaticMemberExpression(mem) => {
+                if mem.object.span() != id_span {
+                    return false;
+                }
+                self.grandparent_is_assignment_target(mem.span)
+            }
+            AstKind::ComputedMemberExpression(mem) => {
+                if mem.object.span() != id_span {
+                    return false;
+                }
+                self.grandparent_is_assignment_target(mem.span)
+            }
+            AstKind::UpdateExpression(_ue) => true, // id++, --id, etc.
+            _ => false,
+        }
+    }
+
+    fn grandparent_is_assignment_target(&self, member_span: Span) -> bool {
+        let n = self.node_stack.len();
+        if n < 3 {
+            return false;
+        }
+        let gp = self.node_stack[n - 3];
+        match gp {
+            AstKind::AssignmentExpression(ae) => ae.left.span() == member_span,
+            AstKind::UpdateExpression(_) => true,
+            _ => false,
+        }
+    }
+
+    /// Given a reference identifier at a call callee position, try to resolve it
+    /// to a top-level function declaration/expression body and return its Statement.
+    fn resolve_call_body(&self, id: &'a IdentifierReference<'a>) -> Option<CallableBody<'a>> {
+        let scoping = self.semantic.scoping();
+        let nodes = self.semantic.nodes();
+        let symbol_id = scoping.get_reference(id.reference_id()).symbol_id()?;
+        let decl_node_id = scoping.symbol_declaration(symbol_id);
+        // Walk ancestors to find the nearest FunctionDeclaration or VariableDeclarator.
+        for ancestor_id in std::iter::once(decl_node_id).chain(nodes.ancestor_ids(decl_node_id)) {
+            match nodes.kind(ancestor_id) {
+                AstKind::Function(func) if func.is_declaration() => {
+                    let body = func.body.as_ref()?;
+                    return Some(CallableBody { node_id: ancestor_id, body: CallableBodyKind::Block(body) });
+                }
+                AstKind::VariableDeclarator(vd) => {
+                    let init = vd.init.as_ref()?;
+                    return match init {
+                        Expression::ArrowFunctionExpression(arr) => Some(CallableBody {
+                            node_id: ancestor_id,
+                            body: CallableBodyKind::Function(&arr.body),
+                        }),
+                        Expression::FunctionExpression(f) => f.body.as_ref().map(|b| CallableBody {
+                            node_id: ancestor_id,
+                            body: CallableBodyKind::Block(b),
+                        }),
+                        _ => None,
+                    };
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn recurse_into_function(&mut self, callee_id: &'a IdentifierReference<'a>, body: CallableBody<'a>) {
+        if !self.visited_function_bodies.insert(body.node_id) {
+            return;
+        }
+        // Carry over microtask-different state from the call site. If the call
+        // itself is after an `await`, inside `setTimeout(...)`, etc., the called
+        // function's body inherits that — anything it assigns is microtask-different
+        // relative to the reactive statement.
+        let carry_await = self.is_microtask_different(callee_id.span);
+        self.call_chain.push(CallChainEntry { id: callee_id });
+        let saved_outer = self.is_outer;
+        let saved_is_same = self.is_same_microtask;
+        self.is_outer = false;
+        // Fresh marker state inside the recursed body.
+        self.is_same_microtask = true;
+        self.frames.push(FunctionFrame { await_seen: carry_await });
+        let saved_stack_len = self.node_stack.len();
+
+        match body.body {
+            CallableBodyKind::Block(b) => self.visit_function_body(b),
+            CallableBodyKind::Function(fb) => self.visit_function_body(fb),
+        }
+
+        // Restore — truncate stack in case any visit_* method left dangling pushes (shouldn't).
+        self.node_stack.truncate(saved_stack_len);
+        self.frames.pop();
+        self.is_outer = saved_outer;
+        self.is_same_microtask = saved_is_same;
+        self.call_chain.pop();
+        // Note: intentionally do NOT remove from visited_function_bodies. Within
+        // one reactive statement's traversal, each function body is analyzed at
+        // most once — matches vendor behavior and prevents duplicate reports when
+        // the same function is called multiple times.
+    }
+}
+
+struct CallableBody<'a> {
+    node_id: NodeId,
+    body: CallableBodyKind<'a>,
+}
+
+enum CallableBodyKind<'a> {
+    Block(&'a FunctionBody<'a>),
+    Function(&'a FunctionBody<'a>),
+}
+
+impl<'a, 'ctx> Visit<'a> for MicrotaskVisitor<'a, 'ctx> {
+    fn enter_node(&mut self, kind: AstKind<'a>) {
+        self.node_stack.push(kind);
+
+        // If entering a microtask-boundary marker node, flip state.
+        if self.is_marker_node(kind) {
+            self.is_same_microtask = false;
+        }
+
+        // Note: we deliberately do NOT push a new function frame on entry into
+        // inline function expressions. The vendor walks the reactive-statement
+        // body with a single `isSameMicroTask` flag that persists across inline
+        // function boundaries (so an `await` inside an inline arrow still marks
+        // subsequent sibling statements as microtask-different). We only push a
+        // fresh frame when we *recurse* into an externally-called function body
+        // via `recurse_into_function`.
+
+        // Check identifier references for:
+        //   a) tracked assignment target → report
+        //   b) call callee → recurse into callee's body
+        if let AstKind::IdentifierReference(id) = kind {
+            let id_span = id.span;
+            let name = id.name.as_str();
+            let scoping = self.semantic.scoping();
+
+            // (a) Tracked assignment target under a microtask-different context?
+            //     Scope-aware: prefer symbol-id resolution; fall back to name match
+            //     only for UNRESOLVED refs (cross-script / stores / reactive-declared).
+            //     Reactive-declared names match in recursion ONLY if they had a
+            //     non-write reference in the reactive body.
+            if self.is_microtask_different(id_span) && self.is_assignment_target(id_span) {
+                let symbol_id = scoping.get_reference(id.reference_id()).symbol_id();
+                let matched = match symbol_id {
+                    Some(s) => self.tracked_symbols.contains(&s),
+                    None => {
+                        self.tracked_names_module.contains(name)
+                            || if self.is_outer {
+                                self.tracked_names_reactive_all.contains(name)
+                            } else {
+                                self.tracked_names_reactive_read.contains(name)
                             }
-                        }
-                        reported_funcs.insert(fi.name.clone());
-                        break;
                     }
-                }
-            }
-        }
-
-        if !in_async_ctx {
-            for fi in func_info {
-                if !fi.has_await && !fi.has_then_catch_assigns { continue; }
-                if fi.assigns_after_await.is_empty() || local_names.contains(&fi.name) || reported_funcs.contains(&fi.name) { continue; }
-                let call_pat = format!("{}(", fi.name);
-                if !t.contains(&call_pat) { continue; }
-                if let Some(cp) = t.find(&call_pat) {
-                    if !is_word_start(t, cp) { continue; }
-                }
-                for (pos_var, pos_offset) in &fi.assign_positions_after_await {
-                    if tracked_vars.contains(pos_var.as_str()) && block_has_var_ref(block, pos_var) {
-                        ctx.diagnostic(fmsg(pos_var), s(line_base + t.find(&call_pat).unwrap_or(0)));
-                        ctx.diagnostic(format!("Possibly it may occur an infinite reactive loop because `{}` is updated here.", pos_var), s(base + pos_offset));
-                        report_intermediate_calls(ctx, fi, func_info, pos_var, base);
-                    }
-                }
-                reported_funcs.insert(fi.name.clone());
-            }
-        }
-
-        if !in_async_ctx && line_overlaps_then_catch {
-            for var in top_vars {
-                if local_names.contains(var) || !has_assign(t, var) { continue; }
-                if let Some(assign_pos) = find_assign_pos(t, var) {
-                    let abs_in_block = line_byte_start + line.len() - t.len() + assign_pos;
-                    if is_in_effective_then_catch(&async_callback_regions, abs_in_block) {
-                        ctx.diagnostic(LOOP_MSG.to_string(), s(base + block_start + abs_in_block));
-                    }
-                }
-            }
-        }
-
-        if t.contains("await ") {
-            for fi in func_info {
-                if fi.assigns.is_empty() || local_names.contains(&fi.name) { continue; }
-                if !t.contains(&format!("await {}(", fi.name)) { continue; }
-                for av in &fi.assigns {
-                    if block_reads_var(block, av) {
-                        ctx.diagnostic(fmsg(av), s(line_base + t.find(&format!("{}(", fi.name)).unwrap_or(0)));
-                        break;
-                    }
+                };
+                if matched {
+                    self.report_assignment(id_span, name);
                 }
             }
 
-            if !in_async_ctx {
-                for var in top_vars {
-                    if local_names.contains(var) || !has_assign(t, var) { continue; }
-                    if let Some(assign_pos) = find_assign_pos(t, var) {
-                        if let Some(await_pos) = t.find("await ") {
-                            if assign_pos < await_pos || (assign_pos > await_pos && t[await_pos..assign_pos].contains(',')) {
-                                ctx.diagnostic(format!("Possibly it may occur an infinite reactive loop because `{}` is updated across an await boundary.", var), s(line_base + assign_pos));
-                            }
-                        }
-                    }
+            // (b) Call callee → recurse. Only for direct `foo(...)` where this id is the callee.
+            let parent = self.parent();
+            let is_call_callee = matches!(parent,
+                Some(AstKind::CallExpression(ce)) if ce.callee.span() == id_span);
+            if is_call_callee {
+                if let Some(body) = self.resolve_call_body(id) {
+                    self.recurse_into_function(id, body);
                 }
             }
         }
     }
+
+    fn leave_node(&mut self, kind: AstKind<'a>) {
+        // Update await-seen on the current frame — but only if the await is not
+        // inside a nested *named* async function (one assigned to a variable or a
+        // FunctionDeclaration). Awaits in those don't leak out because the
+        // function may never actually be called; matches vendor's
+        // `isInsideOfFunction` check.
+        if matches!(kind, AstKind::AwaitExpression(_)) && !self.is_inside_named_async_function() {
+            if let Some(top) = self.frames.last_mut() {
+                top.await_seen = true;
+            }
+        }
+        // Leaving a marker node restores microtask state — matches vendor's
+        // buggy restore: `isSameMicroTask = true` even if still inside an
+        // outer marker region.
+        if self.is_marker_node(kind) {
+            self.is_same_microtask = true;
+        }
+        self.node_stack.pop();
+    }
 }
+
