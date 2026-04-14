@@ -1,6 +1,9 @@
 //! `svelte/require-stores-init` — require store variables to be initialized.
 
-use crate::linter::{parse_imports, LintContext, Rule};
+use crate::linter::{LintContext, Rule};
+use oxc::ast::ast::{Argument, Expression, ImportDeclarationSpecifier, ModuleExportName, Statement};
+use oxc::ast::AstKind;
+use oxc::span::Span;
 
 pub struct RequireStoresInit;
 
@@ -9,63 +12,70 @@ impl Rule for RequireStoresInit {
         "svelte/require-stores-init"
     }
 
-    fn applies_to_scripts(&self) -> bool { true }
+    fn applies_to_scripts(&self) -> bool {
+        true
+    }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let Some(script) = &ctx.ast.instance else { return };
-        let content = &script.content;
-        let imports = parse_imports(content);
-        let factories: Vec<(String, &str)> = imports.iter()
-            .filter(|(_, imp, m)| m == "svelte/store" && matches!(imp.as_str(), "writable" | "readable" | "derived"))
-            .map(|(local, imp, _)| (local.clone(), imp.as_str())).collect();
-        if factories.is_empty() { return; }
+        let Some(semantic) = ctx.instance_semantic else { return };
+        let content_offset = ctx.instance_content_offset;
 
-        let base = script.span.start as usize;
-        let gt = ctx.source[base..script.span.end as usize].find('>').unwrap_or(0);
-
-        for (local_name, factory) in &factories {
-            let pattern = format!("{}(", local_name);
-            let mut search_from = 0;
-            while let Some(pos) = content[search_from..].find(&pattern) {
-                let abs = search_from + pos;
-                if abs > 0 && { let p = content.as_bytes()[abs - 1]; p.is_ascii_alphanumeric() || p == b'_' } {
-                    search_from = abs + pattern.len(); continue;
+        // Resolve imports of `writable`/`readable`/`derived` from `svelte/store`.
+        // Value: the factory's original name.
+        let mut factories: Vec<(String, &'static str)> = Vec::new();
+        let program = semantic.nodes().program();
+        for stmt in &program.body {
+            let Statement::ImportDeclaration(imp) = stmt else { continue };
+            if imp.source.value != "svelte/store" {
+                continue;
+            }
+            let Some(specifiers) = &imp.specifiers else { continue };
+            for spec in specifiers {
+                if let ImportDeclarationSpecifier::ImportSpecifier(s) = spec {
+                    let imported = match &s.imported {
+                        ModuleExportName::IdentifierName(n) => n.name.as_str(),
+                        ModuleExportName::IdentifierReference(n) => n.name.as_str(),
+                        ModuleExportName::StringLiteral(l) => l.value.as_str(),
+                    };
+                    let original: &'static str = match imported {
+                        "writable" => "writable",
+                        "readable" => "readable",
+                        "derived" => "derived",
+                        _ => continue,
+                    };
+                    factories.push((s.local.name.to_string(), original));
                 }
-                let call_start = abs + pattern.len();
-                let mut depth = 1i32;
-                let mut arg_end = call_start;
-                for (i, ch) in content[call_start..].char_indices() {
-                    match ch {
-                        '(' => depth += 1,
-                        ')' => { depth -= 1; if depth == 0 { arg_end = call_start + i; break; } }
-                        _ => {}
-                    }
-                }
-                let args = content[call_start..arg_end].trim();
-                if args.starts_with("...") { search_from = abs + pattern.len(); continue; }
+            }
+        }
+        if factories.is_empty() {
+            return;
+        }
 
-                let should_report = if *factory == "derived" {
-                    args.is_empty() || {
-                        let mut commas = 0usize;
-                        let mut d = 0i32;
-                        for ch in args.chars() {
-                            match ch {
-                                '(' | '[' | '{' => d += 1,
-                                ')' | ']' | '}' if d > 0 => d -= 1,
-                                ',' if d == 0 => commas += 1,
-                                _ => {}
-                            }
-                        }
-                        commas < 2
-                    }
-                } else { args.is_empty() };
+        for node in semantic.nodes().iter() {
+            let AstKind::CallExpression(ce) = node.kind() else { continue };
+            let Expression::Identifier(callee) = &ce.callee else { continue };
+            let Some((_, factory)) = factories.iter().find(|(local, _)| local == callee.name.as_str()) else { continue };
 
-                if should_report {
-                    let source_pos = base + gt + 1 + abs;
-                    ctx.diagnostic("Always set a default value for svelte stores.",
-                        oxc::span::Span::new(source_pos as u32, (base + gt + 1 + arg_end + 1) as u32));
-                }
-                search_from = abs + pattern.len();
+            // Spread-only first argument disqualifies the check (we can't reason).
+            if let Some(Argument::SpreadElement(_)) = ce.arguments.first().map(|a| &*a) {
+                continue;
+            }
+
+            let should_report = if *factory == "derived" {
+                // `derived` requires at LEAST 3 args (stores, fn, initial). Vendor
+                // flags calls with < 2 args.
+                ce.arguments.is_empty() || ce.arguments.len() < 2
+            } else {
+                ce.arguments.is_empty()
+            };
+
+            if should_report {
+                let s = content_offset + ce.span.start;
+                let e = content_offset + ce.span.end;
+                ctx.diagnostic(
+                    "Always set a default value for svelte stores.",
+                    Span::new(s, e),
+                );
             }
         }
     }
