@@ -3,6 +3,10 @@
 //! ⭐ Recommended
 
 use crate::linter::{LintContext, Rule};
+use oxc::ast::ast::{
+    BindingPattern, Declaration, Expression, ExportNamedDeclaration,
+    Statement, VariableDeclarationKind,
+};
 use oxc::span::Span;
 
 const VALID_KIT_PROPS: &[&str] = &["data", "errors", "form", "params", "snapshot"];
@@ -27,7 +31,10 @@ impl Rule for ValidPropNamesInKitPages {
         if fname != "+page.svelte" && fname != "+layout.svelte" && fname != "+error.svelte" {
             return;
         }
-        if let Some(routes_dir) = ctx.config.settings.as_ref()
+        if let Some(routes_dir) = ctx
+            .config
+            .settings
+            .as_ref()
             .and_then(|s| s.get("svelte"))
             .and_then(|s| s.get("kit"))
             .and_then(|s| s.get("files"))
@@ -39,89 +46,101 @@ impl Rule for ValidPropNamesInKitPages {
             }
         }
 
-        if let Some(script) = &ctx.ast.instance {
-            let content = &script.content;
-            let tag_text = &ctx.source[script.span.start as usize..script.span.end as usize];
-            let gt = tag_text.find('>').unwrap_or(0);
-            let base = script.span.start as usize + gt + 1;
+        let Some(semantic) = ctx.instance_semantic else { return };
+        let content_offset = ctx.instance_content_offset;
 
-            for (offset, _) in content.match_indices("export let ") {
-                let rest = &content[offset + "export let ".len()..];
-
-                if rest.starts_with('{') {
-                    if let Some(close) = rest.find('}') {
-                        let inner = &rest[1..close];
-                        let inner_base = base + offset + "export let ".len() + 1;
-                        check_destructured_props(inner, inner_base, VALID_KIT_PROPS, ctx);
-                    }
-                } else {
-                    let var_end = rest.find(|c: char| !c.is_ascii_alphanumeric() && c != '_').unwrap_or(rest.len());
-                    if var_end == 0 { continue; }
-                    let prop_name = &rest[..var_end];
-                    if !VALID_KIT_PROPS.contains(&prop_name) {
-                        let start = (base + offset) as u32;
-                        ctx.diagnostic("disallow props other than data or errors in SvelteKit page components.".to_string(),
-                            Span::new(start, (start + "export let ".len() as u32 + var_end as u32)));
+        for stmt in &semantic.nodes().program().body {
+            match stmt {
+                // `export let name;` / `export let name = init;` — Svelte 3/4 props.
+                Statement::ExportNamedDeclaration(exp) => {
+                    check_export_named(ctx, content_offset, exp);
+                }
+                // `let { ... } = $props();` — Svelte 5 props.
+                Statement::VariableDeclaration(vd) if vd.kind == VariableDeclarationKind::Let => {
+                    for d in &vd.declarations {
+                        let is_props_call = d.init.as_ref().map_or(false, |init| match init {
+                            Expression::CallExpression(ce) => matches!(
+                                &ce.callee,
+                                Expression::Identifier(id) if id.name == "$props"
+                            ),
+                            _ => false,
+                        });
+                        if is_props_call {
+                            report_pattern_names(ctx, content_offset, &d.id, VALID_KIT_PROPS_SVELTE5);
+                        }
                     }
                 }
-            }
-
-            for (offset, _) in content.match_indices("$props()") {
-                let before = &content[..offset];
-                if let Some(brace_pos) = rfind_let_brace(before) {
-                    let after_brace = &content[brace_pos + 1..];
-                    if let Some(close) = after_brace.find('}') {
-                        let inner = &after_brace[..close];
-                        let inner_base = base + brace_pos + 1;
-                        check_destructured_props(inner, inner_base, VALID_KIT_PROPS_SVELTE5, ctx);
-                    }
-                }
+                _ => {}
             }
         }
     }
 }
 
-fn rfind_let_brace(s: &str) -> Option<usize> {
-    let mut pos = s.len();
-    while let Some(p) = s[..pos].rfind('{') {
-        if s[..p].trim_end().ends_with("let") { return Some(p); }
-        pos = p;
-    }
-    None
-}
-
-fn check_destructured_props(
-    inner: &str,
-    inner_base: usize,
-    valid_props: &[&str],
+fn check_export_named<'a>(
     ctx: &mut LintContext<'_>,
+    content_offset: u32,
+    exp: &'a ExportNamedDeclaration<'a>,
 ) {
-    let mut pos = 0;
-    for token in inner.split(',') {
-        let token_trimmed = token.trim();
-        if token_trimmed.is_empty() {
-            pos += token.len() + 1;
-            continue;
-        }
-
-        let name_part = if token_trimmed.starts_with("...") {
-            &token_trimmed[3..]
-        } else {
-            token_trimmed.split(':').next().unwrap_or(token_trimmed).trim()
-        };
-
-        let prop_name = name_part.split('=').next().unwrap_or(name_part).trim();
-
-        if !prop_name.is_empty() && !valid_props.contains(&prop_name) {
-            let leading_ws = token.len() - token.trim_start().len();
-            let name_offset_in_trimmed = token_trimmed.find(prop_name).unwrap_or(0);
-            let byte_offset = inner_base + pos + leading_ws + name_offset_in_trimmed;
-            let start = byte_offset as u32;
-            let end = (byte_offset + prop_name.len()) as u32;
-            ctx.diagnostic("disallow props other than data or errors in SvelteKit page components.".to_string(),
-                Span::new(start, end));
-        }
-
-        pos += token.len() + 1; // +1 for the comma separator
+    let Some(decl) = &exp.declaration else { return };
+    let Declaration::VariableDeclaration(vd) = decl else { return };
+    if !matches!(vd.kind, VariableDeclarationKind::Let | VariableDeclarationKind::Var) {
+        return;
+    }
+    for d in &vd.declarations {
+        report_pattern_names(ctx, content_offset, &d.id, VALID_KIT_PROPS);
     }
 }
+
+fn report_pattern_names<'a>(
+    ctx: &mut LintContext<'_>,
+    content_offset: u32,
+    pat: &BindingPattern<'a>,
+    valid: &[&str],
+) {
+    match pat {
+        BindingPattern::BindingIdentifier(id) => {
+            if !valid.contains(&id.name.as_str()) {
+                report(ctx, content_offset, id.name.as_str(), id.span);
+            }
+        }
+        BindingPattern::ObjectPattern(obj) => {
+            for prop in &obj.properties {
+                let key_name = match &prop.key {
+                    oxc::ast::ast::PropertyKey::StaticIdentifier(id) => id.name.as_str(),
+                    oxc::ast::ast::PropertyKey::StringLiteral(l) => l.value.as_str(),
+                    _ => continue,
+                };
+                if !valid.contains(&key_name) {
+                    report(ctx, content_offset, key_name, prop.key.span());
+                }
+            }
+            if let Some(rest) = &obj.rest {
+                if let BindingPattern::BindingIdentifier(id) = &rest.argument {
+                    if !valid.contains(&id.name.as_str()) {
+                        report(ctx, content_offset, id.name.as_str(), id.span);
+                    }
+                }
+            }
+        }
+        BindingPattern::ArrayPattern(_) => {
+            // Array destructuring of $props is invalid anyway; skip.
+        }
+        BindingPattern::AssignmentPattern(inner) => {
+            // `{ custom = 'default' }` — walk into the left-hand pattern.
+            report_pattern_names(ctx, content_offset, &inner.left, valid);
+        }
+    }
+}
+
+fn report(ctx: &mut LintContext<'_>, content_offset: u32, _name: &str, span: Span) {
+    let s = content_offset + span.start;
+    let e = content_offset + span.end;
+    ctx.diagnostic(
+        "disallow props other than data or errors in SvelteKit page components.",
+        Span::new(s, e),
+    );
+}
+
+// We accidentally introduced `BindingPatternKind` via oxc's re-export path;
+// if it disappears, this import needs updating.
+use oxc::span::GetSpan;
