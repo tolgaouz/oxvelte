@@ -1,30 +1,17 @@
 //! `svelte/prefer-const` — require `const` declarations for variables that are never reassigned.
 //! 🔧 Fixable
 //!
-//! Uses `oxc_semantic` for proper scope-based analysis. Parses each script block
-//! with `oxc::parser::Parser`, builds semantic information with `SemanticBuilder`,
-//! then iterates symbols to find `let` declarations that are never reassigned.
-//! Declarations initialized with excluded runes (`$props`, `$derived` by default)
-//! are skipped.
+//! Uses the shared `oxc_semantic` model exposed on `LintContext`. Iterates
+//! block-scoped symbols (`let` bindings), flags the ones with no write
+//! references. Declarations initialized with an excluded rune (`$props`,
+//! `$derived` by default) are kept skipped.
 
 use crate::linter::{LintContext, Rule};
-use oxc::span::{GetSpan, Span};
+use oxc::ast::AstKind;
+use oxc::ast::ast::Expression;
+use oxc::span::Span;
 
 pub struct PreferConst;
-
-fn extract_rune_name(init: &str) -> Option<&str> {
-    let init = init.trim();
-    if !init.starts_with('$') {
-        return None;
-    }
-    let end = init.find(|c: char| c == '(' || c == '.').unwrap_or(init.len());
-    let name = &init[..end];
-    if name.len() > 1 && name[1..].chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        Some(name)
-    } else {
-        None
-    }
-}
 
 impl Rule for PreferConst {
     fn name(&self) -> &'static str {
@@ -36,12 +23,6 @@ impl Rule for PreferConst {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        use oxc::allocator::Allocator;
-        use oxc::ast::AstKind;
-        use oxc::parser::Parser;
-        use oxc::semantic::SemanticBuilder;
-        use oxc::span::SourceType;
-
         let excluded_runes: Vec<String> = ctx.config.options.as_ref()
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first())
@@ -50,28 +31,16 @@ impl Rule for PreferConst {
             .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
             .unwrap_or_else(|| vec!["$props".into(), "$derived".into()]);
 
-        let script = match &ctx.ast.instance {
-            Some(s) if !s.content.trim().is_empty() => s,
-            _ => return,
-        };
-        let content = &script.content;
-        let tag_text = &ctx.source[script.span.start as usize..script.span.end as usize];
-        let content_offset = script.span.start as usize + tag_text.find('>').unwrap_or(0) + 1;
-        let is_ts = matches!(script.lang.as_deref(), Some("ts" | "typescript"));
-
-        let alloc = Allocator::default();
-        let source_type = if is_ts { SourceType::ts() } else { SourceType::mjs() };
-        let parse_result = Parser::new(&alloc, content, source_type).parse();
-        if !parse_result.errors.is_empty() { return; }
-
-        let semantic = SemanticBuilder::new().build(&parse_result.program).semantic;
+        let Some(semantic) = ctx.instance_semantic else { return };
+        let content_offset = ctx.instance_content_offset;
         let scoping = semantic.scoping();
         let nodes = semantic.nodes();
 
         for symbol_id in scoping.symbol_ids() {
             let flags = scoping.symbol_flags(symbol_id);
             if !flags.intersects(oxc::semantic::SymbolFlags::BlockScopedVariable)
-                || flags.intersects(oxc::semantic::SymbolFlags::ConstVariable) {
+                || flags.intersects(oxc::semantic::SymbolFlags::ConstVariable)
+            {
                 continue;
             }
             if scoping.get_resolved_references(symbol_id).any(|r| r.is_write()) {
@@ -86,16 +55,48 @@ impl Rule for PreferConst {
                     _ => None,
                 })
                 .and_then(|d| d.init.as_ref())
-                .and_then(|init| content.get(init.span().start as usize..init.span().end as usize))
-                .and_then(extract_rune_name)
+                .and_then(|init| rune_name(init))
                 .map_or(false, |rune| excluded_runes.iter().any(|r| r == rune));
-            if is_excluded { continue; }
+            if is_excluded {
+                continue;
+            }
 
             let symbol_span = scoping.symbol_span(symbol_id);
-            let abs_start = content_offset + symbol_span.start as usize;
-            let abs_end = content_offset + symbol_span.end as usize;
-            ctx.diagnostic(format!("'{}' is never reassigned. Use 'const' instead.", scoping.symbol_name(symbol_id)),
-                Span::new(abs_start as u32, abs_end as u32));
+            let abs_start = content_offset + symbol_span.start;
+            let abs_end = content_offset + symbol_span.end;
+            ctx.diagnostic(
+                format!("'{}' is never reassigned. Use 'const' instead.", scoping.symbol_name(symbol_id)),
+                Span::new(abs_start, abs_end),
+            );
         }
+    }
+}
+
+/// For expressions like `$state(...)`, `$props()`, `$derived(...)`, or the
+/// shorthand `$derived` / `$props.id` accesses, return the leading `$foo` name.
+fn rune_name<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
+    match expr {
+        Expression::CallExpression(ce) => match &ce.callee {
+            Expression::Identifier(id) if id.name.starts_with('$') => Some(id.name.as_str()),
+            Expression::StaticMemberExpression(mem) => {
+                if let Expression::Identifier(id) = &mem.object {
+                    if id.name.starts_with('$') {
+                        return Some(id.name.as_str());
+                    }
+                }
+                None
+            }
+            _ => None,
+        },
+        Expression::Identifier(id) if id.name.starts_with('$') => Some(id.name.as_str()),
+        Expression::StaticMemberExpression(mem) => {
+            if let Expression::Identifier(id) = &mem.object {
+                if id.name.starts_with('$') {
+                    return Some(id.name.as_str());
+                }
+            }
+            None
+        }
+        _ => None,
     }
 }
