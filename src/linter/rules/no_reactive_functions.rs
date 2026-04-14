@@ -2,6 +2,8 @@
 //! ⭐ Recommended 💡
 
 use crate::linter::{LintContext, Rule};
+use oxc::ast::ast::{Expression, Statement};
+use oxc::span::Span;
 
 pub struct NoReactiveFunctions;
 
@@ -15,60 +17,30 @@ impl Rule for NoReactiveFunctions {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let Some(script) = &ctx.ast.instance else { return };
-        let content = &script.content;
-        let base = script.span.start as usize;
-        let gt = ctx.source[base..script.span.end as usize].find('>').unwrap_or(0);
+        let Some(semantic) = ctx.instance_semantic else { return };
+        let content_offset = ctx.instance_content_offset;
 
-        let mut search_from = 0;
-        while let Some(pos) = content[search_from..].find("$:") {
-            let abs = search_from + pos;
-            let after = content[abs + 2..].trim_start();
-            if let Some(eq_pos) = after.find('=') {
-                let var_part = after[..eq_pos].trim();
-                if !var_part.is_empty()
-                    && var_part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '$')
-                    && after.as_bytes().get(eq_pos + 1) != Some(&b'=')
-                {
-                    let rhs = after[eq_pos + 1..].trim_start();
-                    if rhs.starts_with("() =>") || is_arrow_function(rhs)
-                        || rhs.starts_with("function ") || rhs.starts_with("function(") {
-                        let sp = base + gt + 1 + abs;
-                        ctx.diagnostic("Do not create functions inside reactive statements unless absolutely necessary.",
-                            oxc::span::Span::new(sp as u32, (sp + 2) as u32));
-                    }
-                }
+        for stmt in &semantic.nodes().program().body {
+            let Statement::LabeledStatement(ls) = stmt else { continue };
+            if ls.label.name != "$" {
+                continue;
             }
-            search_from = abs + 2;
+            // `$: name = <function expression>`
+            let Statement::ExpressionStatement(es) = &ls.body else { continue };
+            let Expression::AssignmentExpression(ae) = &es.expression else { continue };
+            let is_fn = matches!(
+                &ae.right,
+                Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_)
+            );
+            if !is_fn {
+                continue;
+            }
+            let s = content_offset + ls.label.span.start;
+            let e = content_offset + ls.label.span.end + 1; // include `:`
+            ctx.diagnostic(
+                "Do not create functions inside reactive statements unless absolutely necessary.",
+                Span::new(s, e),
+            );
         }
     }
-}
-
-fn is_arrow_function(rhs: &str) -> bool {
-    if !rhs.starts_with('(') { return false; }
-    let bytes = rhs.as_bytes();
-    let (mut depth, mut i) = (0i32, 0);
-    while i < bytes.len() {
-        match bytes[i] {
-            b'(' => depth += 1,
-            b')' => {
-                depth -= 1;
-                if depth == 0 {
-                    let rest = rhs[i + 1..].trim_start();
-                    return rest.starts_with("=>") || (rest.starts_with(':') && rest.contains("=>"));
-                }
-            }
-            b'\'' | b'"' | b'`' => {
-                let q = bytes[i];
-                i += 1;
-                while i < bytes.len() && bytes[i] != q {
-                    if bytes[i] == b'\\' { i += 1; }
-                    i += 1;
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    false
 }
