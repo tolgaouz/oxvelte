@@ -1,7 +1,10 @@
 //! `svelte/require-event-dispatcher-types` — require type parameters for createEventDispatcher.
 //! ⭐ Recommended
 
-use crate::linter::{parse_imports, LintContext, Rule};
+use crate::linter::{LintContext, Rule};
+use oxc::ast::ast::{Expression, ImportDeclarationSpecifier, ModuleExportName, Statement};
+use oxc::ast::AstKind;
+use oxc::span::Span;
 
 pub struct RequireEventDispatcherTypes;
 
@@ -19,30 +22,79 @@ impl Rule for RequireEventDispatcherTypes {
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         let Some(script) = &ctx.ast.instance else { return };
-        if script.lang.as_deref() != Some("ts") { return; }
-        let content = &script.content;
-        if content.contains("$props()") { return; }
-        let imports = parse_imports(content);
-        let names: Vec<String> = imports.iter()
-            .filter(|(_, imp, m)| (imp == "createEventDispatcher" || imp == "*") && m == "svelte")
-            .map(|(l, imp, _)| if imp == "*" { format!("{}.createEventDispatcher", l) } else { l.clone() })
-            .collect();
-        if names.is_empty() { return; }
-        let base = script.span.start as usize;
-        let gt = ctx.source[base..script.span.end as usize].find('>').unwrap_or(0);
+        if script.lang.as_deref() != Some("ts") {
+            return;
+        }
+        let Some(semantic) = ctx.instance_semantic else { return };
 
-        for name in &names {
-            let pat = format!("{}()", name);
-            let mut from = 0;
-            while let Some(pos) = content[from..].find(&pat) {
-                let abs = from + pos;
-                if !content[..abs + name.len()].ends_with('>') {
-                    let sp = base + gt + 1 + abs;
-                    ctx.diagnostic("Type parameters missing for the `createEventDispatcher` function call.",
-                        oxc::span::Span::new(sp as u32, (sp + pat.len()) as u32));
+        // Fast bail: if the script uses `$props()`, it's Svelte-5-style.
+        if script.content.contains("$props()") {
+            return;
+        }
+
+        // Collect local names bound to `createEventDispatcher` from `svelte`.
+        let mut names: Vec<String> = Vec::new();
+        let program = semantic.nodes().program();
+        for stmt in &program.body {
+            let Statement::ImportDeclaration(imp) = stmt else { continue };
+            if imp.source.value != "svelte" {
+                continue;
+            }
+            let Some(specifiers) = &imp.specifiers else { continue };
+            for spec in specifiers {
+                match spec {
+                    ImportDeclarationSpecifier::ImportSpecifier(s) => {
+                        let imported = match &s.imported {
+                            ModuleExportName::IdentifierName(n) => n.name.as_str(),
+                            ModuleExportName::IdentifierReference(n) => n.name.as_str(),
+                            ModuleExportName::StringLiteral(l) => l.value.as_str(),
+                        };
+                        if imported == "createEventDispatcher" {
+                            names.push(s.local.name.to_string());
+                        }
+                    }
+                    ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => {
+                        names.push(format!("{}.createEventDispatcher", s.local.name));
+                    }
+                    _ => {}
                 }
-                from = abs + pat.len();
             }
         }
+        if names.is_empty() {
+            return;
+        }
+
+        let content_offset = ctx.instance_content_offset;
+        for node in semantic.nodes().iter() {
+            let AstKind::CallExpression(ce) = node.kind() else { continue };
+            // Missing type parameters → `.type_arguments` is None.
+            if ce.type_arguments.is_some() {
+                continue;
+            }
+            let Some(callee_text) = callee_static_name(&ce.callee) else { continue };
+            if !names.iter().any(|n| n == &callee_text) {
+                continue;
+            }
+            let s = content_offset + ce.span.start;
+            let e = content_offset + ce.span.end;
+            ctx.diagnostic(
+                "Type parameters missing for the `createEventDispatcher` function call.",
+                Span::new(s, e),
+            );
+        }
+    }
+}
+
+fn callee_static_name(callee: &Expression<'_>) -> Option<String> {
+    match callee {
+        Expression::Identifier(id) => Some(id.name.to_string()),
+        Expression::StaticMemberExpression(mem) => {
+            if let Expression::Identifier(id) = &mem.object {
+                Some(format!("{}.{}", id.name, mem.property.name))
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
 }
