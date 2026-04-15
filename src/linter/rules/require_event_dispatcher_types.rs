@@ -27,11 +27,6 @@ impl Rule for RequireEventDispatcherTypes {
         }
         let Some(semantic) = ctx.instance_semantic else { return };
 
-        // Fast bail: if the script uses `$props()`, it's Svelte-5-style.
-        if script.content.contains("$props()") {
-            return;
-        }
-
         // Collect local names bound to `createEventDispatcher` from `svelte`.
         let mut names: Vec<String> = Vec::new();
         let program = semantic.nodes().program();
