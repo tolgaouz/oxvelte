@@ -19,7 +19,6 @@ impl Rule for RequireEventPrefix {
         if !matches!(script.lang.as_deref(), Some("ts" | "typescript" | "TS" | "Typescript" | "TypeScript")) {
             return;
         }
-        if !script.content.contains("$props") { return; }
         let Some(semantic) = ctx.instance_semantic else { return };
         let content_offset = ctx.instance_content_offset;
 
