@@ -7,6 +7,8 @@
 //! mutated before being overwritten by another assignment.
 
 use crate::linter::{LintContext, Rule};
+use oxc::ast::ast::{ImportDeclarationSpecifier, Statement};
+use oxc::semantic::Semantic;
 use oxc::span::Span;
 
 pub struct PreferSvelteReactivity;
@@ -115,7 +117,7 @@ impl PreferSvelteReactivity {
         let scoping = semantic.scoping();
         let nodes = semantic.nodes();
 
-        let shadowed = collect_shadowed_classes(content);
+        let shadowed = collect_shadowed_classes(semantic);
         let mut flagged_symbols = std::collections::HashSet::<SymbolId>::new();
 
         for ast_node in nodes.iter() {
@@ -358,20 +360,21 @@ fn find_word_boundary_pos(content: &str, pat: &str) -> Option<usize> {
     None
 }
 
-fn collect_shadowed_classes(content: &str) -> Vec<String> {
+/// Returns names of `BUILTIN_CLASSES` that are shadowed by a top-level import
+/// (either as a specifier local or an `as` alias) in the given script.
+fn collect_shadowed_classes(semantic: &Semantic<'_>) -> Vec<String> {
     let mut shadowed = Vec::new();
-    for line in content.lines() {
-        let t = line.trim();
-        if !t.starts_with("import ") { continue; }
-        if let (Some(bs), Some(be)) = (t.find('{'), t.find('}')) {
-            for imp in t[bs+1..be].split(',') {
-                let imp = imp.trim();
-                let local = if let Some(ap) = imp.find(" as ") {
-                    imp[ap + 4..].trim()
-                } else { imp };
-                for b in BUILTIN_CLASSES {
-                    if local == b.name { shadowed.push(b.name.to_string()); }
-                }
+    for stmt in &semantic.nodes().program().body {
+        let Statement::ImportDeclaration(imp) = stmt else { continue };
+        let Some(specifiers) = &imp.specifiers else { continue };
+        for spec in specifiers {
+            let local = match spec {
+                ImportDeclarationSpecifier::ImportSpecifier(s) => s.local.name.as_str(),
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => s.local.name.as_str(),
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => s.local.name.as_str(),
+            };
+            for b in BUILTIN_CLASSES {
+                if local == b.name { shadowed.push(b.name.to_string()); }
             }
         }
     }
@@ -382,7 +385,11 @@ fn detect_chained_new_in_template(ctx: &mut LintContext) {
     let source = ctx.source;
     let scripts: Vec<_> = [&ctx.ast.instance, &ctx.ast.module].into_iter().flatten().collect();
     let script_ranges: Vec<_> = scripts.iter().map(|s| (s.span.start as usize, s.span.end as usize)).collect();
-    let shadowed: Vec<_> = scripts.iter().flat_map(|s| collect_shadowed_classes(&s.content)).collect();
+    let shadowed: Vec<_> = [ctx.instance_semantic, ctx.module_semantic]
+        .into_iter()
+        .flatten()
+        .flat_map(collect_shadowed_classes)
+        .collect();
 
     for builtin in BUILTIN_CLASSES {
         if shadowed.iter().any(|s| s == builtin.name) { continue; }
