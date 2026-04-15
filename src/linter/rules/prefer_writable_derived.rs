@@ -21,10 +21,6 @@ impl Rule for PreferWritableDerived {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let Some(script) = ctx.ast.instance.as_ref() else { return };
-        if !script.content.contains("$effect") || !script.content.contains("$state") {
-            return;
-        }
         let Some(semantic) = ctx.instance_semantic else { return };
         let content_offset = ctx.instance_content_offset;
         let scoping = semantic.scoping();
