@@ -4,6 +4,10 @@
 use std::collections::HashMap;
 use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::{TemplateNode, Attribute, DirectiveKind};
+use oxc::ast::ast::{
+    BindingPattern, Declaration, ImportDeclaration, ImportDeclarationSpecifier,
+    ModuleExportName, Statement, VariableDeclaration, VariableDeclarationKind,
+};
 use std::collections::HashSet;
 
 pub struct NoImmutableReactiveStatements;
@@ -31,81 +35,28 @@ impl Rule for NoImmutableReactiveStatements {
         let mut let_names: HashSet<&str> = HashSet::new();
         let mut prop_names: HashSet<&str> = HashSet::new();
 
-        if let Some(module) = &ctx.ast.module {
-            extract_multiline_imports(&module.content, &mut immutable_names);
-            for line in module.content.lines() {
-                let trimmed = line.trim();
-                if trimmed.starts_with("import ") {
-                    for imp in extract_import_names(trimmed) {
-                        if let Some(pos) = module.content.find(imp) {
-                            immutable_names.insert(&module.content[pos..pos + imp.len()]);
-                        }
-                    }
+        if let Some(module_sem) = ctx.module_semantic {
+            for stmt in &module_sem.nodes().program().body {
+                if let Statement::ImportDeclaration(imp) = stmt {
+                    collect_import_locals(imp, &mut immutable_names);
                 }
             }
         }
 
-        for line in content.lines() {
-            let trimmed = line.trim();
-            let name = extract_decl_name(trimmed);
-
-            if let Some(n) = name {
-                if trimmed.starts_with("export let ") {
-                    prop_names.insert(n);
-                } else if trimmed.starts_with("let ") || trimmed.starts_with("var ") {
-                    let_names.insert(n);
-                } else if trimmed.starts_with("const ") || trimmed.starts_with("export const ") {
-                    if !prop_names.contains(n) && !let_names.contains(n) {
-                        const_names.insert(n);
-                    }
-                } else if ["function ", "export function ", "class ", "export class ",
-                    "type ", "export type ", "interface ", "export interface ",
-                    "enum ", "export enum "].iter().any(|p| trimmed.starts_with(p)) {
-                    immutable_names.insert(n);
-                } else if trimmed.starts_with("import ") {
-                    for imp in extract_import_names(trimmed) {
-                        immutable_names.insert(imp);
-                    }
-                }
-            } else {
-                let (kw, is_const) = if trimmed.starts_with("const ") { ("const ", true) }
-                    else if trimmed.starts_with("let ") { ("let ", false) }
-                    else if trimmed.starts_with("var ") { ("var ", false) }
-                    else { ("", false) };
-                if !kw.is_empty() {
-                    let rest = &trimmed[kw.len()..];
-                    if rest.starts_with('{') || rest.starts_with('[') {
-                        for dn in extract_destructured_names(rest) {
-                            if is_const { const_names.insert(dn); } else { let_names.insert(dn); }
-                        }
-                    }
-                }
-                if trimmed.starts_with("import ") {
-                    for imp in extract_import_names(trimmed) {
-                        immutable_names.insert(imp);
-                    }
-                }
-            }
-            if (trimmed.starts_with("export {") || trimmed.starts_with("export{"))
-                && !trimmed.contains(" from ")
-            {
-                if let (Some(open), Some(close)) = (trimmed.find('{'), trimmed.find('}')) {
-                    for part in trimmed[open+1..close].split(',') {
-                        let name = part.trim().split(" as ").next().unwrap_or("").trim();
-                        if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
-                            prop_names.insert(name);
-                        }
-                    }
-                }
+        if let Some(instance_sem) = ctx.instance_semantic {
+            for stmt in &instance_sem.nodes().program().body {
+                classify_top_level(
+                    stmt,
+                    &mut immutable_names,
+                    &mut const_names,
+                    &mut let_names,
+                    &mut prop_names,
+                );
             }
         }
 
-        extract_multiline_imports(content, &mut immutable_names);
         let reactive_stmts = collect_reactive_stmts(content);
         if reactive_stmts.is_empty() { return; }
-
-        let is_ts = script.lang.as_deref() == Some("ts")
-            || script.lang.as_deref() == Some("typescript");
 
         // Extract template portion of source (outside script tags) to avoid re-scanning script
         let template_source = {
@@ -276,6 +227,123 @@ impl Rule for NoImmutableReactiveStatements {
     }
 }
 
+/// Classify a top-level statement's declarations into `immutable`, `const`,
+/// `let`, or `prop` (Svelte `export let x`) buckets. Non-declarations are
+/// ignored.
+fn classify_top_level<'a>(
+    stmt: &Statement<'a>,
+    immutable: &mut HashSet<&'a str>,
+    const_names: &mut HashSet<&'a str>,
+    let_names: &mut HashSet<&'a str>,
+    prop_names: &mut HashSet<&'a str>,
+) {
+    match stmt {
+        Statement::ImportDeclaration(imp) => collect_import_locals(imp, immutable),
+        Statement::FunctionDeclaration(f) => {
+            if let Some(id) = &f.id { immutable.insert(id.name.as_str()); }
+        }
+        Statement::ClassDeclaration(c) => {
+            if let Some(id) = &c.id { immutable.insert(id.name.as_str()); }
+        }
+        Statement::TSTypeAliasDeclaration(t) => { immutable.insert(t.id.name.as_str()); }
+        Statement::TSInterfaceDeclaration(i) => { immutable.insert(i.id.name.as_str()); }
+        Statement::TSEnumDeclaration(e) => { immutable.insert(e.id.name.as_str()); }
+        Statement::VariableDeclaration(vd) => {
+            collect_var_decl(vd, const_names, let_names);
+        }
+        Statement::ExportNamedDeclaration(exp) => {
+            if let Some(decl) = &exp.declaration {
+                match decl {
+                    Declaration::VariableDeclaration(vd) => match vd.kind {
+                        VariableDeclarationKind::Let | VariableDeclarationKind::Var => {
+                            for d in &vd.declarations {
+                                collect_binding_names(&d.id, prop_names);
+                            }
+                        }
+                        VariableDeclarationKind::Const | VariableDeclarationKind::Using | VariableDeclarationKind::AwaitUsing => {
+                            for d in &vd.declarations {
+                                collect_binding_names(&d.id, const_names);
+                            }
+                        }
+                    },
+                    Declaration::FunctionDeclaration(f) => {
+                        if let Some(id) = &f.id { immutable.insert(id.name.as_str()); }
+                    }
+                    Declaration::ClassDeclaration(c) => {
+                        if let Some(id) = &c.id { immutable.insert(id.name.as_str()); }
+                    }
+                    Declaration::TSTypeAliasDeclaration(t) => { immutable.insert(t.id.name.as_str()); }
+                    Declaration::TSInterfaceDeclaration(i) => { immutable.insert(i.id.name.as_str()); }
+                    Declaration::TSEnumDeclaration(e) => { immutable.insert(e.id.name.as_str()); }
+                    _ => {}
+                }
+            }
+            // `export { x }` (no `from`) marks locals as Svelte props.
+            if exp.source.is_none() {
+                for spec in &exp.specifiers {
+                    let name = match &spec.local {
+                        ModuleExportName::IdentifierName(n) => n.name.as_str(),
+                        ModuleExportName::IdentifierReference(n) => n.name.as_str(),
+                        ModuleExportName::StringLiteral(l) => l.value.as_str(),
+                    };
+                    prop_names.insert(name);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_import_locals<'a>(imp: &ImportDeclaration<'a>, out: &mut HashSet<&'a str>) {
+    let Some(specifiers) = &imp.specifiers else { return };
+    for spec in specifiers {
+        match spec {
+            ImportDeclarationSpecifier::ImportSpecifier(s) => { out.insert(s.local.name.as_str()); }
+            ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => { out.insert(s.local.name.as_str()); }
+            ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => { out.insert(s.local.name.as_str()); }
+        }
+    }
+}
+
+fn collect_var_decl<'a>(
+    vd: &VariableDeclaration<'a>,
+    const_names: &mut HashSet<&'a str>,
+    let_names: &mut HashSet<&'a str>,
+) {
+    let target = match vd.kind {
+        VariableDeclarationKind::Const | VariableDeclarationKind::Using | VariableDeclarationKind::AwaitUsing => const_names,
+        VariableDeclarationKind::Let | VariableDeclarationKind::Var => let_names,
+    };
+    for d in &vd.declarations {
+        collect_binding_names(&d.id, target);
+    }
+}
+
+fn collect_binding_names<'a>(pat: &BindingPattern<'a>, out: &mut HashSet<&'a str>) {
+    match pat {
+        BindingPattern::BindingIdentifier(id) => { out.insert(id.name.as_str()); }
+        BindingPattern::ObjectPattern(obj) => {
+            for prop in &obj.properties {
+                collect_binding_names(&prop.value, out);
+            }
+            if let Some(rest) = &obj.rest {
+                collect_binding_names(&rest.argument, out);
+            }
+        }
+        BindingPattern::ArrayPattern(arr) => {
+            for el in arr.elements.iter().flatten() {
+                collect_binding_names(el, out);
+            }
+            if let Some(rest) = &arr.rest {
+                collect_binding_names(&rest.argument, out);
+            }
+        }
+        BindingPattern::AssignmentPattern(inner) => {
+            collect_binding_names(&inner.left, out);
+        }
+    }
+}
+
 fn collect_reactive_stmts(content: &str) -> Vec<(usize, &str)> {
     let mut stmts = Vec::new();
     let mut off = 0;
@@ -340,130 +408,22 @@ fn find_statement_end(content: &str, start: usize) -> usize {
     content.len()
 }
 
-fn extract_destructured_names(pattern: &str) -> Vec<&str> {
-    let mut names = Vec::new();
-    let close = if pattern.starts_with('{') { '}' } else { ']' };
-    if let Some(close_pos) = pattern.find(close) {
-        let inner = &pattern[1..close_pos];
-        for part in inner.split(',') {
-            let part = part.trim();
-            if part.starts_with("...") {
-                let rest = part[3..].trim();
-                let end = rest.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
-                    .unwrap_or(rest.len());
-                if end > 0 { names.push(&rest[..end]); }
-                continue;
-            }
-            let local = if let Some(colon) = part.find(':') {
-                part[colon + 1..].trim()
-            } else {
-                part
-            };
-            let local = local.split(':').next().unwrap_or(local).trim();
-            let local = local.split('=').next().unwrap_or(local).trim();
-            let end = local.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
-                .unwrap_or(local.len());
-            if end > 0 && !local.is_empty() {
-                names.push(&local[..end]);
-            }
-        }
-    }
-    names
-}
-
-fn extract_decl_name(line: &str) -> Option<&str> {
-    let prefixes = ["export const ", "const ", "export let ", "let ", "var ",
-                    "export function ", "function ", "export class ", "class ",
-                    "export type ", "type ", "export interface ", "interface ",
-                    "export enum ", "enum "];
-    for prefix in &prefixes {
-        if let Some(rest) = line.strip_prefix(prefix) {
-            let end = rest.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
-                .unwrap_or(rest.len());
-            let name = &rest[..end];
-            if !name.is_empty() { return Some(name); }
-        }
-    }
-    None
-}
-
-fn extract_multiline_imports<'a>(content: &'a str, immutable_names: &mut HashSet<&'a str>) {
-    let mut search = 0;
-    while search < content.len() {
-        let rest = &content[search..];
-        let Some(import_pos) = rest.find("import ").or_else(|| rest.find("import\t")) else { break };
-        let abs = search + import_pos;
-        let line_start = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
-        if { let b = content[line_start..abs].trim(); !b.is_empty() && b != "export" } {
-            search = abs + 7; continue;
-        }
-        let rest = &content[abs..];
-        let first_nl = rest.find('\n').unwrap_or(rest.len());
-        if rest[..first_nl].contains('{') && !rest[..first_nl].contains('}') {
-            let mut end = abs + first_nl;
-            let mut found = false;
-            for _ in 0..20 {
-                if end >= content.len() { break; }
-                let line_end = content[end + 1..].find('\n').map(|p| end + 1 + p).unwrap_or(content.len());
-                let line = content[end + 1..line_end].trim();
-                if line.starts_with("} from ") || line.contains("} from '") || line.contains("} from \"") {
-                    end = line_end; found = true; break;
-                }
-                if !line.starts_with("//") && !line.is_empty() && !line.ends_with(',')
-                    && !line.starts_with('}') && line.contains('=') { break; }
-                end = line_end;
-            }
-            if found {
-                let full_import = &content[abs..end];
-                let collapsed: String = full_import.chars()
-                    .map(|c| if c == '\n' { ' ' } else { c })
-                    .collect();
-                for name in extract_import_names(&collapsed) {
-                    if let Some(pos) = content[abs..end].find(name) {
-                        let actual = &content[abs + pos..abs + pos + name.len()];
-                        immutable_names.insert(actual);
-                    }
-                }
-            }
-        }
-        search = abs + 7;
-    }
-}
-
-fn extract_import_names(line: &str) -> Vec<&str> {
-    let mut names = Vec::new();
-    if let Some(from_pos) = line.find(" from ") {
-        let mut import_part = line[7..from_pos].trim();
-        if import_part.starts_with("type ") && import_part[5..].trim_start().starts_with('{') {
-            import_part = import_part[5..].trim_start();
-        }
-        if !import_part.starts_with('{') && !import_part.starts_with('*') {
-            let end = import_part.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
-                .unwrap_or(import_part.len());
-            let name = &import_part[..end];
-            if !name.is_empty() { names.push(name); }
-        }
-        if let Some(open) = import_part.find('{') {
-            if let Some(close) = import_part.find('}') {
-                for part in import_part[open+1..close].split(',') {
-                    let part = part.trim();
-                    let part = part.strip_prefix("type ").unwrap_or(part);
-                    let name = if let Some(as_pos) = part.find(" as ") {
-                        part[as_pos + 4..].trim()
-                    } else { part };
-                    if !name.is_empty() { names.push(name); }
-                }
-            }
-        }
-    }
-    names
-}
-
 fn has_reassignment(content: &str, var: &str) -> bool {
     let suffixes: &[&str] = &[" =", "=", "++", "--", " +=", " -="];
     // Single scan for the var, check suffixes at each match
     for (pos, _) in content.match_indices(var) {
         if pos > 0 && matches!(content.as_bytes()[pos - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b':') { continue; }
+        // Prefix `++var` / `--var` is a write that suffix-only matching misses.
+        if pos >= 2 {
+            let pref = &content.as_bytes()[pos - 2..pos];
+            if pref == b"++" || pref == b"--" {
+                let ls = content[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
+                let line = content[ls..].trim_start();
+                if !line.starts_with("let ") && !line.starts_with("var ") && !line.starts_with("$:") {
+                    return true;
+                }
+            }
+        }
         let after = &content[pos + var.len()..];
         let Some(suffix) = suffixes.iter().find(|s| after.starts_with(*s)) else { continue };
         let search_len = var.len() + suffix.len();
