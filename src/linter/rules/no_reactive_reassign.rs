@@ -89,126 +89,74 @@ impl Rule for NoReactiveReassign {
         }
 
         if check_props {
-            for var in &reactive_vars {
-                if !content.contains(var.as_str()) { continue; }
-                // Single "var." scan for mutating methods, chained mutations, and ++/--
-                {
-                    let prefix = format!("{}.", var);
-                    let mut search_from = 0;
-                    while let Some(pos) = content[search_from..].find(prefix.as_str()) {
-                        let abs = search_from + pos;
-                        search_from = abs + prefix.len();
-                        if abs > 0 && matches!(content.as_bytes()[abs - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_') { continue; }
-                        let after_prefix = &content[abs + prefix.len()..];
-
-                        // Check direct mutating method: var.push(
-                        if let Some(method) = MUTATING_METHODS.iter().find(|m| after_prefix.starts_with(*m)) {
-                            let ls = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
-                            if !content[ls..].trim_start().starts_with("$:") && !is_shadowed_in_function(semantic, abs, var) {
-                                let sp = content_offset + abs;
-                                ctx.diagnostic(format!("Assignment to reactive value '{}'.", var),
-                                    oxc::span::Span::new(sp as u32, (sp + prefix.len() + method.len()) as u32));
-                            }
-                            continue;
-                        }
-
-                        // Follow property chain for chained mutations, assignments, and ++/--
-                        let mut rest = after_prefix;
-                        let mut chain_len = prefix.len();
-                        loop {
-                            let end = rest.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(rest.len());
-                            if end == 0 { break; }
-                            rest = &rest[end..];
-                            chain_len += end;
-
-                            // Check for ++ and -- on property
-                            if rest.starts_with("++") || rest.starts_with("--") {
-                                let ls = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
-                                if !content[ls..].trim_start().starts_with("$:") && !is_shadowed_in_function(semantic, abs, var) {
-                                    let sp = content_offset + abs;
-                                    ctx.diagnostic(format!("Assignment to property of reactive value '{}'.", var),
-                                        oxc::span::Span::new(sp as u32, (sp + chain_len + 2) as u32));
-                                }
-                                break;
-                            }
-
-                            if rest.starts_with('.') || rest.starts_with("?.") {
-                                let skip = if rest.starts_with("?.") { 2 } else { 1 };
-                                rest = &rest[skip..];
-                                chain_len += skip;
-                                // Check for chained mutating method
-                                for m in MUTATING_METHODS {
-                                    if rest.starts_with(*m) {
-                                        let ls = content[..abs].rfind('\n').map(|p| p + 1).unwrap_or(0);
-                                        if !content[ls..].trim_start().starts_with("$:") && !is_shadowed_in_function(semantic, abs, var) {
-                                            let sp = content_offset + abs;
-                                            ctx.diagnostic(format!("Assignment to property of reactive value '{}'.", var),
-                                                oxc::span::Span::new(sp as u32, (sp + chain_len + m.len() - 1) as u32));
-                                        }
-                                    }
-                                }
-                            } else if let Some(close) = rest.strip_prefix('[').and_then(|r| r.find(']')) {
-                                rest = &rest[close + 2..];
-                                chain_len += close + 2;
-                            } else {
-                                break;
-                            }
-                        }
-                    }
-                }
-                for pattern_base in &[format!("{}.", var), format!("{}?.", var), format!("{}[", var)] {
-                    for (pos, _) in content.match_indices(pattern_base.as_str()) {
-                        if pos > 0 && matches!(content.as_bytes()[pos - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_') { continue; }
-                        let ls = content[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
-                        if content[ls..].trim_start().starts_with("$:") || is_shadowed_in_function(semantic, pos, var) { continue; }
-                        let after = &content[pos + pattern_base.len()..];
-                        let mut rest = if pattern_base.ends_with('[') {
-                            after.find(']').map(|p| &after[p+1..]).unwrap_or("")
-                        } else {
-                            let end = after.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(after.len());
-                            &after[end..]
-                        };
-                        loop {
-                            if rest.starts_with('.') || rest.starts_with("?.") {
-                                let skip = if rest.starts_with("?.") { 2 } else { 1 };
-                                let r = &rest[skip..];
-                                let end = r.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(r.len());
-                                rest = &r[end..];
-                            } else if rest.starts_with('[') {
-                                rest = rest[1..].find(']').map(|p| &rest[p+2..]).unwrap_or("");
-                            } else {
-                                break;
-                            }
-                        }
-                        let rest = rest.trim_start();
-                        if rest.starts_with('=') && !rest.starts_with("==") {
-                            let sp = content_offset + pos;
-                            ctx.diagnostic(format!("Assignment to property of reactive value '{}'.", var),
-                                oxc::span::Span::new(sp as u32, (sp + pattern_base.len()) as u32));
-                        }
-                    }
-                }
-            }
-
-            // `delete reactiveVar` / `delete reactiveVar.prop[...]` via the AST.
-            // The base is whatever identifier the MemberExpression chain resolves
-            // to; we skip when the identifier shadows the reactive var in a local
-            // scope, or when the enclosing statement is a `$`-labeled reactive
-            // declaration (mirrors the prior line-based `$:` skip).
+            // Flag reassignments that reach a reactive var via a member chain:
+            // `var.prop = ...`, `var[x] = ...`, `var.a.b++`, `--var.p`,
+            // `var.push(...)`, `var.a.sort(...)`, `delete var.prop`.
+            //
+            // The direct-identifier forms (`var = x`, `var++`) are already
+            // handled by the `reactive_vars` walk above. Here we only look at
+            // property-reaching expressions, so `depth == 0` is skipped for
+            // assignment/update targets (it's a duplicate of the direct walk).
+            // For call expressions, `depth == 0` corresponds to `var.push()`,
+            // which is the vendor's "Assignment to reactive value" case (not
+            // property), so we distinguish via the message.
+            const MUTATING_NAMES: &[&str] = &[
+                "push", "pop", "shift", "unshift", "splice",
+                "sort", "reverse", "fill", "copyWithin",
+            ];
             for node in nodes.iter() {
-                let AstKind::UnaryExpression(ue) = node.kind() else { continue };
-                if ue.operator != oxc::syntax::operator::UnaryOperator::Delete { continue; }
-                let Some(base) = expr_base_ident(&ue.argument) else { continue };
-                let name = base.name.as_str();
-                if !reactive_vars.contains(name) { continue; }
+                let (base, depth, span_end, is_method_call) = match node.kind() {
+                    AstKind::AssignmentExpression(ae) => {
+                        let Some((b, d)) = target_member_path(&ae.left) else { continue };
+                        if d == 0 { continue; }
+                        (b, d, ae.span.end, false)
+                    }
+                    AstKind::UpdateExpression(ue) => {
+                        let Some((b, d)) = simple_target_member_path(&ue.argument) else { continue };
+                        if d == 0 { continue; }
+                        (b, d, ue.span.end, false)
+                    }
+                    AstKind::CallExpression(ce) => {
+                        let (method_name, base_expr) = match &ce.callee {
+                            Expression::StaticMemberExpression(m) => (m.property.name.as_str(), &m.object),
+                            Expression::ChainExpression(c) => match &c.expression {
+                                oxc::ast::ast::ChainElement::StaticMemberExpression(m) =>
+                                    (m.property.name.as_str(), &m.object),
+                                _ => continue,
+                            },
+                            _ => continue,
+                        };
+                        if !MUTATING_NAMES.contains(&method_name) { continue; }
+                        let Some((b, d)) = expr_member_path(base_expr) else { continue };
+                        (b, d, ce.span.end, true)
+                    }
+                    AstKind::UnaryExpression(ue)
+                        if ue.operator == oxc::syntax::operator::UnaryOperator::Delete =>
+                    {
+                        let Some(b) = expr_base_ident(&ue.argument) else { continue };
+                        // Always reported as "property of" in the old rule, so
+                        // force depth >= 1 here regardless of actual depth.
+                        (b, 1, ue.span.end, false)
+                    }
+                    _ => continue,
+                };
+                let base_name = base.name.as_str();
+                // A `$`-prefixed reference is Svelte's auto-subscription to the
+                // store/reactive value bound under the unprefixed name — treat
+                // `$likes.x = …` as a write against the reactive `likes`.
+                let is_reactive_ref = reactive_vars.contains(base_name)
+                    || (base_name.starts_with('$') && reactive_vars.contains(&base_name[1..]));
+                if !is_reactive_ref { continue; }
                 if scoping.get_reference(base.reference_id()).symbol_id().is_some() { continue; }
-                if is_in_reactive_label(nodes, node.id()) { continue; }
-                let sp = content_offset as u32 + ue.span.start;
-                let end = content_offset as u32 + ue.span.end;
-                ctx.diagnostic(
-                    format!("Assignment to property of reactive value '{}'.", name),
-                    Span::new(sp, end),
-                );
+                if is_in_direct_reactive_statement(nodes, node.id()) { continue; }
+                let sp = content_offset as u32 + base.span.start;
+                let end = content_offset as u32 + span_end;
+                let msg = if depth == 0 && is_method_call {
+                    format!("Assignment to reactive value '{}'.", base_name)
+                } else {
+                    format!("Assignment to property of reactive value '{}'.", base_name)
+                };
+                ctx.diagnostic(msg, Span::new(sp, end));
             }
         } // end if check_props
 
@@ -541,70 +489,18 @@ fn is_direct_reactive_decl(nodes: &oxc::semantic::AstNodes, node_id: NodeId) -> 
     matches!(nodes.kind(grandparent), AstKind::LabeledStatement(ls) if ls.label.name == "$")
 }
 
-/// Returns true iff `pos` is inside a function body whose scope declares
-/// `var_name`. Uses semantic's scoping — walks the node at `pos` up to its
-/// enclosing function scope and checks whether `var_name` is a local binding
-/// anywhere on the way. We intentionally stop at the first function boundary,
-/// matching the old rule's "nearest enclosing function" behavior.
-fn is_shadowed_in_function(semantic: &Semantic<'_>, pos: usize, var_name: &str) -> bool {
-    let target = pos as u32;
-    let nodes = semantic.nodes();
-    let scoping = semantic.scoping();
-    // Find the smallest AST node whose span contains `pos`.
-    use oxc::span::GetSpan;
-    let mut best: Option<(u32, NodeId)> = None;
-    for node in nodes.iter() {
-        let sp = node.kind().span();
-        if sp.start <= target && target < sp.end {
-            let width = sp.end - sp.start;
-            if best.map_or(true, |(w, _)| width < w) {
-                best = Some((width, node.id()));
-            }
-        }
-    }
-    let Some((_, node_id)) = best else { return false };
-    let mut scope_id = node_id_to_scope(nodes, scoping, node_id);
-    while let Some(sid) = scope_id {
-        if scoping
-            .find_binding(sid, oxc::span::Ident::new_const(var_name))
-            .is_some()
-        {
-            return true;
-        }
-        // Stop after the enclosing function scope so shadowing only applies
-        // within the nearest function.
-        if scoping.scope_flags(sid).contains(oxc::semantic::ScopeFlags::Function) {
-            return false;
-        }
-        scope_id = scoping.scope_parent_id(sid);
-    }
-    false
-}
-
-fn node_id_to_scope(
-    nodes: &oxc::semantic::AstNodes,
-    scoping: &oxc::semantic::Scoping,
-    mut id: NodeId,
-) -> Option<oxc::semantic::ScopeId> {
-    loop {
-        if let Some(sid) = node_scope_id(nodes.kind(id)) {
-            return Some(sid);
-        }
-        let parent = nodes.parent_id(id);
-        if parent == id { return Some(scoping.root_scope_id()); }
-        id = parent;
-    }
-}
-
-/// True iff `node_id` has a `$`-labeled ancestor. Used to suppress diagnostics
-/// whose enclosing statement is `$: ...`, mirroring the old line-based check.
-fn is_in_reactive_label(nodes: &oxc::semantic::AstNodes, node_id: NodeId) -> bool {
+/// True iff `node_id`'s nearest enclosing `ExpressionStatement` is the direct
+/// body of a `$`-labeled statement — i.e. the node is inside `$: <expr>;`.
+/// Mirrors the old line-based `starts_with("$:")` check; the stricter ancestor
+/// walk covers `$: <expr>` only, not arbitrary nesting inside `$: { ... }`.
+fn is_in_direct_reactive_statement(nodes: &oxc::semantic::AstNodes, node_id: NodeId) -> bool {
     let mut id = node_id;
     loop {
         let parent = nodes.parent_id(id);
         if parent == id { return false; }
-        if matches!(nodes.kind(parent), AstKind::LabeledStatement(ls) if ls.label.name == "$") {
-            return true;
+        if let AstKind::ExpressionStatement(_) = nodes.kind(parent) {
+            let gp = nodes.parent_id(parent);
+            return matches!(nodes.kind(gp), AstKind::LabeledStatement(ls) if ls.label.name == "$");
         }
         id = parent;
     }
@@ -620,20 +516,56 @@ fn expr_base_ident<'a>(expr: &'a Expression<'a>) -> Option<&'a IdentifierReferen
     }
 }
 
-fn node_scope_id(kind: AstKind<'_>) -> Option<oxc::semantic::ScopeId> {
-    use oxc::ast::AstKind;
-    match kind {
-        AstKind::Program(p) => p.scope_id.get(),
-        AstKind::BlockStatement(b) => b.scope_id.get(),
-        AstKind::Function(f) => f.scope_id.get(),
-        AstKind::ArrowFunctionExpression(a) => a.scope_id.get(),
-        AstKind::CatchClause(c) => c.scope_id.get(),
-        AstKind::ForStatement(f) => f.scope_id.get(),
-        AstKind::ForInStatement(f) => f.scope_id.get(),
-        AstKind::ForOfStatement(f) => f.scope_id.get(),
-        AstKind::SwitchStatement(s) => s.scope_id.get(),
-        AstKind::TSModuleDeclaration(m) => m.scope_id.get(),
-        AstKind::Class(c) => c.scope_id.get(),
+/// Follow a member-expression chain rooted at an identifier. Returns the base
+/// `IdentifierReference` and the number of member layers above it
+/// (`var` → depth 0, `var.a` → depth 1, `var.a.b` → depth 2, `var?.a` → 1).
+fn expr_member_path<'a>(expr: &'a Expression<'a>) -> Option<(&'a IdentifierReference<'a>, usize)> {
+    match expr {
+        Expression::Identifier(id) => Some((id, 0)),
+        Expression::StaticMemberExpression(m) =>
+            expr_member_path(&m.object).map(|(i, d)| (i, d + 1)),
+        Expression::ComputedMemberExpression(m) =>
+            expr_member_path(&m.object).map(|(i, d)| (i, d + 1)),
+        Expression::PrivateFieldExpression(m) =>
+            expr_member_path(&m.object).map(|(i, d)| (i, d + 1)),
+        Expression::ChainExpression(c) => match &c.expression {
+            oxc::ast::ast::ChainElement::StaticMemberExpression(m) =>
+                expr_member_path(&m.object).map(|(i, d)| (i, d + 1)),
+            oxc::ast::ast::ChainElement::ComputedMemberExpression(m) =>
+                expr_member_path(&m.object).map(|(i, d)| (i, d + 1)),
+            oxc::ast::ast::ChainElement::PrivateFieldExpression(m) =>
+                expr_member_path(&m.object).map(|(i, d)| (i, d + 1)),
+            _ => None,
+        },
         _ => None,
     }
 }
+
+/// Member-path walk for an `AssignmentTarget` (LHS of `=`, `+=`, etc.).
+fn target_member_path<'a>(target: &'a AssignmentTarget<'a>) -> Option<(&'a IdentifierReference<'a>, usize)> {
+    match target {
+        AssignmentTarget::AssignmentTargetIdentifier(id) => Some((id, 0)),
+        AssignmentTarget::StaticMemberExpression(m) =>
+            expr_member_path(&m.object).map(|(i, d)| (i, d + 1)),
+        AssignmentTarget::ComputedMemberExpression(m) =>
+            expr_member_path(&m.object).map(|(i, d)| (i, d + 1)),
+        AssignmentTarget::PrivateFieldExpression(m) =>
+            expr_member_path(&m.object).map(|(i, d)| (i, d + 1)),
+        _ => None,
+    }
+}
+
+/// Member-path walk for a `SimpleAssignmentTarget` (the argument of `++`/`--`).
+fn simple_target_member_path<'a>(target: &'a SimpleAssignmentTarget<'a>) -> Option<(&'a IdentifierReference<'a>, usize)> {
+    match target {
+        SimpleAssignmentTarget::AssignmentTargetIdentifier(id) => Some((id, 0)),
+        SimpleAssignmentTarget::StaticMemberExpression(m) =>
+            expr_member_path(&m.object).map(|(i, d)| (i, d + 1)),
+        SimpleAssignmentTarget::ComputedMemberExpression(m) =>
+            expr_member_path(&m.object).map(|(i, d)| (i, d + 1)),
+        SimpleAssignmentTarget::PrivateFieldExpression(m) =>
+            expr_member_path(&m.object).map(|(i, d)| (i, d + 1)),
+        _ => None,
+    }
+}
+
