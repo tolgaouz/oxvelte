@@ -188,15 +188,27 @@ impl Rule for NoReactiveReassign {
                         }
                     }
                 }
-                let delete_pattern = format!("delete {}", var);
-                for (pos, _) in content.match_indices(&delete_pattern) {
-                    let line_start = content[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
-                    let line = content[line_start..].trim_start();
-                    if line.starts_with("$:") { continue; }
-                    let sp = content_offset + pos;
-                    ctx.diagnostic(format!("Assignment to property of reactive value '{}'.", var),
-                        oxc::span::Span::new(sp as u32, (sp + delete_pattern.len()) as u32));
-                }
+            }
+
+            // `delete reactiveVar` / `delete reactiveVar.prop[...]` via the AST.
+            // The base is whatever identifier the MemberExpression chain resolves
+            // to; we skip when the identifier shadows the reactive var in a local
+            // scope, or when the enclosing statement is a `$`-labeled reactive
+            // declaration (mirrors the prior line-based `$:` skip).
+            for node in nodes.iter() {
+                let AstKind::UnaryExpression(ue) = node.kind() else { continue };
+                if ue.operator != oxc::syntax::operator::UnaryOperator::Delete { continue; }
+                let Some(base) = expr_base_ident(&ue.argument) else { continue };
+                let name = base.name.as_str();
+                if !reactive_vars.contains(name) { continue; }
+                if scoping.get_reference(base.reference_id()).symbol_id().is_some() { continue; }
+                if is_in_reactive_label(nodes, node.id()) { continue; }
+                let sp = content_offset as u32 + ue.span.start;
+                let end = content_offset as u32 + ue.span.end;
+                ctx.diagnostic(
+                    format!("Assignment to property of reactive value '{}'.", name),
+                    Span::new(sp, end),
+                );
             }
         } // end if check_props
 
@@ -580,6 +592,20 @@ fn node_id_to_scope(
         }
         let parent = nodes.parent_id(id);
         if parent == id { return Some(scoping.root_scope_id()); }
+        id = parent;
+    }
+}
+
+/// True iff `node_id` has a `$`-labeled ancestor. Used to suppress diagnostics
+/// whose enclosing statement is `$: ...`, mirroring the old line-based check.
+fn is_in_reactive_label(nodes: &oxc::semantic::AstNodes, node_id: NodeId) -> bool {
+    let mut id = node_id;
+    loop {
+        let parent = nodes.parent_id(id);
+        if parent == id { return false; }
+        if matches!(nodes.kind(parent), AstKind::LabeledStatement(ls) if ls.label.name == "$") {
+            return true;
+        }
         id = parent;
     }
 }
