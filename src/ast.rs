@@ -146,6 +146,9 @@ pub struct Script {
     pub content: String,
     pub module: bool,
     pub lang: Option<String>,
+    /// True when the `<script>` open tag has a boolean `strictEvents` attribute.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub strict_events: bool,
     pub span: Span,
 }
 

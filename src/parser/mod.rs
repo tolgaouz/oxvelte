@@ -23,11 +23,13 @@ pub fn parse(source: &str) -> ParseResult {
 
     let instance = regions.instance.map(|r| Script {
         content: r.content.to_string(), module: false,
-        lang: r.lang.map(|s| s.to_string()), span: r.span,
+        lang: r.lang.map(|s| s.to_string()),
+        strict_events: r.strict_events, span: r.span,
     });
     let module = regions.module.map(|r| Script {
         content: r.content.to_string(), module: true,
-        lang: r.lang.map(|s| s.to_string()), span: r.span,
+        lang: r.lang.map(|s| s.to_string()),
+        strict_events: r.strict_events, span: r.span,
     });
     let css = regions.style.map(|r| Style {
         content: r.content.to_string(),
@@ -51,6 +53,7 @@ pub fn parse(source: &str) -> ParseResult {
 struct Region<'a> {
     content: &'a str,
     lang: Option<&'a str>,
+    strict_events: bool,
     span: Span,
 }
 
@@ -81,8 +84,9 @@ fn extract_regions<'a>(source: &'a str) -> Regions<'a> {
             || tag_attrs.contains("context='module'")
             || tag_attrs.contains("context=module")
             || tag_attrs.split_whitespace().any(|a| a == "module");
+        let strict_events = has_bool_attr(tag_attrs, "strictEvents");
 
-        let region = Region { content, lang, span: Span::new(open_start as u32, block_end as u32) };
+        let region = Region { content, lang, strict_events, span: Span::new(open_start as u32, block_end as u32) };
         if is_module { regions.module = Some(region); } else { regions.instance = Some(region); }
         search_from = block_end;
     }
@@ -110,6 +114,7 @@ fn extract_regions<'a>(source: &'a str) -> Regions<'a> {
                 regions.style = Some(Region {
                     content: &source[content_start..content_end],
                     lang: extract_attr(tag_attrs, "lang"),
+                    strict_events: false,
                     span: Span::new(open_start as u32, block_end as u32),
                 });
             }
@@ -134,6 +139,18 @@ fn find_close_tag(source: &str, tag_name: &str) -> Option<usize> {
         search_from = abs_pos + prefix.len();
     }
     None
+}
+
+/// True iff `attrs` contains a whole-token attribute named `name`, either as a
+/// bare boolean (`<script strictEvents>`), with a value (`strictEvents="true"`,
+/// `strictEvents={x}`), or self-close-adjacent (`strictEvents/>`).
+fn has_bool_attr(attrs: &str, name: &str) -> bool {
+    attrs.split(|c: char| c.is_whitespace() || c == '/').any(|tok| {
+        tok == name
+            || tok.strip_prefix(name).is_some_and(|rest| {
+                rest.starts_with('=')
+            })
+    })
 }
 
 fn extract_attr<'a>(attrs: &'a str, name: &str) -> Option<&'a str> {

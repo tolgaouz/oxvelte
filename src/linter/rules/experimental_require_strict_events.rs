@@ -19,9 +19,10 @@ impl Rule for ExperimentalRequireStrictEvents {
             return;
         }
         let Some(script) = ctx.ast.instance.as_ref() else { return };
-        // `<script strictEvents>` opt-out — need to look at the open tag attributes.
-        let tag = &ctx.source[script.span.start as usize..script.span.end as usize];
-        if tag.split('>').next().unwrap_or("").contains("strictEvents") {
+        // `<script strictEvents>` opt-out — read from the parsed Script node.
+        if script.strict_events
+            || ctx.ast.module.as_ref().is_some_and(|m| m.strict_events)
+        {
             return;
         }
         // AST check: a top-level `interface $$Events` or `type $$Events` in
