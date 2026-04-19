@@ -145,61 +145,78 @@ impl Rule for NoTopLevelBrowserGlobals {
         let tag_text = &source[base..script.span.end as usize];
         let content_offset = tag_text.find('>').map(|p| base + p + 1).unwrap_or(base);
 
-        for global in BROWSER_GLOBALS {
-            for (byte_offset, _) in content.match_indices(global) {
-                if !is_word_boundary(content, byte_offset, global.len()) { continue; }
+        // Walk IdentifierReference nodes once and filter to browser-global
+        // names. Using the AST gets us accurate word-boundary detection for
+        // free and skips locally-shadowed references (a `let window = ...`
+        // would resolve to a symbol, so we won't flag `window.x` in that
+        // scope). The context/guard heuristics still operate on positional
+        // slices of `content` — their AST equivalents (walking ancestors
+        // for an enclosing `typeof` / `if (browser)` guard) would be a
+        // separate migration.
+        let Some(sem) = ctx.instance_semantic else {
+            check_template_nodes(&ctx.ast.html.nodes, ctx, false);
+            return;
+        };
+        let scoping = sem.scoping();
+        for node in sem.nodes().iter() {
+            let oxc::ast::AstKind::IdentifierReference(id) = node.kind() else { continue };
+            let name = id.name.as_str();
+            let Some(&global) = BROWSER_GLOBALS.iter().find(|g| **g == name) else { continue };
+            if scoping.get_reference(id.reference_id()).symbol_id().is_some() { continue; }
+            let byte_offset = id.span.start as usize;
 
-                let depth: i32 = content[..byte_offset].bytes()
-                    .fold(0i32, |acc, b| match b { b'{' => acc + 1, b'}' => acc - 1, _ => acc });
-                if depth > 0 {
-                    let in_ssr = is_in_ssr_block(content, byte_offset);
-                    let after_exit = is_after_browser_guard_exit(content, byte_offset);
-                    if !in_ssr && !after_exit { continue; }
-                }
+            let depth: i32 = content[..byte_offset].bytes()
+                .fold(0i32, |acc, b| match b { b'{' => acc + 1, b'}' => acc - 1, _ => acc });
+            if depth > 0 {
+                let in_ssr = is_in_ssr_block(content, byte_offset);
+                let after_exit = is_after_browser_guard_exit(content, byte_offset);
+                if !in_ssr && !after_exit { continue; }
+            }
 
-                let before = content[..byte_offset].trim_end();
-                if before.ends_with("typeof") { continue; }
+            let before = content[..byte_offset].trim_end();
+            if before.ends_with("typeof") { continue; }
 
-                let line_start = content[..byte_offset].rfind('\n').map(|p| p + 1).unwrap_or(0);
-                let line_end = content[byte_offset..].find('\n').map(|p| byte_offset + p).unwrap_or(content.len());
-                let line = &content[line_start..line_end];
+            let line_start = content[..byte_offset].rfind('\n').map(|p| p + 1).unwrap_or(0);
+            let line_end = content[byte_offset..].find('\n').map(|p| byte_offset + p).unwrap_or(content.len());
+            let line = &content[line_start..line_end];
 
-                let lt = line.trim_start();
-                if lt.starts_with("import ") || lt.starts_with("//") || line.contains("import.meta") { continue; }
-                if line.contains(&format!("typeof {} !== ", global)) || line.contains(&format!("typeof {} != ", global)) { continue; }
+            let lt = line.trim_start();
+            if lt.starts_with("import ") || lt.starts_with("//") || line.contains("import.meta") { continue; }
+            if line.contains(&format!("typeof {} !== ", global)) || line.contains(&format!("typeof {} != ", global)) { continue; }
 
-                let gt_pat = format!("globalThis.{}", global);
-                if let Some(gt_pos) = line.find(&gt_pat) {
-                    if line.contains(&format!("globalThis.{}?.", global)) { continue; }
-                    let after = line[gt_pos + gt_pat.len()..].trim_start();
-                    if after.starts_with("&&") || after.starts_with("!==") || after.starts_with("!=") { continue; }
-                }
+            let gt_pat = format!("globalThis.{}", global);
+            if let Some(gt_pos) = line.find(&gt_pat) {
+                if line.contains(&format!("globalThis.{}?.", global)) { continue; }
+                let after = line[gt_pos + gt_pat.len()..].trim_start();
+                if after.starts_with("&&") || after.starts_with("!==") || after.starts_with("!=") { continue; }
+            }
 
-                let has_browser = line.contains("browser") || line.contains("BROWSER");
-                if has_browser {
-                    let global_pos_in_line = byte_offset - line_start;
-                    let before_global = &line[..global_pos_in_line];
-                    let has_neg = before_global.contains("!browser") || before_global.contains("!BROWSER");
+            let has_browser = line.contains("browser") || line.contains("BROWSER");
+            if has_browser {
+                let global_pos_in_line = byte_offset - line_start;
+                let before_global = &line[..global_pos_in_line];
+                let has_neg = before_global.contains("!browser") || before_global.contains("!BROWSER");
 
-                    if before_global.contains("&&") && !has_neg { continue; }
+                if before_global.contains("&&") && !has_neg { continue; }
 
-                    if line.contains('?') {
-                        let q_pos = line.find('?').unwrap_or(line.len());
-                        if q_pos < global_pos_in_line {
-                            let colon_pos = line[q_pos..].find(':').map(|p| q_pos + p).unwrap_or(line.len());
-                            let in_true_branch = global_pos_in_line < colon_pos;
-                            let positive_guard = !line[..q_pos].contains('!');
-                            if (in_true_branch && positive_guard) || (!in_true_branch && !positive_guard) {
-                                continue;
-                            }
+                if line.contains('?') {
+                    let q_pos = line.find('?').unwrap_or(line.len());
+                    if q_pos < global_pos_in_line {
+                        let colon_pos = line[q_pos..].find(':').map(|p| q_pos + p).unwrap_or(line.len());
+                        let in_true_branch = global_pos_in_line < colon_pos;
+                        let positive_guard = !line[..q_pos].contains('!');
+                        if (in_true_branch && positive_guard) || (!in_true_branch && !positive_guard) {
+                            continue;
                         }
                     }
                 }
-
-                let s = (content_offset + byte_offset) as u32;
-                ctx.diagnostic(format!("Unexpected top-level browser global variable \"{}\".", global),
-                    Span::new(s, s + global.len() as u32));
             }
+
+            let s = (content_offset + byte_offset) as u32;
+            ctx.diagnostic(
+                format!("Unexpected top-level browser global variable \"{}\".", global),
+                Span::new(s, s + global.len() as u32),
+            );
         }
 
         check_template_nodes(&ctx.ast.html.nodes, ctx, false);
