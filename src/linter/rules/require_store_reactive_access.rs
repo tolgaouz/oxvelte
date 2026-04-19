@@ -1,8 +1,9 @@
 //! `svelte/require-store-reactive-access` — require `$store` syntax for reactive access.
 //! ⭐ Recommended 🔧 Fixable
 
-use crate::linter::{parse_imports, walk_template_nodes, LintContext, Rule};
+use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::{TemplateNode, Attribute, AttributeValue, AttributeValuePart};
+use oxc::ast::ast::{ImportDeclarationSpecifier, ModuleExportName, Statement};
 use std::collections::{HashSet, HashMap};
 
 const STORE_FACTORIES: &[&str] = &["writable", "readable", "derived"];
@@ -49,7 +50,10 @@ impl Rule for RequireStoreReactiveAccess {
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         let script = match &ctx.ast.instance { Some(s) => s, None => return };
         let content = &script.content;
-        let imports = parse_imports(content);
+        let imports = match ctx.instance_semantic {
+            Some(sem) => collect_imports(sem.nodes().program().body.as_slice()),
+            None => Vec::new(),
+        };
 
         let mut factory_names: HashSet<String> = HashSet::new();
         for (local, imported, module) in &imports {
@@ -344,6 +348,49 @@ impl Rule for RequireStoreReactiveAccess {
     }
 }
 
+/// Collect `(local, imported, module)` triples from top-level `ImportDeclaration`
+/// statements. `imported` is `"default"` for default imports and `"*"` for
+/// namespace imports, matching the legacy `parse_imports` shape.
+fn collect_imports(body: &[Statement<'_>]) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    for stmt in body {
+        let Statement::ImportDeclaration(imp) = stmt else { continue };
+        let source = imp.source.value.as_str().to_string();
+        let Some(specs) = &imp.specifiers else { continue };
+        for spec in specs {
+            match spec {
+                ImportDeclarationSpecifier::ImportSpecifier(s) => {
+                    let imported = match &s.imported {
+                        ModuleExportName::IdentifierName(n) => n.name.as_str().to_string(),
+                        ModuleExportName::IdentifierReference(n) => n.name.as_str().to_string(),
+                        ModuleExportName::StringLiteral(l) => l.value.as_str().to_string(),
+                    };
+                    out.push((s.local.name.as_str().to_string(), imported, source.clone()));
+                }
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => {
+                    out.push((s.local.name.as_str().to_string(), "default".to_string(), source.clone()));
+                }
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => {
+                    out.push((s.local.name.as_str().to_string(), "*".to_string(), source.clone()));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Parse `content` as TS (a superset of JS) and extract import triples. Used
+/// when we only have raw source text — e.g. an external module file read from
+/// disk — with no linter context attached.
+fn parse_and_collect_imports(content: &str) -> Vec<(String, String, String)> {
+    use oxc::allocator::Allocator;
+    use oxc::parser::Parser;
+    use oxc::span::SourceType;
+    let alloc = Allocator::default();
+    let result = Parser::new(&alloc, content, SourceType::ts()).parse();
+    collect_imports(result.program.body.as_slice())
+}
+
 fn has_word_boundary_match(text: &str, word: &str) -> bool {
     for (pos, _) in text.match_indices(word) {
         let before_ok = pos == 0 || {
@@ -374,7 +421,7 @@ fn resolve_module_file(dir: &std::path::Path, module: &str) -> Option<String> {
 
 fn detect_store_exports(content: &str) -> HashSet<String> {
     let mut stores = HashSet::new();
-    let imports = crate::linter::parse_imports(content);
+    let imports = parse_and_collect_imports(content);
 
     let (mut factory_names, mut store_type_names) = (HashSet::new(), HashSet::new());
     for (local, imported, module) in &imports {
