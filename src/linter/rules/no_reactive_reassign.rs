@@ -238,32 +238,31 @@ impl Rule for NoReactiveReassign {
             ctx.diagnostic(msg, Span::new(sp, end));
         }
 
-        if check_props { for var in &reactive_vars {
-            if !content.contains(var.as_str()) { continue; }
-            let ternary_pat1 = format!("? {} :", var);
-            let ternary_pat2 = format!("? {}", var);
-            for line in content.lines() {
-                let trimmed = line.trim();
-                if trimmed.starts_with("$:") { continue; }
-                if !trimmed.contains(var.as_str()) { continue; }
-                if trimmed.contains(&ternary_pat1)
-                    || trimmed.contains(&ternary_pat2)
-                {
-                    if let Some(dot_pos) = trimmed.rfind(").") {
-                        let after_dot = &trimmed[dot_pos + 2..];
-                        let end = after_dot.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(after_dot.len());
-                        let rest = after_dot[end..].trim_start();
-                        if rest.starts_with('=') && !rest.starts_with("==") {
-                            if let Some(pos) = content.find(trimmed) {
-                                let sp = content_offset + pos;
-                                ctx.diagnostic(format!("Assignment to property of reactive value '{}'.", var),
-                                    oxc::span::Span::new(sp as u32, (sp + trimmed.len()) as u32));
-                            }
-                        }
-                    }
-                }
+        // Conditional member assignment: `(cond ? reactiveVar : x).prop = y`
+        // and nested ternaries. The property-mutation walk above only resolves
+        // a member expression whose `.object` is directly an identifier or a
+        // nested member chain; going through a ConditionalExpression branch
+        // needs a separate check.
+        if check_props {
+            for node in nodes.iter() {
+                let AstKind::AssignmentExpression(ae) = node.kind() else { continue };
+                let member_object = match &ae.left {
+                    AssignmentTarget::StaticMemberExpression(m) => &m.object,
+                    AssignmentTarget::ComputedMemberExpression(m) => &m.object,
+                    AssignmentTarget::PrivateFieldExpression(m) => &m.object,
+                    _ => continue,
+                };
+                let Some(id) = find_reactive_via_conditional(member_object, &reactive_vars) else { continue };
+                if scoping.get_reference(id.reference_id()).symbol_id().is_some() { continue; }
+                if is_in_direct_reactive_statement(nodes, node.id()) { continue; }
+                let sp = content_offset as u32 + ae.span.start;
+                let end = content_offset as u32 + ae.span.end;
+                ctx.diagnostic(
+                    format!("Assignment to property of reactive value '{}'.", id.name),
+                    Span::new(sp, end),
+                );
             }
-        }} // end if check_props (conditional member assignment)
+        }
 
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
@@ -536,6 +535,50 @@ fn target_member_path<'a>(target: &'a AssignmentTarget<'a>) -> Option<(&'a Ident
             expr_member_path(&m.object).map(|(i, d)| (i, d + 1)),
         AssignmentTarget::PrivateFieldExpression(m) =>
             expr_member_path(&m.object).map(|(i, d)| (i, d + 1)),
+        _ => None,
+    }
+}
+
+/// Peel outer `ParenthesizedExpression` wrappers (oxc preserves them when
+/// parsed with `preserve_parens`, which the default parser does).
+fn unwrap_paren<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
+    let mut e = expr;
+    while let Expression::ParenthesizedExpression(p) = e { e = &p.expression; }
+    e
+}
+
+/// Walk a member-expression object through `ConditionalExpression` branches
+/// (and parentheses) to find a reactive-var identifier. Returns `None` when
+/// the object is a direct identifier or plain member chain — those are
+/// covered by the property-mutation walk.
+fn find_reactive_via_conditional<'a>(
+    expr: &'a Expression<'a>,
+    reactive_vars: &std::collections::HashSet<String>,
+) -> Option<&'a IdentifierReference<'a>> {
+    match unwrap_paren(expr) {
+        Expression::ConditionalExpression(c) =>
+            find_reactive_in_branch(&c.consequent, reactive_vars)
+                .or_else(|| find_reactive_in_branch(&c.alternate, reactive_vars)),
+        _ => None,
+    }
+}
+
+fn find_reactive_in_branch<'a>(
+    expr: &'a Expression<'a>,
+    reactive_vars: &std::collections::HashSet<String>,
+) -> Option<&'a IdentifierReference<'a>> {
+    match unwrap_paren(expr) {
+        Expression::Identifier(id) => {
+            let name = id.name.as_str();
+            if reactive_vars.contains(name)
+                || (name.starts_with('$') && reactive_vars.contains(&name[1..]))
+            {
+                Some(id)
+            } else { None }
+        }
+        Expression::ConditionalExpression(c) =>
+            find_reactive_in_branch(&c.consequent, reactive_vars)
+                .or_else(|| find_reactive_in_branch(&c.alternate, reactive_vars)),
         _ => None,
     }
 }
