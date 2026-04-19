@@ -4,8 +4,10 @@
 use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::{TemplateNode, Attribute, DirectiveKind};
 use oxc::ast::ast::{
-    AssignmentTarget, Declaration, Expression, ForStatementLeft, IdentifierReference,
-    ImportDeclarationSpecifier, SimpleAssignmentTarget, Statement, VariableDeclaration,
+    ArrayAssignmentTarget, AssignmentTarget, AssignmentTargetMaybeDefault,
+    AssignmentTargetProperty, Declaration, Expression, ForStatementLeft, IdentifierReference,
+    ImportDeclarationSpecifier, ObjectAssignmentTarget, SimpleAssignmentTarget, Statement,
+    VariableDeclaration,
 };
 use oxc::ast::AstKind;
 use oxc::semantic::{NodeId, Semantic};
@@ -160,52 +162,35 @@ impl Rule for NoReactiveReassign {
             }
         } // end if check_props
 
-        for var in &reactive_vars {
-            if !content.contains(var.as_str()) { continue; }
-            let destructure_patterns = [
-                format!("{} }} =", var),     // { foo: reactiveVar } =
-                format!("{}}} =", var),      // {reactiveVar} = (no space)
-                format!("{}] =", var),       // [reactiveVar] =
-                format!("{}]] =", var),      // [[reactiveVar]] = (nested)
-                format!("...{} }} =", var),  // { ...reactiveVar } =
-                format!("...{}] =", var),    // [...reactiveVar] =
-            ];
-            for pattern in &destructure_patterns {
-                if let Some(pos) = content.find(pattern.as_str()) {
-                    let line_start = content[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
-                    let line = content[line_start..].trim_start();
-                    if line.starts_with("$:") || line.starts_with("const ")
-                        || line.starts_with("let ") || line.starts_with("var ") { continue; }
-
-                    if pattern.ends_with("] =") && !pattern.ends_with("]] =") && !pattern.starts_with("...") {
-                        let before = &content[..pos];
-                        if let Some(bracket_pos) = before.rfind('[') {
-                            let between = content[bracket_pos + 1..pos].trim();
-                            if between.is_empty() {
-                                let before_bracket = content[..bracket_pos].trim_end();
-                                if !(before_bracket.ends_with('=')
-                                    || before_bracket.ends_with(',')
-                                    || before_bracket.ends_with(';')
-                                    || before_bracket.ends_with('{')
-                                    || before_bracket.ends_with('(')
-                                    || before_bracket.is_empty()
-                                    || before_bracket.ends_with('\n'))
-                                {
-                                    continue;
-                                }
-                            } else {
-                                if !between.contains(',') {
-                                    continue; // computed property access
-                                }
-                            }
-                        }
-                    }
-
-                    let sp = content_offset + pos;
-                    ctx.diagnostic(format!("Assignment to reactive value '{}'.", var),
-                        oxc::span::Span::new(sp as u32, (sp + var.len()) as u32));
-                    break; // Only report once per var per pattern type
-                }
+        // Destructure reassignments: `({ reactiveVar } = x)`, `([reactiveVar] = x)`,
+        // `([foo, ...reactiveVar] = x)`, nested array/object patterns, and
+        // renamed property destructure `({ name: reactiveVar } = x)`. `const`
+        // / `let` / `var` declarations are ignored because those are
+        // VariableDeclarator bindings — not AssignmentExpression — so they
+        // never reach this walk.
+        for node in nodes.iter() {
+            let AstKind::AssignmentExpression(ae) = node.kind() else { continue };
+            if !matches!(&ae.left,
+                AssignmentTarget::ObjectAssignmentTarget(_)
+                | AssignmentTarget::ArrayAssignmentTarget(_)
+            ) { continue; }
+            if is_in_direct_reactive_statement(nodes, node.id()) { continue; }
+            let mut idents = Vec::new();
+            collect_target_idents(&ae.left, &mut idents);
+            let mut reported = std::collections::HashSet::new();
+            for id in &idents {
+                let name = id.name.as_str();
+                let is_reactive = reactive_vars.contains(name)
+                    || (name.starts_with('$') && reactive_vars.contains(&name[1..]));
+                if !is_reactive { continue; }
+                if scoping.get_reference(id.reference_id()).symbol_id().is_some() { continue; }
+                if !reported.insert(name) { continue; } // report each var once per pattern
+                let sp = content_offset as u32 + id.span.start;
+                let end = content_offset as u32 + id.span.end;
+                ctx.diagnostic(
+                    format!("Assignment to reactive value '{}'.", name),
+                    Span::new(sp, end),
+                );
             }
         }
 
@@ -552,6 +537,69 @@ fn target_member_path<'a>(target: &'a AssignmentTarget<'a>) -> Option<(&'a Ident
         AssignmentTarget::PrivateFieldExpression(m) =>
             expr_member_path(&m.object).map(|(i, d)| (i, d + 1)),
         _ => None,
+    }
+}
+
+/// Recursively collect identifier leaves from a destructure target —
+/// shorthand props, renamed props, nested arrays/objects, and rest elements.
+/// Member-expression variants (used for computed property assignment like
+/// `x[y] = …`) are not destructure leaves and are skipped.
+fn collect_target_idents<'a>(
+    t: &'a AssignmentTarget<'a>,
+    out: &mut Vec<&'a IdentifierReference<'a>>,
+) {
+    match t {
+        AssignmentTarget::AssignmentTargetIdentifier(id) => out.push(id),
+        AssignmentTarget::ObjectAssignmentTarget(o) => collect_obj_target_idents(o, out),
+        AssignmentTarget::ArrayAssignmentTarget(a) => collect_arr_target_idents(a, out),
+        _ => {}
+    }
+}
+
+fn collect_obj_target_idents<'a>(
+    obj: &'a ObjectAssignmentTarget<'a>,
+    out: &mut Vec<&'a IdentifierReference<'a>>,
+) {
+    for prop in &obj.properties {
+        match prop {
+            AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(p) => {
+                out.push(&p.binding);
+            }
+            AssignmentTargetProperty::AssignmentTargetPropertyProperty(p) => {
+                collect_maybe_default_idents(&p.binding, out);
+            }
+        }
+    }
+    if let Some(rest) = &obj.rest {
+        collect_target_idents(&rest.target, out);
+    }
+}
+
+fn collect_arr_target_idents<'a>(
+    arr: &'a ArrayAssignmentTarget<'a>,
+    out: &mut Vec<&'a IdentifierReference<'a>>,
+) {
+    for el in arr.elements.iter().flatten() {
+        collect_maybe_default_idents(el, out);
+    }
+    if let Some(rest) = &arr.rest {
+        collect_target_idents(&rest.target, out);
+    }
+}
+
+fn collect_maybe_default_idents<'a>(
+    m: &'a AssignmentTargetMaybeDefault<'a>,
+    out: &mut Vec<&'a IdentifierReference<'a>>,
+) {
+    match m {
+        AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(wd) =>
+            collect_target_idents(&wd.binding, out),
+        AssignmentTargetMaybeDefault::AssignmentTargetIdentifier(id) => out.push(id),
+        AssignmentTargetMaybeDefault::ObjectAssignmentTarget(o) =>
+            collect_obj_target_idents(o, out),
+        AssignmentTargetMaybeDefault::ArrayAssignmentTarget(a) =>
+            collect_arr_target_idents(a, out),
+        _ => {}
     }
 }
 
