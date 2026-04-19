@@ -4,8 +4,8 @@
 use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::{TemplateNode, Attribute, DirectiveKind};
 use oxc::ast::ast::{
-    AssignmentTarget, Declaration, Expression, ImportDeclarationSpecifier, SimpleAssignmentTarget,
-    Statement, VariableDeclaration,
+    AssignmentTarget, Declaration, Expression, ForStatementLeft, IdentifierReference,
+    ImportDeclarationSpecifier, SimpleAssignmentTarget, Statement, VariableDeclaration,
 };
 use oxc::ast::AstKind;
 use oxc::semantic::{NodeId, Semantic};
@@ -249,35 +249,48 @@ impl Rule for NoReactiveReassign {
             }
         }
 
-        let has_for = content.contains("for (");
-        for var in &reactive_vars {
-            if !has_for { break; }
-            if !content.contains(var.as_str()) { continue; }
-            let for_patterns = [
-                format!("for ({} ", var),
-                format!("for ({}", var),
-                format!("for (const {} ", var),
-                format!("for (let {} ", var),
-            ];
-            let member_for = if check_props {
-                vec![
-                    format!("for ({}.", var),
-                    format!("for (const {}.", var),
-                    format!("for (let {}.", var),
-                ]
-            } else {
-                vec![]
+        // Detect `for (reactiveVar of/in ...)` and `for (reactiveVar.p of/in ...)`
+        // on the LHS of a for-in / for-of statement via the AST. `for (const x ...)` /
+        // `for (let x ...)` declare new local bindings, not reassignments.
+        for node in nodes.iter() {
+            let (for_span, left) = match node.kind() {
+                AstKind::ForInStatement(f) => (f.span, &f.left),
+                AstKind::ForOfStatement(f) => (f.span, &f.left),
+                _ => continue,
             };
-            for pattern in member_for.iter().chain(for_patterns.iter()) {
-                if let Some(pos) = content.find(pattern.as_str()) {
-                    let after = &content[pos + pattern.len()..];
-                    if after.contains(" of ") || after.contains(" in ") {
-                        let sp = content_offset + pos;
-                        ctx.diagnostic(format!("Assignment to property of reactive value '{}'.", var),
-                            oxc::span::Span::new(sp as u32, (sp + pattern.len()) as u32));
-                    }
+            let (name, name_end, is_prop) = match left {
+                ForStatementLeft::VariableDeclaration(_) => continue,
+                ForStatementLeft::AssignmentTargetIdentifier(id) => {
+                    if scoping.get_reference(id.reference_id()).symbol_id().is_some() { continue; }
+                    (id.name.as_str(), id.span.end, false)
                 }
-            }
+                ForStatementLeft::StaticMemberExpression(m) => match expr_base_ident(&m.object) {
+                    Some(id) if scoping.get_reference(id.reference_id()).symbol_id().is_none() =>
+                        (id.name.as_str(), id.span.end, true),
+                    _ => continue,
+                },
+                ForStatementLeft::ComputedMemberExpression(m) => match expr_base_ident(&m.object) {
+                    Some(id) if scoping.get_reference(id.reference_id()).symbol_id().is_none() =>
+                        (id.name.as_str(), id.span.end, true),
+                    _ => continue,
+                },
+                ForStatementLeft::PrivateFieldExpression(m) => match expr_base_ident(&m.object) {
+                    Some(id) if scoping.get_reference(id.reference_id()).symbol_id().is_none() =>
+                        (id.name.as_str(), id.span.end, true),
+                    _ => continue,
+                },
+                _ => continue,
+            };
+            if !reactive_vars.contains(name) { continue; }
+            if is_prop && !check_props { continue; }
+            let sp = content_offset as u32 + for_span.start;
+            let end = content_offset as u32 + name_end;
+            let msg = if is_prop {
+                format!("Assignment to property of reactive value '{}'.", name)
+            } else {
+                format!("Assignment to reactive value '{}'.", name)
+            };
+            ctx.diagnostic(msg, Span::new(sp, end));
         }
 
         if check_props { for var in &reactive_vars {
@@ -568,6 +581,16 @@ fn node_id_to_scope(
         let parent = nodes.parent_id(id);
         if parent == id { return Some(scoping.root_scope_id()); }
         id = parent;
+    }
+}
+
+fn expr_base_ident<'a>(expr: &'a Expression<'a>) -> Option<&'a IdentifierReference<'a>> {
+    match expr {
+        Expression::Identifier(id) => Some(id),
+        Expression::StaticMemberExpression(m) => expr_base_ident(&m.object),
+        Expression::ComputedMemberExpression(m) => expr_base_ident(&m.object),
+        Expression::PrivateFieldExpression(m) => expr_base_ident(&m.object),
+        _ => None,
     }
 }
 
