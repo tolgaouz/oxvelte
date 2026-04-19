@@ -102,33 +102,14 @@ impl Rule for RequireStoreReactiveAccess {
                         .unwrap_or(std::path::Path::new("."));
                     let resolved = resolve_module_file(dir, module);
                     if let Some(module_content) = resolved {
+                        let store_exports = detect_store_exports(&module_content);
                         if imported == "*" {
-                            let store_exports = detect_store_exports(&module_content);
-                            for export_name in &store_exports {
-                                let qualified = format!("{}.{}", local, export_name);
-                                store_vars_map.insert(qualified, true);
+                            for (name, is_const) in &store_exports {
+                                let qualified = format!("{}.{}", local, name);
+                                store_vars_map.insert(qualified, *is_const);
                             }
-                            for line in module_content.lines() {
-                                let trimmed = line.trim();
-                                if trimmed.starts_with("export const ") || trimmed.starts_with("export let ") {
-                                    let is_const = trimmed.starts_with("export const ");
-                                    let after = if is_const { &trimmed[14..] } else { &trimmed[11..] };
-                                    let name_end = after.find(|c: char| !c.is_alphanumeric() && c != '_')
-                                        .unwrap_or(after.len());
-                                    let name = &after[..name_end];
-                                    if store_exports.contains(&name.to_string()) {
-                                        let qualified = format!("{}.{}", local, name);
-                                        store_vars_map.insert(qualified, is_const);
-                                    }
-                                }
-                            }
-                        } else {
-                            let store_exports = detect_store_exports(&module_content);
-                            if store_exports.contains(imported) {
-                                let is_const = module_content.contains(&format!("export const {}", imported))
-                                    || module_content.contains(&format!("const {} =", imported));
-                                store_vars_map.insert(local.clone(), is_const);
-                            }
+                        } else if let Some(&is_const) = store_exports.get(imported) {
+                            store_vars_map.insert(local.clone(), is_const);
                         }
                     }
                 }
@@ -452,7 +433,7 @@ fn resolve_module_file(dir: &std::path::Path, module: &str) -> Option<String> {
         .find_map(|ext| std::fs::read_to_string(dir.join(format!("{}{}", module, ext))).ok())
 }
 
-fn detect_store_exports(content: &str) -> HashSet<String> {
+fn detect_store_exports(content: &str) -> HashMap<String, bool> {
     use oxc::allocator::Allocator;
     use oxc::parser::Parser;
     use oxc::span::SourceType;
@@ -498,14 +479,22 @@ fn detect_store_exports(content: &str) -> HashSet<String> {
     }
 
     // First pass: exported VariableDeclarations whose init is a factory call
-    // or whose binding has a store-typed annotation.
-    let mut stores: HashSet<String> = HashSet::new();
-    let mut exported_decls: Vec<&oxc::ast::ast::VariableDeclarator> = Vec::new();
+    // or whose binding has a store-typed annotation. Record (name, is_const)
+    // using the enclosing VariableDeclaration's `kind`.
+    let mut stores: HashMap<String, bool> = HashMap::new();
+    // Each entry is (declarator, is_const) so pass 2 can propagate is_const.
+    let mut exported_decls: Vec<(&oxc::ast::ast::VariableDeclarator, bool)> = Vec::new();
     for stmt in body {
         let Statement::ExportNamedDeclaration(exp) = stmt else { continue };
         let Some(Declaration::VariableDeclaration(vd)) = &exp.declaration else { continue };
+        let is_const = matches!(
+            vd.kind,
+            VariableDeclarationKind::Const
+                | VariableDeclarationKind::Using
+                | VariableDeclarationKind::AwaitUsing
+        );
         for d in &vd.declarations {
-            exported_decls.push(d);
+            exported_decls.push((d, is_const));
             let Some(name) = binding_identifier_name(&d.id) else { continue };
             let init_store = d.init.as_ref().map(|e| {
                 if expression_calls_factory(e, &factory_names) { return true; }
@@ -524,7 +513,7 @@ fn detect_store_exports(content: &str) -> HashSet<String> {
                     || ts_type_references_names(&ta.type_annotation, &store_type_names)
                     || ts_type_references_names(&ta.type_annotation, &store_interfaces)
             }).unwrap_or(false);
-            if init_store || typed_store { stores.insert(name.to_string()); }
+            if init_store || typed_store { stores.insert(name.to_string(), is_const); }
         }
     }
 
@@ -533,12 +522,13 @@ fn detect_store_exports(content: &str) -> HashSet<String> {
     // where `counter` was detected in pass 1). Iterate until a fixed point.
     loop {
         let mut added = false;
-        for d in &exported_decls {
+        let names: HashSet<String> = stores.keys().cloned().collect();
+        for (d, is_const) in &exported_decls {
             let Some(name) = binding_identifier_name(&d.id) else { continue };
-            if stores.contains(name) { continue; }
+            if stores.contains_key(name) { continue; }
             let Some(init) = &d.init else { continue };
-            if expression_references_any(init, &stores) {
-                stores.insert(name.to_string());
+            if expression_references_any(init, &names) {
+                stores.insert(name.to_string(), *is_const);
                 added = true;
             }
         }
