@@ -5,9 +5,13 @@ use std::collections::HashMap;
 use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::{TemplateNode, Attribute, DirectiveKind};
 use oxc::ast::ast::{
-    BindingPattern, Declaration, ImportDeclaration, ImportDeclarationSpecifier,
-    ModuleExportName, Statement, VariableDeclaration, VariableDeclarationKind,
+    AssignmentTarget, AssignmentTargetMaybeDefault, AssignmentTargetProperty, BindingPattern,
+    Declaration, Expression, IdentifierReference, ImportDeclaration, ImportDeclarationSpecifier,
+    ModuleExportName, SimpleAssignmentTarget, Statement, VariableDeclaration,
+    VariableDeclarationKind,
 };
+use oxc::ast::AstKind;
+use oxc::semantic::NodeId;
 use std::collections::HashSet;
 
 pub struct NoImmutableReactiveStatements;
@@ -66,16 +70,43 @@ impl Rule for NoImmutableReactiveStatements {
             format!("{}{}", before, after)
         };
 
+        // Script-side reassignments and const member writes via the AST —
+        // walk each AssignmentExpression / UpdateExpression and record the
+        // LHS identifier (for lets) or the base of the member chain (for
+        // consts). `let x = 5` / `var x = 5` are VariableDeclarators, not
+        // AssignmentExpressions, so they're not encountered here; `$: x = e`
+        // assignments are skipped via the direct-reactive-body check to
+        // match the old `line.starts_with("$:")` suppression.
         let mut mutable_lets: HashSet<&str> = HashSet::new();
-        for &var in &let_names {
-            if has_reassignment(content, var) || has_reassignment(&template_source, var) {
-                mutable_lets.insert(var);
+        let mut const_member_written: HashSet<&str> = HashSet::new();
+        if let Some(sem) = ctx.instance_semantic {
+            let nodes = sem.nodes();
+            for node in nodes.iter() {
+                if is_in_direct_reactive_body(nodes, node.id()) { continue; }
+                match node.kind() {
+                    AstKind::AssignmentExpression(ae) => {
+                        record_assign_target(&ae.left, &let_names, &const_names,
+                            &mut mutable_lets, &mut const_member_written);
+                    }
+                    AstKind::UpdateExpression(ue) => {
+                        record_simple_target(&ue.argument, &let_names, &const_names,
+                            &mut mutable_lets, &mut const_member_written);
+                    }
+                    _ => {}
+                }
             }
         }
 
-        let mut const_member_written: HashSet<&str> = HashSet::new();
+        // Template-side writes — keeps string scanning for now; template
+        // expressions are stored as opaque text in AttributeValue and a full
+        // AST walk here would require per-expression re-parsing.
+        for &var in &let_names {
+            if !mutable_lets.contains(var) && has_reassignment(&template_source, var) {
+                mutable_lets.insert(var);
+            }
+        }
         for &var in &const_names {
-            if has_member_write(content, var) || has_member_write(&template_source, var) {
+            if !const_member_written.contains(var) && has_member_write(&template_source, var) {
                 const_member_written.insert(var);
             }
         }
@@ -405,6 +436,176 @@ fn find_statement_end(content: &str, start: usize) -> usize {
         i += 1;
     }
     content.len()
+}
+
+/// Walk down an expression chain rooted at an identifier — used to locate
+/// the base identifier of a member-expression LHS.
+fn expr_base_ident<'a>(expr: &'a Expression<'a>) -> Option<&'a IdentifierReference<'a>> {
+    match expr {
+        Expression::Identifier(id) => Some(id),
+        Expression::StaticMemberExpression(m) => expr_base_ident(&m.object),
+        Expression::ComputedMemberExpression(m) => expr_base_ident(&m.object),
+        Expression::PrivateFieldExpression(m) => expr_base_ident(&m.object),
+        _ => None,
+    }
+}
+
+/// Recursively collect leaf identifiers from a destructure pattern —
+/// `{a, b: c, ...d}` / `[a, b, ...c]` / nested patterns / defaults.
+fn collect_destructure_idents<'a>(
+    target: &'a AssignmentTarget<'a>,
+    out: &mut Vec<&'a IdentifierReference<'a>>,
+) {
+    match target {
+        AssignmentTarget::AssignmentTargetIdentifier(id) => out.push(id),
+        AssignmentTarget::ObjectAssignmentTarget(obj) => {
+            for prop in &obj.properties {
+                match prop {
+                    AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(p) =>
+                        out.push(&p.binding),
+                    AssignmentTargetProperty::AssignmentTargetPropertyProperty(p) =>
+                        collect_destructure_maybe_default(&p.binding, out),
+                }
+            }
+            if let Some(rest) = &obj.rest { collect_destructure_idents(&rest.target, out); }
+        }
+        AssignmentTarget::ArrayAssignmentTarget(arr) => {
+            for el in arr.elements.iter().flatten() {
+                collect_destructure_maybe_default(el, out);
+            }
+            if let Some(rest) = &arr.rest { collect_destructure_idents(&rest.target, out); }
+        }
+        _ => {}
+    }
+}
+
+fn collect_destructure_maybe_default<'a>(
+    m: &'a AssignmentTargetMaybeDefault<'a>,
+    out: &mut Vec<&'a IdentifierReference<'a>>,
+) {
+    match m {
+        AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(wd) =>
+            collect_destructure_idents(&wd.binding, out),
+        AssignmentTargetMaybeDefault::AssignmentTargetIdentifier(id) => out.push(id),
+        AssignmentTargetMaybeDefault::ObjectAssignmentTarget(obj) => {
+            for prop in &obj.properties {
+                match prop {
+                    AssignmentTargetProperty::AssignmentTargetPropertyIdentifier(p) =>
+                        out.push(&p.binding),
+                    AssignmentTargetProperty::AssignmentTargetPropertyProperty(p) =>
+                        collect_destructure_maybe_default(&p.binding, out),
+                }
+            }
+            if let Some(rest) = &obj.rest { collect_destructure_idents(&rest.target, out); }
+        }
+        AssignmentTargetMaybeDefault::ArrayAssignmentTarget(arr) => {
+            for el in arr.elements.iter().flatten() {
+                collect_destructure_maybe_default(el, out);
+            }
+            if let Some(rest) = &arr.rest { collect_destructure_idents(&rest.target, out); }
+        }
+        _ => {}
+    }
+}
+
+/// Record writes reachable through an AssignmentExpression's LHS:
+///   - `let_name = ...` / destructure into a let → mutable let
+///   - `const_name.prop = ...` / `const_name[x] = ...` → const member write
+fn record_assign_target<'a>(
+    target: &'a AssignmentTarget<'a>,
+    let_names: &HashSet<&'a str>,
+    const_names: &HashSet<&'a str>,
+    mutable_lets: &mut HashSet<&'a str>,
+    const_member_written: &mut HashSet<&'a str>,
+) {
+    match target {
+        AssignmentTarget::AssignmentTargetIdentifier(id) => {
+            let name = id.name.as_str();
+            if let_names.contains(name) { mutable_lets.insert(name); }
+        }
+        AssignmentTarget::StaticMemberExpression(m) => {
+            if let Some(id) = expr_base_ident(&m.object) {
+                let name = id.name.as_str();
+                if const_names.contains(name) { const_member_written.insert(name); }
+            }
+        }
+        AssignmentTarget::ComputedMemberExpression(m) => {
+            if let Some(id) = expr_base_ident(&m.object) {
+                let name = id.name.as_str();
+                if const_names.contains(name) { const_member_written.insert(name); }
+            }
+        }
+        AssignmentTarget::PrivateFieldExpression(m) => {
+            if let Some(id) = expr_base_ident(&m.object) {
+                let name = id.name.as_str();
+                if const_names.contains(name) { const_member_written.insert(name); }
+            }
+        }
+        AssignmentTarget::ObjectAssignmentTarget(_)
+        | AssignmentTarget::ArrayAssignmentTarget(_) => {
+            let mut idents = Vec::new();
+            collect_destructure_idents(target, &mut idents);
+            for id in idents {
+                let name = id.name.as_str();
+                if let_names.contains(name) { mutable_lets.insert(name); }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Same as `record_assign_target` but for an UpdateExpression's argument
+/// (`++`/`--`). Destructure variants are syntactically impossible here, so
+/// only identifier and member variants need to be considered.
+fn record_simple_target<'a>(
+    target: &'a SimpleAssignmentTarget<'a>,
+    let_names: &HashSet<&'a str>,
+    const_names: &HashSet<&'a str>,
+    mutable_lets: &mut HashSet<&'a str>,
+    const_member_written: &mut HashSet<&'a str>,
+) {
+    match target {
+        SimpleAssignmentTarget::AssignmentTargetIdentifier(id) => {
+            let name = id.name.as_str();
+            if let_names.contains(name) { mutable_lets.insert(name); }
+        }
+        SimpleAssignmentTarget::StaticMemberExpression(m) => {
+            if let Some(id) = expr_base_ident(&m.object) {
+                let name = id.name.as_str();
+                if const_names.contains(name) { const_member_written.insert(name); }
+            }
+        }
+        SimpleAssignmentTarget::ComputedMemberExpression(m) => {
+            if let Some(id) = expr_base_ident(&m.object) {
+                let name = id.name.as_str();
+                if const_names.contains(name) { const_member_written.insert(name); }
+            }
+        }
+        SimpleAssignmentTarget::PrivateFieldExpression(m) => {
+            if let Some(id) = expr_base_ident(&m.object) {
+                let name = id.name.as_str();
+                if const_names.contains(name) { const_member_written.insert(name); }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// True iff the node's nearest enclosing ExpressionStatement is the direct
+/// body of a `$`-labeled statement (`$: <expr>;`). Matches the old
+/// `line.starts_with("$:")` suppression so reactive declarations aren't
+/// counted as reassignments.
+fn is_in_direct_reactive_body(nodes: &oxc::semantic::AstNodes, node_id: NodeId) -> bool {
+    let mut id = node_id;
+    loop {
+        let parent = nodes.parent_id(id);
+        if parent == id { return false; }
+        if let AstKind::ExpressionStatement(_) = nodes.kind(parent) {
+            let gp = nodes.parent_id(parent);
+            return matches!(nodes.kind(gp), AstKind::LabeledStatement(ls) if ls.label.name == "$");
+        }
+        id = parent;
+    }
 }
 
 fn has_reassignment(content: &str, var: &str) -> bool {
