@@ -131,12 +131,13 @@ impl Rule for NoNavigationWithoutResolve {
                 if el.name != "a" {
                     return;
                 }
-                // `rel="external"` opts-out.
+                // `rel="external"` opts-out. For expression values, parse and
+                // look for a literal "external" anywhere in the expression.
                 let has_external = el.attributes.iter().any(|a| matches!(
                     a,
                     Attribute::NormalAttribute { name, value, .. } if name == "rel" && match value {
-                        AttributeValue::Static(v) => v.contains("external"),
-                        AttributeValue::Expression(e) => e.contains("external") || e.trim() == "rel",
+                        AttributeValue::Static(v) => v.split_ascii_whitespace().any(|t| t == "external"),
+                        AttributeValue::Expression(e) => expr_contains_literal(e, "external", ctx.instance_semantic),
                         _ => false,
                     }
                 ));
@@ -153,20 +154,7 @@ impl Rule for NoNavigationWithoutResolve {
                     let ok = match value {
                         AttributeValue::Static(v) => is_exempt_href(v),
                         AttributeValue::Expression(expr_text) => {
-                            // Fast path: textual indicators of absolute/fragment
-                            // URLs. Matches vendor's coarse heuristic — covers
-                            // concatenations and template literals that build
-                            // URLs from pieces.
-                            let trimmed = expr_text.trim();
-                            if expr_text.contains("://")
-                                || trimmed.starts_with("'#")
-                                || trimmed.starts_with("\"#")
-                                || trimmed.starts_with("`#")
-                            {
-                                true
-                            } else {
-                                is_safe_template_expr(expr_text, &resolve_locals, ctx.instance_semantic)
-                            }
+                            is_safe_template_expr(expr_text, &resolve_locals, ctx.instance_semantic)
                         }
                         AttributeValue::True => true,
                         AttributeValue::Concat(_) => true,
@@ -199,6 +187,84 @@ fn is_exempt_href(s: &str) -> bool {
         || s.starts_with('#')
 }
 
+/// Compute the longest static string that `expr` is guaranteed to start with,
+/// folding `+` concatenation and template-literal quasis. Returns `None` for
+/// dynamic expressions whose leading bytes aren't statically known.
+fn static_string_prefix(expr: &Expression<'_>) -> Option<String> {
+    match expr {
+        Expression::StringLiteral(l) => Some(l.value.to_string()),
+        Expression::TemplateLiteral(t) => {
+            let first = t.quasis.first()?;
+            Some(first.value.cooked.as_deref().unwrap_or(first.value.raw.as_str()).to_string())
+        }
+        Expression::BinaryExpression(b) => {
+            let left = static_string_prefix(&b.left)?;
+            // If left is a complete static string (no dynamic tail), try to
+            // extend with right; otherwise left's prefix is already the answer.
+            if matches!(&b.left, Expression::StringLiteral(_)) {
+                if let Some(right) = static_string_prefix(&b.right) {
+                    return Some(format!("{}{}", left, right));
+                }
+            }
+            Some(left)
+        }
+        _ => None,
+    }
+}
+
+/// Parse `expr_text` and return true if any string literal (plain or template
+/// quasi) in the expression contains `needle` as a whitespace-separated token.
+/// Resolves identifier references to their `const`/`let` initializers via the
+/// instance `semantic` when available.
+fn expr_contains_literal<'a>(
+    expr_text: &str,
+    needle: &str,
+    instance_sem: Option<&'a Semantic<'a>>,
+) -> bool {
+    let alloc = Allocator::default();
+    let Ok(expr) = Parser::new(&alloc, expr_text, SourceType::mjs()).parse_expression() else {
+        return false;
+    };
+    fn token_match(s: &str, needle: &str) -> bool {
+        s.split_ascii_whitespace().any(|t| t == needle)
+    }
+    fn walk<'a>(
+        expr: &Expression<'_>,
+        needle: &str,
+        sem: Option<&'a Semantic<'a>>,
+        seen: &mut FxHashSet<String>,
+    ) -> bool {
+        match expr {
+            Expression::StringLiteral(l) => token_match(l.value.as_str(), needle),
+            Expression::TemplateLiteral(t) => t.quasis.iter().any(|q| {
+                token_match(q.value.cooked.as_deref().unwrap_or(q.value.raw.as_str()), needle)
+            }),
+            Expression::BinaryExpression(b) => walk(&b.left, needle, sem, seen) || walk(&b.right, needle, sem, seen),
+            Expression::ConditionalExpression(c) => walk(&c.consequent, needle, sem, seen) || walk(&c.alternate, needle, sem, seen),
+            Expression::LogicalExpression(l) => walk(&l.left, needle, sem, seen) || walk(&l.right, needle, sem, seen),
+            Expression::Identifier(id) => {
+                let Some(sem) = sem else { return false };
+                let name = id.name.as_str();
+                if !seen.insert(name.to_string()) { return false; }
+                let scoping = sem.scoping();
+                let Some(sid) = scoping.find_binding(scoping.root_scope_id(), Ident::new_const(name)) else {
+                    return false;
+                };
+                let decl_node_id = scoping.symbol_declaration(sid);
+                let init = std::iter::once(decl_node_id)
+                    .chain(sem.nodes().ancestor_ids(decl_node_id))
+                    .find_map(|aid| match sem.nodes().kind(aid) {
+                        AstKind::VariableDeclarator(vd) => vd.init.as_ref(),
+                        _ => None,
+                    });
+                init.is_some_and(|e| walk(e, needle, Some(sem), seen))
+            }
+            _ => false,
+        }
+    }
+    walk(&expr, needle, instance_sem, &mut FxHashSet::default())
+}
+
 fn callee_static_name(callee: &Expression<'_>) -> Option<String> {
     match callee {
         Expression::Identifier(id) => Some(id.name.to_string()),
@@ -227,23 +293,16 @@ fn is_safe_nav_arg<'a>(
     semantic: &'a Semantic<'a>,
     seen: &mut FxHashSet<oxc::semantic::SymbolId>,
 ) -> bool {
+    if static_string_prefix(expr).is_some_and(|p| is_exempt_href(&p)) { return true; }
     match expr {
         Expression::CallExpression(_) => is_resolve_call(expr, resolve_locals),
-        Expression::StringLiteral(l) => is_exempt_href(l.value.as_str()),
-        Expression::TemplateLiteral(t) if t.expressions.is_empty() => {
-            let first = t.quasis.first().map(|q| q.value.cooked.as_deref().unwrap_or(q.value.raw.as_str()));
-            first.map_or(true, is_exempt_href)
-        }
         Expression::NullLiteral(_) => true,
         Expression::Identifier(id) => {
             if id.name == "undefined" {
                 return true;
             }
             let reference = semantic.scoping().get_reference(id.reference_id());
-            let Some(sid) = reference.symbol_id() else {
-                eprintln!("DEBUG is_safe_nav_arg: {} no symbol_id", id.name);
-                return false
-            };
+            let Some(sid) = reference.symbol_id() else { return false };
             if !seen.insert(sid) {
                 return false; // recursion guard
             }
@@ -289,13 +348,9 @@ fn is_safe_template_root<'a>(
     instance_sem: Option<&'a Semantic<'a>>,
     seen: &mut FxHashSet<String>,
 ) -> bool {
+    if static_string_prefix(expr).is_some_and(|p| is_exempt_href(&p)) { return true; }
     match expr {
         Expression::CallExpression(_) => is_resolve_call(expr, resolve_locals),
-        Expression::StringLiteral(l) => is_exempt_href(l.value.as_str()),
-        Expression::TemplateLiteral(t) if t.expressions.is_empty() => {
-            let first = t.quasis.first().map(|q| q.value.cooked.as_deref().unwrap_or(q.value.raw.as_str()));
-            first.map_or(true, is_exempt_href)
-        }
         Expression::NullLiteral(_) => true,
         Expression::Identifier(id) => {
             if id.name == "undefined" {
@@ -337,13 +392,9 @@ fn is_safe_instance_expr<'a>(
     sem: &'a Semantic<'a>,
     seen: &mut FxHashSet<String>,
 ) -> bool {
+    if static_string_prefix(expr).is_some_and(|p| is_exempt_href(&p)) { return true; }
     match expr {
         Expression::CallExpression(_) => is_resolve_call(expr, resolve_locals),
-        Expression::StringLiteral(l) => is_exempt_href(l.value.as_str()),
-        Expression::TemplateLiteral(t) if t.expressions.is_empty() => {
-            let first = t.quasis.first().map(|q| q.value.cooked.as_deref().unwrap_or(q.value.raw.as_str()));
-            first.map_or(true, is_exempt_href)
-        }
         Expression::NullLiteral(_) => true,
         Expression::Identifier(id) => {
             if id.name == "undefined" {
