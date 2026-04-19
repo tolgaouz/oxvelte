@@ -4,7 +4,8 @@
 //! Svelte's reactive classes (SvelteSet, SvelteMap, etc.) are already reactive
 //! and don't need `$state()` wrapping.
 
-use crate::linter::{LintContext, Rule};
+use crate::linter::{walk_template_nodes, LintContext, Rule};
+use crate::ast::{Attribute, AttributeValue, DirectiveKind, Fragment, TemplateNode};
 use oxc::ast::ast::{Argument, Expression, ImportDeclarationSpecifier, ModuleExportName, Statement};
 use oxc::ast::AstKind;
 use oxc::semantic::SymbolId;
@@ -130,7 +131,7 @@ impl Rule for NoUnnecessaryStateWrap {
                     } else {
                         // `let` + allowReassign: skip if the var IS reassigned.
                         let reassigned = decl_symbol
-                            .map(|sid| is_symbol_reassigned(sid, scoping, nodes, ctx.source))
+                            .map(|sid| is_symbol_reassigned(sid, scoping, nodes, &ctx.ast.html))
                             .unwrap_or(false);
                         !reassigned
                     }
@@ -151,26 +152,42 @@ impl Rule for NoUnnecessaryStateWrap {
     }
 }
 
-/// Has this symbol been reassigned anywhere (JS or template via `bind:`)?
+/// Has this symbol been reassigned anywhere (JS write reference, or a template
+/// `bind:` directive that would write through to this name)?
 fn is_symbol_reassigned<'a>(
     sid: SymbolId,
     scoping: &'a oxc::semantic::Scoping,
     _nodes: &'a oxc::semantic::AstNodes<'a>,
-    template_source: &str,
+    html: &'a Fragment,
 ) -> bool {
-    // AST-level: any reference that's a write.
     if scoping.get_resolved_references(sid).any(|r| r.is_write()) {
         return true;
     }
     let name = scoping.symbol_name(sid);
-    // Template-level: `bind:foo={x}` or `bind:value={foo}` can reassign.
-    let _ = name;
-    // We keep the textual fallback minimal here: if the source has a `bind:...=x`
-    // where x refers to this symbol, treat as reassigned. Name-matching is a
-    // rough but reasonable heuristic for the template, matching vendor behavior.
-    template_source.contains(&format!("bind:{}", name))
-        || template_source.contains(&format!("{{{}}}", name))
-            && template_source.contains(&format!("bind:"))
+    let mut found = false;
+    walk_template_nodes(html, &mut |node| {
+        if found { return; }
+        let TemplateNode::Element(el) = node else { return };
+        for attr in &el.attributes {
+            let Attribute::Directive { kind: DirectiveKind::Binding, name: dir_name, value, .. } = attr
+                else { continue };
+            // `bind:name` shorthand — the directive name is the bound symbol.
+            if dir_name == name {
+                found = true;
+                return;
+            }
+            // `bind:anything={name}` / nested member writing through name.
+            if let AttributeValue::Expression(text) = value {
+                let trimmed = text.trim();
+                let base = trimmed.split(|c: char| c == '.' || c == '[').next().unwrap_or(trimmed);
+                if base == name {
+                    found = true;
+                    return;
+                }
+            }
+        }
+    });
+    found
 }
 
 // Ensure we import FxHashSet to keep the module compile clean even when unused.
