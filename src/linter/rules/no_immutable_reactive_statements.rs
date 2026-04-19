@@ -58,7 +58,21 @@ impl Rule for NoImmutableReactiveStatements {
             }
         }
 
-        let reactive_stmts = collect_reactive_stmts(content);
+        // Enumerate `$: ...` labeled statements at the top level directly
+        // from the AST — the LabeledStatement's span covers the whole
+        // `$: <body>;`, including the `$:` prefix, so slicing the script
+        // content by that span gives the same `full_text` the text scanner
+        // previously produced.
+        let reactive_stmts: Vec<(usize, &str)> = ctx.instance_semantic
+            .iter()
+            .flat_map(|sem| sem.nodes().program().body.iter().filter_map(|stmt| {
+                let Statement::LabeledStatement(ls) = stmt else { return None };
+                if ls.label.name.as_str() != "$" { return None; }
+                let start = ls.span.start as usize;
+                let end = (ls.span.end as usize).min(content.len());
+                Some((start, &content[start..end]))
+            }))
+            .collect();
         if reactive_stmts.is_empty() { return; }
 
         // Extract template portion of source (outside script tags) to avoid re-scanning script
@@ -372,70 +386,6 @@ fn collect_binding_names<'a>(pat: &BindingPattern<'a>, out: &mut HashSet<&'a str
             collect_binding_names(&inner.left, out);
         }
     }
-}
-
-fn collect_reactive_stmts(content: &str) -> Vec<(usize, &str)> {
-    let mut stmts = Vec::new();
-    let mut off = 0;
-    for line in content.lines() {
-        if line.trim().starts_with("$:") {
-            let start_offset = off + (line.len() - line.trim_start().len());
-            let stmt_end = find_statement_end(content, start_offset);
-            stmts.push((start_offset, &content[start_offset..stmt_end]));
-        }
-        off += line.len() + 1;
-    }
-    stmts
-}
-
-fn find_statement_end(content: &str, start: usize) -> usize {
-    let bytes = content.as_bytes();
-    let mut i = start;
-    if i + 2 <= bytes.len() && &content[i..i+2] == "$:" { i += 2; }
-    i = content.len() - content[i..].trim_start().len();
-    let mut db = 0i32;
-    let mut dp = 0i32;
-    let mut dk = 0i32;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
-                while i < bytes.len() && bytes[i] != b'\n' { i += 1; }
-                if i < bytes.len() { i += 1; }
-                continue;
-            }
-            b'\'' | b'"' => { i = skip_simple_string(bytes, i); continue; }
-            b'`' => { let (end, _) = skip_template_literal(bytes, i); i = end; continue; }
-            b'{' => db += 1,
-            b'}' => {
-                db -= 1;
-                if db < 0 { return i; }
-                if db == 0 && dp == 0 && dk == 0 {
-                    let mut j = i + 1;
-                    while j < bytes.len() && matches!(bytes[j], b' ' | b'\t') { j += 1; }
-                    if j < bytes.len() && matches!(bytes[j], b'[' | b'.' | b'(') { i += 1; continue; }
-                    return j;
-                }
-            }
-            b'(' => dp += 1,
-            b')' => dp -= 1,
-            b'[' => dk += 1,
-            b']' => dk -= 1,
-            b';' if db == 0 && dp == 0 && dk == 0 => return i + 1,
-            b'\n' if db == 0 && dp == 0 && dk == 0 => {
-                let before = content[start..i].trim_end();
-                let after = content[i + 1..].trim_start();
-                let ea = before.ends_with('=') && !before.ends_with("==");
-                if ea || ["?", ":", "||", "&&", "+", "-", ",", "\\", "??"].iter().any(|p| before.ends_with(p))
-                    || ["?", ":", "||", "&&", "??", ".", "?."].iter().any(|p| after.starts_with(p)) {
-                    i += 1; continue;
-                }
-                return i;
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    content.len()
 }
 
 /// Walk down an expression chain rooted at an identifier — used to locate
