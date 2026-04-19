@@ -16,11 +16,6 @@ use std::collections::HashSet;
 
 pub struct NoReactiveReassign;
 
-const MUTATING_METHODS: &[&str] = &[
-    "push(", "pop(", "shift(", "unshift(", "splice(",
-    "sort(", "reverse(", "fill(", "copyWithin(",
-];
-
 impl Rule for NoReactiveReassign {
     fn name(&self) -> &'static str {
         "svelte/no-reactive-reassign"
@@ -39,7 +34,6 @@ impl Rule for NoReactiveReassign {
             .unwrap_or(true);
 
         let Some(script) = &ctx.ast.instance else { return };
-        let content = &script.content;
         let base = script.span.start as usize;
         let source = ctx.source;
         let tag_text = &source[base..script.span.end as usize];
@@ -267,93 +261,209 @@ impl Rule for NoReactiveReassign {
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
                 for attr in &el.attributes {
-                    let expr_span = match attr {
-                        Attribute::Directive { kind: DirectiveKind::EventHandler, span, .. } => Some(*span),
-                        Attribute::NormalAttribute { span, value, .. } => {
-                            match value {
-                                crate::ast::AttributeValue::Expression(_) => Some(*span),
-                                crate::ast::AttributeValue::Concat(_) => Some(*span),
-                                _ => None,
-                            }
-                        }
+                    // Event-handler / expression-valued attributes: parse each
+                    // expression and look for reassignment patterns via AST.
+                    let expr_value = match attr {
+                        Attribute::Directive { kind: DirectiveKind::EventHandler, value, span, .. } =>
+                            Some((value, *span)),
+                        Attribute::NormalAttribute { value, span, .. }
+                            if matches!(value,
+                                crate::ast::AttributeValue::Expression(_)
+                                | crate::ast::AttributeValue::Concat(_)) =>
+                            Some((value, *span)),
                         _ => None,
                     };
-                    if let Some(span) = expr_span {
-                        let region = &ctx.source[span.start as usize..span.end as usize];
-                        let tmpl_suffixes: &[&str] = &[" = ", " += ", " -= ", " *= ", " /= ", " %= ", "++", "--"];
-                        for var in &reactive_vars {
-                            let pats: Vec<String> = tmpl_suffixes.iter().map(|s| format!("{}{}", var, s)).collect();
-                            'next_var: for pat in &pats {
-                                for (pos, _) in region.match_indices(pat.as_str()) {
-                                    if pos > 0 && matches!(region.as_bytes()[pos - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$' | b'.') { continue; }
-                                    if pat.ends_with("= ") && pos + pat.len() - 1 < region.len() && region.as_bytes()[pos + pat.len() - 1] == b'=' { continue; }
-                                    let before = &region[..pos];
-                                    if before.matches('\'').count() % 2 != 0 || before.matches('"').count() % 2 != 0 { continue; }
-                                    let ap = span.start as usize + pos;
-                                    ctx.diagnostic(format!("Assignment to reactive value '{}'.", var),
-                                        oxc::span::Span::new(ap as u32, (ap + var.len()) as u32));
-                                    break 'next_var;
+                    if let Some((value, attr_span)) = expr_value {
+                        let region = &ctx.source[attr_span.start as usize..attr_span.end as usize];
+                        match value {
+                            crate::ast::AttributeValue::Expression(text) => {
+                                if let Some(open_pos) = region.find('{') {
+                                    let text_start = attr_span.start + open_pos as u32 + 1;
+                                    check_template_expression(text, text_start, attr_span, &reactive_vars, check_props, ctx);
                                 }
                             }
-                        }
-                        if check_props { for var in &reactive_vars {
-                            for prefix in &[var.clone(), format!("${}", var)] {
-                                for pat_start in &[format!("{}.", prefix), format!("{}[", prefix)] {
-                                    for (pos, _) in region.match_indices(pat_start.as_str()) {
-                                        if pos > 0 && matches!(region.as_bytes()[pos - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$') { continue; }
-                                        let before = &region[..pos];
-                                        if before.matches('\'').count() % 2 != 0 || before.matches('"').count() % 2 != 0 { continue; }
-                                        let after = &region[pos + pat_start.len()..];
-                                        let mut rest = if pat_start.ends_with('[') {
-                                            after.find(']').map(|p| &after[p+1..]).unwrap_or("")
-                                        } else {
-                                            let end = after.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(after.len());
-                                            &after[end..]
-                                        };
-                                        loop {
-                                            if rest.starts_with('.') || rest.starts_with("?.") {
-                                                let skip = if rest.starts_with("?.") { 2 } else { 1 };
-                                                let r = &rest[skip..];
-                                                for m in MUTATING_METHODS {
-                                                    if r.starts_with(*m) {
-                                                        let ap = span.start as usize + pos;
-                                                        ctx.diagnostic(format!("Assignment to property of reactive value '{}'.", prefix),
-                                                            oxc::span::Span::new(ap as u32, (ap + pat_start.len()) as u32));
-                                                    }
-                                                }
-                                                let end = r.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(r.len());
-                                                rest = &r[end..];
-                                            } else if rest.starts_with('[') {
-                                                rest = rest[1..].find(']').map(|p| &rest[p+2..]).unwrap_or("");
-                                            } else { break; }
-                                        }
-                                        let rest = rest.trim_start();
-                                        if rest.starts_with('=') && !rest.starts_with("==") {
-                                            let ap = span.start as usize + pos;
-                                            ctx.diagnostic(format!("Assignment to property of reactive value '{}'.", prefix),
-                                                oxc::span::Span::new(ap as u32, (ap + pat_start.len()) as u32));
-                                            break;
+                            crate::ast::AttributeValue::Concat(parts) => {
+                                // AttributeValuePart doesn't carry span information;
+                                // locate each `{…}` in the region in document order
+                                // and match expression parts to their positions.
+                                let mut cursor = 0usize;
+                                for part in parts {
+                                    if let crate::ast::AttributeValuePart::Expression(text) = part {
+                                        let Some(rel) = region[cursor..].find('{') else { break };
+                                        let text_start = attr_span.start + (cursor + rel) as u32 + 1;
+                                        check_template_expression(text, text_start, attr_span, &reactive_vars, check_props, ctx);
+                                        cursor += rel + 1 + text.len();
+                                        if let Some(close_rel) = region[cursor..].find('}') {
+                                            cursor += close_rel + 1;
                                         }
                                     }
                                 }
                             }
-                        }}
+                            _ => {}
+                        }
                     }
-                    if let Attribute::Directive { kind: DirectiveKind::Binding, name, span, .. } = attr {
-                        let region = &ctx.source[span.start as usize..span.end as usize];
-                        if let (Some(open), Some(close)) = (region.find('{'), region.find('}')) {
-                            let bound = region[open+1..close].trim();
-                            let base = bound.split('.').next().unwrap_or(bound);
-                            if reactive_vars.contains(bound) || (reactive_vars.contains(base) && (check_props || !bound.contains('.'))) {
-                                ctx.diagnostic(format!("Assignment to reactive value '{}'.", base), *span);
+
+                    // Binding directive: the expression IS the write target.
+                    // `bind:value` (shorthand) binds the variable named after
+                    // the directive. `bind:value={foo}` / `bind:value={foo.bar}`
+                    // binds the expression.
+                    if let Attribute::Directive { kind: DirectiveKind::Binding, name, value, span, .. } = attr {
+                        let (bound, base) = match value {
+                            crate::ast::AttributeValue::Expression(text) => {
+                                let Some((base_name, is_member)) = parse_bind_target(text) else { continue };
+                                (base_name.clone(), (base_name, is_member))
                             }
-                        } else if reactive_vars.contains(name.as_str()) {
-                            ctx.diagnostic(format!("Assignment to reactive value '{}'.", name), *span);
+                            crate::ast::AttributeValue::True => (name.clone(), (name.clone(), false)),
+                            _ => continue,
+                        };
+                        let (base_name, is_member) = base;
+                        let matched = if is_member {
+                            reactive_vars.contains(&base_name) && check_props
+                        } else {
+                            reactive_vars.contains(&base_name) || bound == base_name && reactive_vars.contains(&bound)
+                        };
+                        if matched {
+                            ctx.diagnostic(format!("Assignment to reactive value '{}'.", base_name), *span);
                         }
                     }
                 }
             }
         });
+    }
+}
+
+/// Parse a `bind:x={...}` target expression via oxc and return `(base_name,
+/// is_member)`. `base` is the outermost identifier (e.g. `foo` in `foo.bar`
+/// or in `foo[x]`); `is_member` is true when the bind target is a member
+/// expression rather than a plain identifier.
+fn parse_bind_target(text: &str) -> Option<(String, bool)> {
+    use oxc::allocator::Allocator;
+    use oxc::parser::Parser;
+    use oxc::span::SourceType;
+    let alloc = Allocator::default();
+    let res = Parser::new(&alloc, text, SourceType::ts()).parse_expression();
+    let expr = res.ok()?;
+    match &expr {
+        Expression::Identifier(id) => Some((id.name.as_str().to_string(), false)),
+        Expression::StaticMemberExpression(m) =>
+            expr_base_ident(&m.object).map(|id| (id.name.as_str().to_string(), true)),
+        Expression::ComputedMemberExpression(m) =>
+            expr_base_ident(&m.object).map(|id| (id.name.as_str().to_string(), true)),
+        Expression::PrivateFieldExpression(m) =>
+            expr_base_ident(&m.object).map(|id| (id.name.as_str().to_string(), true)),
+        _ => None,
+    }
+}
+
+/// Parse a template-expression text as a JS expression and run the same
+/// AssignmentExpression / UpdateExpression / CallExpression checks against
+/// `reactive_vars`. Diagnostics are placed at the identifier's position in
+/// the source (computed via `text_start`), so multi-line event handlers
+/// line up with the assignment itself rather than the enclosing attribute.
+/// Template expressions have no semantic scope of their own, so shadowing
+/// inside the expression is not checked (matching prior behavior).
+fn check_template_expression<'a>(
+    text: &str,
+    text_start: u32,
+    fallback_span: Span,
+    reactive_vars: &std::collections::HashSet<String>,
+    check_props: bool,
+    ctx: &mut LintContext<'a>,
+) {
+    use oxc::allocator::Allocator;
+    use oxc::parser::Parser;
+    use oxc::semantic::SemanticBuilder;
+    use oxc::span::SourceType;
+
+    let alloc = Allocator::default();
+    // Wrap so every valid JS expression parses as a statement-level form.
+    // Wrapper adds a leading `(` at offset 0; expression text starts at
+    // wrapper offset 1.
+    let wrapper = format!("({});", text);
+    let parsed = Parser::new(&alloc, &wrapper, SourceType::ts()).parse();
+    if !parsed.errors.is_empty() { return; }
+    let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+    let nodes = semantic.nodes();
+
+    let mut reported_direct = std::collections::HashSet::<String>::new();
+    const MUTATING_NAMES: &[&str] = &[
+        "push", "pop", "shift", "unshift", "splice",
+        "sort", "reverse", "fill", "copyWithin",
+    ];
+
+    // Translate a wrapper-relative span start to the corresponding byte
+    // offset in the original source. One-byte wrapper prefix means we
+    // subtract 1 before adding `text_start`.
+    let src_pos = |wrap_pos: u32| -> u32 {
+        text_start + wrap_pos.saturating_sub(1)
+    };
+
+    let check_reactive = |name: &str| -> bool {
+        reactive_vars.contains(name)
+            || (name.starts_with('$') && reactive_vars.contains(&name[1..]))
+    };
+
+    // Suppress when the wrapper parse yielded no useful nodes.
+    let _ = fallback_span;
+
+    for node in nodes.iter() {
+        match node.kind() {
+            AstKind::AssignmentExpression(ae) => {
+                let Some((base, depth)) = target_member_path(&ae.left) else { continue };
+                let name = base.name.as_str();
+                if !check_reactive(name) { continue; }
+                let sp = src_pos(base.span.start);
+                let end = src_pos(base.span.end);
+                if depth == 0 {
+                    if !reported_direct.insert(name.to_string()) { continue; }
+                    ctx.diagnostic(
+                        format!("Assignment to reactive value '{}'.", name),
+                        Span::new(sp, end),
+                    );
+                } else if check_props {
+                    ctx.diagnostic(
+                        format!("Assignment to property of reactive value '{}'.", name),
+                        Span::new(sp, end),
+                    );
+                }
+            }
+            AstKind::UpdateExpression(ue) => {
+                let Some((base, depth)) = simple_target_member_path(&ue.argument) else { continue };
+                let name = base.name.as_str();
+                if !check_reactive(name) { continue; }
+                let sp = src_pos(base.span.start);
+                let end = src_pos(base.span.end);
+                if depth == 0 {
+                    if !reported_direct.insert(name.to_string()) { continue; }
+                    ctx.diagnostic(
+                        format!("Assignment to reactive value '{}'.", name),
+                        Span::new(sp, end),
+                    );
+                } else if check_props {
+                    ctx.diagnostic(
+                        format!("Assignment to property of reactive value '{}'.", name),
+                        Span::new(sp, end),
+                    );
+                }
+            }
+            AstKind::CallExpression(ce) if check_props => {
+                let (method_name, base_expr) = match &ce.callee {
+                    Expression::StaticMemberExpression(m) => (m.property.name.as_str(), &m.object),
+                    _ => continue,
+                };
+                if !MUTATING_NAMES.contains(&method_name) { continue; }
+                let Some((base, _)) = expr_member_path(base_expr) else { continue };
+                let name = base.name.as_str();
+                if !check_reactive(name) { continue; }
+                let sp = src_pos(base.span.start);
+                let end = src_pos(base.span.end);
+                ctx.diagnostic(
+                    format!("Assignment to property of reactive value '{}'.", name),
+                    Span::new(sp, end),
+                );
+            }
+            _ => {}
+        }
     }
 }
 
