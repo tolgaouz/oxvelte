@@ -3,7 +3,10 @@
 
 use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::{TemplateNode, Attribute, AttributeValue, AttributeValuePart};
-use oxc::ast::ast::{ImportDeclarationSpecifier, ModuleExportName, Statement};
+use oxc::ast::ast::{
+    BindingPattern, Declaration, Expression, ImportDeclarationSpecifier, ModuleExportName,
+    Statement, TSType, TSTypeName, VariableDeclaration, VariableDeclarationKind,
+};
 use std::collections::{HashSet, HashMap};
 
 const STORE_FACTORIES: &[&str] = &["writable", "readable", "derived"];
@@ -62,31 +65,23 @@ impl Rule for RequireStoreReactiveAccess {
             }
         }
 
+        // Walk top-level `const`/`let` declarations in the instance script and
+        // mark a binding as a store when its initializer calls one of the
+        // factory-name imports (`writable`/`readable`/`derived`) or when it
+        // has a TS type annotation whose reference is a store type.
         let mut store_vars_map: HashMap<String, bool> = HashMap::new();
-
-        for line in content.lines() {
-            let trimmed = line.trim();
-            for (prefix, is_const) in &[("const ", true), ("let ", false)] {
-                if let Some(rest) = trimmed.strip_prefix(prefix) {
-                    let name_end = rest.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
-                        .unwrap_or(rest.len());
-                    let name = &rest[..name_end];
-                    if name.is_empty() { continue; }
-                    if let Some(eq) = rest.find('=') {
-                        let init = rest[eq + 1..].trim();
-                        let is_store = factory_names.iter().any(|f| init.starts_with(&format!("{}(", f)));
-                        if is_store {
-                            store_vars_map.insert(name.to_string(), *is_const);
+        if let Some(sem) = ctx.instance_semantic {
+            for stmt in &sem.nodes().program().body {
+                match stmt {
+                    Statement::VariableDeclaration(vd) => {
+                        collect_store_vars_from_decl(vd, &factory_names, &mut store_vars_map);
+                    }
+                    Statement::ExportNamedDeclaration(exp) => {
+                        if let Some(Declaration::VariableDeclaration(vd)) = &exp.declaration {
+                            collect_store_vars_from_decl(vd, &factory_names, &mut store_vars_map);
                         }
                     }
-                    if let Some(colon) = rest[name_end..].find(':') {
-                        let type_start = name_end + colon + 1;
-                        let type_end = rest[type_start..].find('=').map(|p| type_start + p).unwrap_or(rest.len());
-                        let type_text = rest[type_start..type_end].trim();
-                        if is_store_type(type_text) {
-                            store_vars_map.insert(name.to_string(), *is_const);
-                        }
-                    }
+                    _ => {}
                 }
             }
         }
@@ -345,6 +340,64 @@ impl Rule for RequireStoreReactiveAccess {
                 _ => {}
             }
         });
+    }
+}
+
+/// Record each identifier binding from a VariableDeclaration as a store when
+/// the declarator's initializer is `factory(...)` or the declarator has a
+/// store-typed annotation. The declaration's kind determines whether the
+/// resulting map entry is `true` (const) or `false` (let/var).
+fn collect_store_vars_from_decl(
+    vd: &VariableDeclaration<'_>,
+    factory_names: &HashSet<String>,
+    out: &mut HashMap<String, bool>,
+) {
+    let is_const = matches!(
+        vd.kind,
+        VariableDeclarationKind::Const
+            | VariableDeclarationKind::Using
+            | VariableDeclarationKind::AwaitUsing
+    );
+    for d in &vd.declarations {
+        let Some(name) = binding_identifier_name(&d.id) else { continue };
+        let init_is_factory = d.init.as_ref()
+            .map(|e| expression_calls_factory(e, factory_names))
+            .unwrap_or(false);
+        let typed_as_store = d.type_annotation
+            .as_ref()
+            .map(|ta| ts_type_is_store(&ta.type_annotation))
+            .unwrap_or(false);
+        if init_is_factory || typed_as_store {
+            out.insert(name.to_string(), is_const);
+        }
+    }
+}
+
+fn binding_identifier_name<'a>(pat: &'a BindingPattern<'a>) -> Option<&'a str> {
+    match pat {
+        BindingPattern::BindingIdentifier(id) => Some(id.name.as_str()),
+        _ => None,
+    }
+}
+
+/// True iff the expression is a direct `name(...)` call whose callee matches
+/// one of the known store-factory names.
+fn expression_calls_factory(expr: &Expression<'_>, factory_names: &HashSet<String>) -> bool {
+    let Expression::CallExpression(call) = expr else { return false };
+    let Expression::Identifier(id) = &call.callee else { return false };
+    factory_names.contains(id.name.as_str())
+}
+
+/// True iff the TS type names a store (directly, or as a member of a union).
+fn ts_type_is_store(ty: &TSType<'_>) -> bool {
+    match ty {
+        TSType::TSTypeReference(r) => {
+            let TSTypeName::IdentifierReference(id) = &r.type_name else { return false };
+            matches!(id.name.as_str(), "Writable" | "Readable" | "Derived")
+        }
+        TSType::TSUnionType(u) => u.types.iter().any(ts_type_is_store),
+        TSType::TSParenthesizedType(p) => ts_type_is_store(&p.type_annotation),
+        _ => false,
     }
 }
 
