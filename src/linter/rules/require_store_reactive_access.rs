@@ -432,18 +432,6 @@ fn collect_imports(body: &[Statement<'_>]) -> Vec<(String, String, String)> {
     out
 }
 
-/// Parse `content` as TS (a superset of JS) and extract import triples. Used
-/// when we only have raw source text — e.g. an external module file read from
-/// disk — with no linter context attached.
-fn parse_and_collect_imports(content: &str) -> Vec<(String, String, String)> {
-    use oxc::allocator::Allocator;
-    use oxc::parser::Parser;
-    use oxc::span::SourceType;
-    let alloc = Allocator::default();
-    let result = Parser::new(&alloc, content, SourceType::ts()).parse();
-    collect_imports(result.program.body.as_slice())
-}
-
 fn has_word_boundary_match(text: &str, word: &str) -> bool {
     for (pos, _) in text.match_indices(word) {
         let before_ok = pos == 0 || {
@@ -459,88 +447,163 @@ fn has_word_boundary_match(text: &str, word: &str) -> bool {
     false
 }
 
-fn is_store_type(type_text: &str) -> bool {
-    const STORE_TYPES: &[&str] = &["Writable", "Readable", "Derived"];
-    let text = type_text.trim();
-    STORE_TYPES.iter().any(|st| text.starts_with(st) || text.contains(&format!("| {}", st))
-        || text.contains(&format!("{} |", st)) || text.contains(&format!("| {}<", st))
-        || text.starts_with(&format!("{}<", st)))
-}
-
 fn resolve_module_file(dir: &std::path::Path, module: &str) -> Option<String> {
     ["", ".ts", ".js", ".d.ts"].iter()
         .find_map(|ext| std::fs::read_to_string(dir.join(format!("{}{}", module, ext))).ok())
 }
 
 fn detect_store_exports(content: &str) -> HashSet<String> {
-    let mut stores = HashSet::new();
-    let imports = parse_and_collect_imports(content);
+    use oxc::allocator::Allocator;
+    use oxc::parser::Parser;
+    use oxc::span::SourceType;
 
-    let (mut factory_names, mut store_type_names) = (HashSet::new(), HashSet::new());
-    for (local, imported, module) in &imports {
-        if module != "svelte/store" { continue; }
-        if STORE_FACTORIES.contains(&imported.as_str()) { factory_names.insert(local.clone()); }
-        if matches!(imported.as_str(), "Writable" | "Readable" | "Derived") { store_type_names.insert(local.clone()); }
-    }
+    let alloc = Allocator::default();
+    let parsed = Parser::new(&alloc, content, SourceType::ts()).parse();
+    let body = parsed.program.body.as_slice();
 
-    for line in content.lines() {
-        let trimmed = line.trim();
-        for prefix in &["export const ", "export let "] {
-            if let Some(rest) = trimmed.strip_prefix(prefix) {
-                let name_end = rest.find(|c: char| !c.is_alphanumeric() && c != '_')
-                    .unwrap_or(rest.len());
-                let name = &rest[..name_end];
-                if name.is_empty() { continue; }
-
-                if let Some(eq) = rest.find('=') {
-                    let init = rest[eq + 1..].trim();
-                    if factory_names.iter().any(|f| init.starts_with(&format!("{}(", f))) {
-                        stores.insert(name.to_string());
-                        continue;
-                    }
-                    if init.starts_with("derived(") {
-                        stores.insert(name.to_string());
-                        continue;
-                    }
-                }
-
-                if let Some(colon) = rest[name_end..].find(':') {
-                    let type_start = name_end + colon + 1;
-                    let type_end = rest[type_start..].find('=').map(|p| type_start + p).unwrap_or(rest.len());
-                    let type_text = rest[type_start..type_end].trim();
-                    if is_store_type(type_text) || store_type_names.iter().any(|t| type_text.contains(t)) {
-                        stores.insert(name.to_string());
-                        continue;
-                    }
-                    let full_type = rest[type_start..].trim().trim_end_matches(';');
-                    if content.contains(&format!("interface {} extends", full_type))
-                        && ["Writable", "Readable", "Derived"].iter()
-                            .any(|s| content.contains(&format!("{} extends {}", full_type, s))) {
-                        stores.insert(name.to_string());
-                    }
-                }
+    // Collect factory-name and store-type aliases from `svelte/store` imports.
+    let (mut factory_names, mut store_type_names): (HashSet<String>, HashSet<String>) =
+        (HashSet::new(), HashSet::new());
+    for stmt in body {
+        let Statement::ImportDeclaration(imp) = stmt else { continue };
+        if imp.source.value != "svelte/store" { continue; }
+        let Some(specs) = &imp.specifiers else { continue };
+        for spec in specs {
+            let ImportDeclarationSpecifier::ImportSpecifier(s) = spec else { continue };
+            let imported = match &s.imported {
+                ModuleExportName::IdentifierName(n) => n.name.as_str(),
+                ModuleExportName::IdentifierReference(n) => n.name.as_str(),
+                ModuleExportName::StringLiteral(l) => l.value.as_str(),
+            };
+            let local = s.local.name.as_str().to_string();
+            if STORE_FACTORIES.contains(&imported) { factory_names.insert(local.clone()); }
+            if matches!(imported, "Writable" | "Readable" | "Derived") {
+                store_type_names.insert(local);
             }
         }
     }
 
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if (trimmed.starts_with("export const ") || trimmed.starts_with("export let "))
-            && trimmed.contains('{')
-        {
-            let is_const = trimmed.starts_with("export const ");
-            let prefix_len = if is_const { 14 } else { 11 };
-            let rest = &trimmed[prefix_len..];
-            let name_end = rest.find(|c: char| !c.is_alphanumeric() && c != '_')
-                .unwrap_or(rest.len());
-            let name = &rest[..name_end];
-            if name.is_empty() || stores.contains(name) { continue; }
-            let has_store_ref = stores.iter().any(|s| trimmed.contains(s.as_str()));
-            if has_store_ref {
+    // Index interfaces that extend a store type, so type annotations like
+    // `MyStore` (where `interface MyStore extends Writable<T>`) are recognised.
+    let mut store_interfaces: HashSet<String> = HashSet::new();
+    for stmt in body {
+        if let Statement::TSInterfaceDeclaration(iface) = stmt {
+            let extends_store = iface.extends.iter().any(|h| {
+                let Expression::Identifier(id) = &h.expression else { return false };
+                matches!(id.name.as_str(), "Writable" | "Readable" | "Derived")
+                    || store_type_names.contains(id.name.as_str())
+            });
+            if extends_store { store_interfaces.insert(iface.id.name.as_str().to_string()); }
+        }
+    }
+
+    // First pass: exported VariableDeclarations whose init is a factory call
+    // or whose binding has a store-typed annotation.
+    let mut stores: HashSet<String> = HashSet::new();
+    let mut exported_decls: Vec<&oxc::ast::ast::VariableDeclarator> = Vec::new();
+    for stmt in body {
+        let Statement::ExportNamedDeclaration(exp) = stmt else { continue };
+        let Some(Declaration::VariableDeclaration(vd)) = &exp.declaration else { continue };
+        for d in &vd.declarations {
+            exported_decls.push(d);
+            let Some(name) = binding_identifier_name(&d.id) else { continue };
+            let init_store = d.init.as_ref().map(|e| {
+                if expression_calls_factory(e, &factory_names) { return true; }
+                // `derived(...)` from svelte/store is always a store; the
+                // import check would add it to `factory_names`, but the
+                // legacy rule also accepts the bare `derived(` form.
+                if let Expression::CallExpression(c) = e {
+                    if let Expression::Identifier(id) = &c.callee {
+                        if id.name.as_str() == "derived" { return true; }
+                    }
+                }
+                false
+            }).unwrap_or(false);
+            let typed_store = d.type_annotation.as_ref().map(|ta| {
+                ts_type_is_store(&ta.type_annotation)
+                    || ts_type_references_names(&ta.type_annotation, &store_type_names)
+                    || ts_type_references_names(&ta.type_annotation, &store_interfaces)
+            }).unwrap_or(false);
+            if init_store || typed_store { stores.insert(name.to_string()); }
+        }
+    }
+
+    // Second pass: propagate through exports whose init references a store
+    // already in the set (e.g. `export const doubled = derived(counter, ...)`
+    // where `counter` was detected in pass 1). Iterate until a fixed point.
+    loop {
+        let mut added = false;
+        for d in &exported_decls {
+            let Some(name) = binding_identifier_name(&d.id) else { continue };
+            if stores.contains(name) { continue; }
+            let Some(init) = &d.init else { continue };
+            if expression_references_any(init, &stores) {
                 stores.insert(name.to_string());
+                added = true;
             }
         }
+        if !added { break; }
     }
 
     stores
+}
+
+/// True iff `ty` is a `TSTypeReference` (possibly nested in a union/paren)
+/// whose outer identifier is in `names`.
+fn ts_type_references_names(ty: &TSType<'_>, names: &HashSet<String>) -> bool {
+    match ty {
+        TSType::TSTypeReference(r) => {
+            let TSTypeName::IdentifierReference(id) = &r.type_name else { return false };
+            names.contains(id.name.as_str())
+        }
+        TSType::TSUnionType(u) => u.types.iter().any(|t| ts_type_references_names(t, names)),
+        TSType::TSParenthesizedType(p) => ts_type_references_names(&p.type_annotation, names),
+        _ => false,
+    }
+}
+
+/// True iff the expression references (by identifier) any of the names in
+/// `candidates`. Walks into CallExpression arguments / callee, MemberExpression
+/// bases, ArrowFunctionExpression bodies, and a few other common forms.
+fn expression_references_any(expr: &Expression<'_>, candidates: &HashSet<String>) -> bool {
+    match expr {
+        Expression::Identifier(id) => candidates.contains(id.name.as_str()),
+        Expression::CallExpression(c) => {
+            expression_references_any(&c.callee, candidates)
+                || c.arguments.iter().any(|a| match a {
+                    oxc::ast::ast::Argument::SpreadElement(s) =>
+                        expression_references_any(&s.argument, candidates),
+                    other => other.as_expression()
+                        .map(|e| expression_references_any(e, candidates))
+                        .unwrap_or(false),
+                })
+        }
+        Expression::StaticMemberExpression(m) => expression_references_any(&m.object, candidates),
+        Expression::ComputedMemberExpression(m) =>
+            expression_references_any(&m.object, candidates)
+                || expression_references_any(&m.expression, candidates),
+        Expression::ParenthesizedExpression(p) => expression_references_any(&p.expression, candidates),
+        Expression::ConditionalExpression(c) =>
+            expression_references_any(&c.test, candidates)
+                || expression_references_any(&c.consequent, candidates)
+                || expression_references_any(&c.alternate, candidates),
+        Expression::ChainExpression(c) => match &c.expression {
+            oxc::ast::ast::ChainElement::CallExpression(cc) =>
+                expression_references_any(&cc.callee, candidates),
+            oxc::ast::ast::ChainElement::StaticMemberExpression(m) =>
+                expression_references_any(&m.object, candidates),
+            oxc::ast::ast::ChainElement::ComputedMemberExpression(m) =>
+                expression_references_any(&m.object, candidates),
+            _ => false,
+        },
+        Expression::ArrayExpression(a) => a.elements.iter().any(|e| match e {
+            oxc::ast::ast::ArrayExpressionElement::SpreadElement(s) =>
+                expression_references_any(&s.argument, candidates),
+            oxc::ast::ast::ArrayExpressionElement::Elision(_) => false,
+            other => other.as_expression()
+                .map(|e| expression_references_any(e, candidates))
+                .unwrap_or(false),
+        }),
+        _ => false,
+    }
 }
