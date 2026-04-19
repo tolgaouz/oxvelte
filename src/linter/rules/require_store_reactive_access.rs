@@ -7,6 +7,7 @@ use oxc::ast::ast::{
     BindingPattern, Declaration, Expression, ImportDeclarationSpecifier, ModuleExportName,
     Statement, TSType, TSTypeName, VariableDeclaration, VariableDeclarationKind,
 };
+use oxc::ast::AstKind;
 use std::collections::{HashSet, HashMap};
 
 const STORE_FACTORIES: &[&str] = &["writable", "readable", "derived"];
@@ -126,14 +127,34 @@ impl Rule for RequireStoreReactiveAccess {
         let tag_text = &ctx.source[script.span.start as usize..script.span.end as usize];
         let content_offset = tag_text.find('>').map(|p| script.span.start as usize + p + 1)
             .unwrap_or(script.span.start as usize);
-        for var in &store_vars {
-            let raw_interp = format!("${{{}}}", var);
-            let reactive_interp = format!("${{${}}}", var);
-            for (pos, _) in content.match_indices(&raw_interp) {
-                if content[pos..].starts_with(&reactive_interp) { continue; }
-                if pos > 0 && content.as_bytes()[pos - 1] == b'$' { continue; }
-                let sp = content_offset + pos;
-                ctx.diagnostic(RAW_STORE_MSG, oxc::span::Span::new(sp as u32, (sp + raw_interp.len()) as u32));
+        // `${storeName}` or `${ns.store}` inside a template literal is a raw
+        // store access. Walk TemplateLiteral nodes directly — the expression
+        // inside each `${…}` is already an oxc Expression, so we don't need
+        // to re-find `${…}` pairs in the source.
+        if let Some(sem) = ctx.instance_semantic {
+            for node in sem.nodes().iter() {
+                let AstKind::TemplateLiteral(tl) = node.kind() else { continue };
+                for (i, expr) in tl.expressions.iter().enumerate() {
+                    let (name, span) = match expr {
+                        Expression::Identifier(id) => (id.name.as_str().to_string(), id.span),
+                        Expression::StaticMemberExpression(m) => match &m.object {
+                            Expression::Identifier(obj) =>
+                                (format!("{}.{}", obj.name, m.property.name), m.span),
+                            _ => continue,
+                        },
+                        _ => continue,
+                    };
+                    if !store_vars.contains(&name) { continue; }
+                    // Mirror the old "`$` right before `${...}`" suppression:
+                    // if the quasi preceding this expression ends with a `$`,
+                    // treat it as escaped / intentional raw access.
+                    if tl.quasis.get(i).is_some_and(|q| q.value.raw.as_str().ends_with('$')) {
+                        continue;
+                    }
+                    let sp = content_offset as u32 + span.start;
+                    let end = content_offset as u32 + span.end;
+                    ctx.diagnostic(RAW_STORE_MSG, oxc::span::Span::new(sp, end));
+                }
             }
         }
 
