@@ -101,6 +101,12 @@ pub enum AttributeValuePart {
 pub struct MustacheTag<'a> {
     pub expression: String,
     pub span: Span,
+    /// Typed AST of the mustache's inner expression, parsed into a shared
+    /// `oxc::allocator::Allocator` during template parsing. `None` when the
+    /// expression text failed to parse as JS (the rule layer then falls
+    /// back to `expression` as raw text).
+    #[serde(skip)]
+    pub expression_ast: Option<&'a oxc::ast::ast::Expression<'a>>,
     #[serde(skip)]
     pub _phantom: PhantomData<&'a ()>,
 }

@@ -119,7 +119,8 @@ fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool, quiet: bool) 
         let file_path_owned = path_str.to_string();
         let diags = if is_svelte {
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let result = parser::parse(&source);
+                let alloc = oxc::allocator::Allocator::default();
+                let result = parser::parse(&source, &alloc);
                 lint.lint_with_config_and_path(&result.ast, &source, oxvelte::linter::RuleConfig::default(), &file_path_owned)
             })) {
                 Ok(d) => d,
@@ -225,7 +226,8 @@ fn cmd_parse(file: &PathBuf, pretty: bool, format: &str) -> ExitCode {
         Ok(s) => s,
         Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); return ExitCode::from(1); }
     };
-    let result = parser::parse(&source);
+    let alloc = oxc::allocator::Allocator::default();
+    let result = parser::parse(&source, &alloc);
     for err in &result.errors {
         eprintln!("Parse error: {:?}", err);
     }

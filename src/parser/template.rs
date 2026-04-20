@@ -4,13 +4,17 @@
 //! `<style>` blocks) into a tree of [`TemplateNode`]s.
 
 use oxc_diagnostics::OxcDiagnostic;
+use oxc::allocator::Allocator;
 use oxc::span::Span;
 use std::marker::PhantomData;
 use crate::ast::*;
 
-/// Parse a template source string into a [`Fragment`].
-pub fn parse_fragment<'a>(source: &'a str) -> Result<Fragment<'a>, OxcDiagnostic> {
-    let mut parser = TemplateParser::new(source);
+/// Parse a template source string into a [`Fragment`]. The `allocator`
+/// owns any pre-parsed template expression nodes stored on template AST
+/// nodes (e.g. `MustacheTag.expression_ast`). It must outlive the
+/// returned `Fragment`.
+pub fn parse_fragment<'a>(source: &'a str, allocator: &'a Allocator) -> Result<Fragment<'a>, OxcDiagnostic> {
+    let mut parser = TemplateParser::new(source, allocator);
     parser.parse_fragment()
 }
 
@@ -18,11 +22,12 @@ pub fn parse_fragment<'a>(source: &'a str) -> Result<Fragment<'a>, OxcDiagnostic
 struct TemplateParser<'a> {
     source: &'a str,
     pos: usize,
+    allocator: &'a Allocator,
 }
 
 impl<'a> TemplateParser<'a> {
-    fn new(source: &'a str) -> Self {
-        Self { source, pos: 0 }
+    fn new(source: &'a str, allocator: &'a Allocator) -> Self {
+        Self { source, pos: 0, allocator }
     }
 
     /// Parse the entire template into a fragment.
@@ -503,9 +508,12 @@ impl<'a> TemplateParser<'a> {
         self.eat("{")?;
         let expression = self.read_expression()?;
         self.eat("}")?;
-        Ok(TemplateNode::MustacheTag(MustacheTag { _phantom: PhantomData,
+        let expression_ast = parse_expr_into(self.allocator, &expression);
+        Ok(TemplateNode::MustacheTag(MustacheTag {
             expression,
+            expression_ast,
             span: Span::new(start, self.pos as u32),
+            _phantom: PhantomData,
         }))
     }
 
@@ -1301,6 +1309,35 @@ fn parse_directive_name(attr_name: &str) -> Option<(DirectiveKind, &str, Vec<&st
     Some((kind, name, modifiers))
 }
 
+/// Parse a mustache's expression text directly as a single JS expression and
+/// store the resulting node in the supplied allocator. Returns a reference
+/// bound to the allocator's lifetime, so rules can read the typed
+/// `Expression<'a>` without re-parsing.
+///
+/// Comment-sensitive rules still call
+/// `crate::parser::expression::parse_template_expression` on the raw text —
+/// that wrapper surfaces `ParserReturn.program.comments`, which
+/// `parse_expression` alone doesn't expose.
+fn parse_expr_into<'a>(
+    allocator: &'a Allocator,
+    text: &str,
+) -> Option<&'a oxc::ast::ast::Expression<'a>> {
+    use oxc::allocator::CloneIn;
+    let trimmed = text.trim();
+    if trimmed.is_empty() { return None; }
+    // Use the `void (EXPR);` wrapper so the whole expression must be
+    // consumed — `parse_expression` alone silently accepts partial parses
+    // (e.g. JSON-LD `{"@context": "..."}` parses as `StringLiteral("@context")`
+    // with the rest discarded, producing false positives in rules that
+    // treat the result as the full expression).
+    let result = crate::parser::expression::parse_template_expression(trimmed, allocator);
+    if !result.errors.is_empty() { return None; }
+    let expr = crate::parser::expression::unwrap_template_expression(&result)?;
+    // Clone into the allocator so the reference's lifetime is `'a` rather
+    // than tied to the local `ParserReturn`.
+    Some(allocator.alloc(expr.clone_in(allocator)))
+}
+
 /// Parse a concatenated attribute value like `"hello {name}!"`.
 fn parse_concat_value(value: &str) -> AttributeValue {
     let mut parts = Vec::new();
@@ -1391,7 +1428,8 @@ mod tests {
 
     #[test]
     fn test_parse_text() {
-        let result = parse_fragment("hello world").unwrap();
+        let alloc = oxc::allocator::Allocator::default();
+        let result = parse_fragment("hello world", &alloc).unwrap();
         assert_eq!(result.nodes.len(), 1);
         match &result.nodes[0] {
             TemplateNode::Text(t) => assert_eq!(t.data, "hello world"),
@@ -1402,7 +1440,8 @@ mod tests {
     #[test]
     fn test_parse_element() {
         let source = "<div>hello</div>";
-        let result = parse_fragment(source).unwrap();
+        let alloc = oxc::allocator::Allocator::default();
+        let result = parse_fragment(source, &alloc).unwrap();
         assert_eq!(result.nodes.len(), 1);
         match &result.nodes[0] {
             TemplateNode::Element(el) => {
@@ -1416,7 +1455,8 @@ mod tests {
     #[test]
     fn test_parse_self_closing() {
         let source = "<br/>";
-        let result = parse_fragment(source).unwrap();
+        let alloc = oxc::allocator::Allocator::default();
+        let result = parse_fragment(source, &alloc).unwrap();
         match &result.nodes[0] {
             TemplateNode::Element(el) => {
                 assert_eq!(el.name, "br");
@@ -1429,7 +1469,8 @@ mod tests {
     #[test]
     fn test_parse_mustache() {
         let source = "{count}";
-        let result = parse_fragment(source).unwrap();
+        let alloc = oxc::allocator::Allocator::default();
+        let result = parse_fragment(source, &alloc).unwrap();
         match &result.nodes[0] {
             TemplateNode::MustacheTag(m) => assert_eq!(m.expression, "count"),
             _ => panic!("expected MustacheTag"),
@@ -1439,7 +1480,8 @@ mod tests {
     #[test]
     fn test_parse_if_block() {
         let source = "{#if visible}<p>hello</p>{/if}";
-        let result = parse_fragment(source).unwrap();
+        let alloc = oxc::allocator::Allocator::default();
+        let result = parse_fragment(source, &alloc).unwrap();
         match &result.nodes[0] {
             TemplateNode::IfBlock(block) => {
                 assert_eq!(block.test, "visible");
@@ -1452,7 +1494,8 @@ mod tests {
     #[test]
     fn test_parse_each_block() {
         let source = "{#each items as item, i (item.id)}<p>{item.name}</p>{/each}";
-        let result = parse_fragment(source).unwrap();
+        let alloc = oxc::allocator::Allocator::default();
+        let result = parse_fragment(source, &alloc).unwrap();
         match &result.nodes[0] {
             TemplateNode::EachBlock(block) => {
                 assert_eq!(block.expression, "items");
@@ -1470,7 +1513,8 @@ mod tests {
         // because parse_raw_text_children incremented pos by 1 byte instead of
         // the full character length.
         let source = "<title>{name} \u{2022} {site}</title>";
-        let result = parse_fragment(source).unwrap();
+        let alloc = oxc::allocator::Allocator::default();
+        let result = parse_fragment(source, &alloc).unwrap();
         match &result.nodes[0] {
             TemplateNode::Element(el) => {
                 assert_eq!(el.name, "title");
@@ -1488,7 +1532,8 @@ mod tests {
     #[test]
     fn test_parse_comment() {
         let source = "<!-- a comment -->";
-        let result = parse_fragment(source).unwrap();
+        let alloc = oxc::allocator::Allocator::default();
+        let result = parse_fragment(source, &alloc).unwrap();
         match &result.nodes[0] {
             TemplateNode::Comment(c) => assert_eq!(c.data, " a comment "),
             _ => panic!("expected Comment"),
@@ -1498,7 +1543,8 @@ mod tests {
     #[test]
     fn test_parse_snippet_block() {
         let source = "{#snippet greeting(name)}<p>Hello {name}</p>{/snippet}";
-        let result = parse_fragment(source).unwrap();
+        let alloc = oxc::allocator::Allocator::default();
+        let result = parse_fragment(source, &alloc).unwrap();
         match &result.nodes[0] {
             TemplateNode::SnippetBlock(s) => {
                 assert_eq!(s.name, "greeting");
@@ -1511,7 +1557,8 @@ mod tests {
     #[test]
     fn test_parse_render_tag() {
         let source = "{@render greeting('world')}";
-        let result = parse_fragment(source).unwrap();
+        let alloc = oxc::allocator::Allocator::default();
+        let result = parse_fragment(source, &alloc).unwrap();
         match &result.nodes[0] {
             TemplateNode::RenderTag(r) => assert_eq!(r.expression, "greeting('world')"),
             _ => panic!("expected RenderTag"),
@@ -1521,7 +1568,8 @@ mod tests {
     #[test]
     fn test_parse_directive() {
         let source = r#"<button on:click|preventDefault={handler}>Click</button>"#;
-        let result = parse_fragment(source).unwrap();
+        let alloc = oxc::allocator::Allocator::default();
+        let result = parse_fragment(source, &alloc).unwrap();
         match &result.nodes[0] {
             TemplateNode::Element(el) => {
                 assert_eq!(el.attributes.len(), 1);

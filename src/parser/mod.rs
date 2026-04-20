@@ -11,6 +11,7 @@ pub mod expression;
 use oxc_diagnostics::OxcDiagnostic;
 use oxc::span::Span;
 use crate::ast::*;
+use oxc::allocator::Allocator;
 use std::marker::PhantomData;
 
 #[derive(Debug)]
@@ -19,8 +20,10 @@ pub struct ParseResult<'a> {
     pub errors: Vec<OxcDiagnostic>,
 }
 
-/// Parse a `.svelte` source string.
-pub fn parse<'a>(source: &'a str) -> ParseResult<'a> {
+/// Parse a `.svelte` source string. The supplied `allocator` owns any
+/// pre-parsed template-expression AST nodes attached to the returned
+/// `SvelteAst` — it must outlive the result.
+pub fn parse<'a>(source: &'a str, allocator: &'a Allocator) -> ParseResult<'a> {
     let mut errors = Vec::new();
     let regions = extract_regions(source);
 
@@ -39,7 +42,7 @@ pub fn parse<'a>(source: &'a str) -> ParseResult<'a> {
         lang: r.lang.map(|s| s.to_string()), span: r.span,
     });
 
-    let html = match template::parse_fragment(source) {
+    let html = match template::parse_fragment(source, allocator) {
         Ok(fragment) => fragment,
         Err(e) => {
             errors.push(e);
@@ -187,48 +190,55 @@ mod tests {
 
     #[test]
     fn test_empty_file() {
-        let r = parse("");
+        let alloc = Allocator::default();
+        let r = parse("", &alloc);
         assert!(r.errors.is_empty());
         assert!(r.ast.instance.is_none());
     }
 
     #[test]
     fn test_script_only() {
-        let r = parse("<script>let x = 1;</script>");
+        let alloc = Allocator::default();
+        let r = parse("<script>let x = 1;</script>", &alloc);
         assert!(r.errors.is_empty());
         assert_eq!(r.ast.instance.unwrap().content, "let x = 1;");
     }
 
     #[test]
     fn test_script_lang_ts() {
-        let r = parse(r#"<script lang="ts">let x: number = 1;</script>"#);
+        let alloc = Allocator::default();
+        let r = parse(r#"<script lang="ts">let x: number = 1;</script>"#, &alloc);
         let s = r.ast.instance.unwrap();
         assert_eq!(s.lang.as_deref(), Some("ts"));
     }
 
     #[test]
     fn test_module_script_legacy() {
-        let r = parse(r#"<script context="module">export const foo = 1;</script>"#);
+        let alloc = Allocator::default();
+        let r = parse(r#"<script context="module">export const foo = 1;</script>"#, &alloc);
         assert!(r.ast.module.is_some());
         assert!(r.ast.instance.is_none());
     }
 
     #[test]
     fn test_module_script_svelte5() {
-        let r = parse("<script module>export const foo = 1;</script>");
+        let alloc = Allocator::default();
+        let r = parse("<script module>export const foo = 1;</script>", &alloc);
         assert!(r.ast.module.is_some());
     }
 
     #[test]
     fn test_style_block() {
-        let r = parse("<style>div { color: red; }</style>");
+        let alloc = Allocator::default();
+        let r = parse("<style>div { color: red; }</style>", &alloc);
         assert_eq!(r.ast.css.unwrap().content, "div { color: red; }");
     }
 
     #[test]
     fn test_full_component() {
+        let alloc = Allocator::default();
         let source = "<script>\n    let count = 0;\n</script>\n\n<button>{count}</button>\n\n<style>\n    button { color: blue; }\n</style>";
-        let r = parse(source);
+        let r = parse(source, &alloc);
         assert!(r.errors.is_empty());
         assert!(r.ast.instance.is_some());
         assert!(r.ast.css.is_some());

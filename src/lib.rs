@@ -92,7 +92,8 @@ mod linter_fixture_tests {
         for path in files {
             let fname = path.file_name().unwrap().to_string_lossy().to_string();
             let source = std::fs::read_to_string(&path).unwrap();
-            let result = parser::parse(&source);
+            let alloc = oxc::allocator::Allocator::default();
+            let result = parser::parse(&source, &alloc);
             let parent_dir = path.parent().unwrap().to_string_lossy().to_string();
             let config = load_config(&parent_dir, &fname);
             let file_path_str = path.to_string_lossy().to_string();
@@ -110,7 +111,8 @@ mod linter_fixture_tests {
         for path in files {
             let fname = path.file_name().unwrap().to_string_lossy().to_string();
             let source = std::fs::read_to_string(&path).unwrap();
-            let result = parser::parse(&source);
+            let alloc = oxc::allocator::Allocator::default();
+            let result = parser::parse(&source, &alloc);
             let parent_dir = path.parent().unwrap().to_string_lossy().to_string();
             let config = load_config(&parent_dir, &fname);
             let file_path_str = path.to_string_lossy().to_string();
@@ -365,7 +367,8 @@ mod parser_fixture_tests {
         let expected: serde_json::Value = serde_json::from_str(&expected_str)
             .unwrap_or_else(|e| panic!("Invalid JSON in {}: {}", output_path, e));
 
-        let result = parser::parse(&input);
+        let alloc = oxc::allocator::Allocator::default();
+        let result = parser::parse(&input, &alloc);
         let actual = to_legacy_json(&result.ast, &input);
 
         let diffs = json_diff(&expected, &actual, "");
@@ -520,7 +523,8 @@ mod modern_fixture_tests {
         let expected: serde_json::Value = serde_json::from_str(&expected_str)
             .unwrap_or_else(|e| panic!("Invalid JSON in {}: {}", output_path, e));
 
-        let result = parser::parse(&input);
+        let alloc = oxc::allocator::Allocator::default();
+        let result = parser::parse(&input, &alloc);
         let actual = to_modern_json(&result.ast, &input);
 
         let diffs = json_diff(&expected, &actual, "");
