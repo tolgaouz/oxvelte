@@ -294,6 +294,10 @@ fn cmd_convert_config(file: &PathBuf, write: bool) -> ExitCode {
         }
     };
 
+    // Detect custom plugin rules and classify them
+    let config_dir = file.parent().unwrap_or(std::path::Path::new("."));
+    emit_custom_rule_hints(&content, config_dir);
+
     if config.rules.is_empty() {
         eprintln!("No svelte/* rules found in the config.");
         return ExitCode::from(1);
@@ -315,6 +319,130 @@ fn cmd_convert_config(file: &PathBuf, write: bool) -> ExitCode {
     } else {
         println!("{}", output);
         ExitCode::SUCCESS
+    }
+}
+
+/// ESTree visitor keys that signal a JS/TS-only rule.
+const JS_ONLY_VISITORS: &[&str] = &[
+    "ImportDeclaration",
+    "ExportNamedDeclaration",
+    "ExportDefaultDeclaration",
+    "ExportAllDeclaration",
+    "VariableDeclaration",
+    "VariableDeclarator",
+    "FunctionDeclaration",
+    "FunctionExpression",
+    "ArrowFunctionExpression",
+    "ClassDeclaration",
+    "ClassExpression",
+    "CallExpression",
+    "MemberExpression",
+    "TSSatisfiesExpression",
+    "TSAsExpression",
+    "TSTypeAnnotation",
+    "TSTypeReference",
+    "Program:exit",
+];
+
+/// Svelte-specific visitor keys used by eslint-plugin-svelte rules.
+const SVELTE_VISITORS: &[&str] = &[
+    "SvelteElement",
+    "SvelteStartTag",
+    "SvelteEndTag",
+    "SvelteAttribute",
+    "SvelteDirective",
+    "SvelteSpecialDirective",
+    "SvelteIfBlock",
+    "SvelteEachBlock",
+    "SvelteAwaitBlock",
+    "SvelteKeyBlock",
+    "SvelteText",
+    "SvelteMustacheTag",
+    "SvelteRawMustacheTag",
+    "SvelteSnippetBlock",
+    "SvelteRenderTag",
+    "SvelteDebugTag",
+    "SvelteConstTag",
+    "SvelteScriptElement",
+    "SvelteStyleElement",
+    "SvelteFragment",
+];
+
+#[derive(Debug, PartialEq)]
+enum RuleLayer {
+    JsTsOnly,
+    SvelteTemplate,
+    Mixed,
+    Unknown,
+}
+
+fn classify_rule_file(source: &str) -> RuleLayer {
+    let has_svelte = SVELTE_VISITORS.iter().any(|v| source.contains(v));
+    let has_js = JS_ONLY_VISITORS.iter().any(|v| source.contains(v));
+    match (has_svelte, has_js) {
+        (true, true) => RuleLayer::Mixed,
+        (true, false) => RuleLayer::SvelteTemplate,
+        (false, true) => RuleLayer::JsTsOnly,
+        (false, false) => RuleLayer::Unknown,
+    }
+}
+
+/// Scan the ESLint config source for custom rule file references and emit migration hints.
+fn emit_custom_rule_hints(config_source: &str, config_dir: &std::path::Path) {
+    // Find local plugin/rule file references: require('./...') or import '...' paths ending in .js/.ts/.cjs/.mjs
+    let mut rule_files: Vec<String> = Vec::new();
+    for line in config_source.lines() {
+        for pattern in &["require('", "require(\"", "from '", "from \""] {
+            if let Some(start) = line.find(pattern) {
+                let rest = &line[start + pattern.len()..];
+                let quote = if pattern.ends_with('\'') { '\'' } else { '"' };
+                if let Some(end) = rest.find(quote) {
+                    let path = &rest[..end];
+                    if (path.starts_with("./") || path.starts_with("../"))
+                        && path.ends_with(|c: char| matches!(c, 's' | 'j'))
+                    {
+                        rule_files.push(path.to_string());
+                    }
+                }
+            }
+        }
+    }
+    rule_files.dedup();
+
+    for rel_path in &rule_files {
+        let full_path = config_dir.join(rel_path.trim_start_matches("./"));
+        let source = match std::fs::read_to_string(&full_path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        match classify_rule_file(&source) {
+            RuleLayer::JsTsOnly => {
+                eprintln!(
+                    "\nCustom rule file {} uses only JS/TS visitors — oxvelte is the wrong layer.",
+                    rel_path
+                );
+                eprintln!(
+                    "  Implement it as an oxlint JS plugin instead: https://oxc.rs/docs/guide/usage/linter/plugins"
+                );
+            }
+            RuleLayer::Mixed => {
+                eprintln!(
+                    "\nCustom rule file {} uses both Svelte template and JS/TS visitors.",
+                    rel_path
+                );
+                eprintln!(
+                    "  Split it: template checks → oxvelte custom rule, script checks → oxlint plugin."
+                );
+            }
+            RuleLayer::SvelteTemplate => {
+                eprintln!(
+                    "\nCustom rule file {} uses Svelte template visitors — migrate to an oxvelte custom rule.",
+                    rel_path
+                );
+                eprintln!("  See: docs/custom-rules.md");
+            }
+            RuleLayer::Unknown => {}
+        }
     }
 }
 
