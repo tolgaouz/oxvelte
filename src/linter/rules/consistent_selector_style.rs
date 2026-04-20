@@ -1,9 +1,20 @@
 //! `svelte/consistent-selector-style` — enforce consistent style selector usage
 //! (e.g. prefer class selectors over element selectors).
+//!
+//! The brace-depth scan over `<style>` content is still responsible for
+//! finding each rule's *prelude* text (the bit before `{`), because Svelte's
+//! `:global { … }` wrapper is a CSS-nesting form our existing CSS splitter
+//! doesn't flatten. The hand-rolled selector tokenizer it used to call
+//! (`flag_selectors_in_text`) is gone — we now parse each prelude into a
+//! typed `SelectorList` via `crate::parser::selector::parse_selector_list`
+//! and walk `Component::Class` / `Component::ID` / `Component::LocalName`
+//! directly.
 
 use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::{TemplateNode, Attribute, AttributeValue};
+use crate::parser::selector::{parse_selector_list, walk_components};
 use oxc::span::Span;
+use selectors::parser::Component;
 use std::collections::{HashMap, HashSet};
 
 pub struct ConsistentSelectorStyle;
@@ -100,18 +111,11 @@ impl Rule for ConsistentSelectorStyle {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let default_preferred = "id".to_string();
-        let preferred = if allowed_styles.is_empty() { &default_preferred } else { &allowed_styles[0] };
-
         let id_pos = allowed_styles.iter().position(|s| s == "id").or(if allowed_styles.is_empty() { Some(1) } else { None });
         let class_pos = allowed_styles.iter().position(|s| s == "class").or(if allowed_styles.is_empty() { Some(2) } else { None });
         let type_pos = allowed_styles.iter().position(|s| s == "type").or(if allowed_styles.is_empty() { Some(0) } else { None });
 
         let flag_class = !allowed_styles.is_empty() || check_global;
-        let flag_type = type_pos.map_or(false, |tp| id_pos.map_or(false, |ip| ip < tp));
-        let flag_id = id_pos.map_or(false, |ip| {
-            type_pos.map_or(false, |tp| tp < ip) || class_pos.map_or(false, |cp| cp < ip)
-        });
 
         let css = &style.content;
         let base = style.span.start as usize;
@@ -119,16 +123,9 @@ impl Rule for ConsistentSelectorStyle {
         let (class_usage, id_usage, element_usage) = collect_template_info(&ctx.ast.html);
         let html = &ctx.ast.html;
 
-        const ELEMENT_SELECTORS: &[&str] = &[
-            "div", "span", "p", "a", "ul", "ol", "li", "h1", "h2", "h3",
-            "h4", "h5", "h6", "table", "tr", "td", "th", "section", "article",
-            "header", "footer", "nav", "main", "aside", "form", "input",
-            "button", "select", "textarea", "img", "label", "b", "i", "em",
-            "strong", "small", "pre", "code", "blockquote", "figure",
-            "figcaption", "details", "summary", "mark", "time", "abbr",
-            "cite", "q", "s", "u", "sub", "sup", "dl", "dt", "dd",
-        ];
-
+        // Closures: given a bare selector name, return the alternative
+        // selector kind the rule's configuration says we should prefer,
+        // or `None` if the current selector is fine as-is.
         let check_class_selector = |class_name: &str| -> Option<String> {
             if !flag_class { return None; }
             let (count, ref element_types) = class_usage.get(class_name)
@@ -158,7 +155,6 @@ impl Rule for ConsistentSelectorStyle {
         };
 
         let check_id_selector = |id_name: &str| -> Option<String> {
-            if !flag_id { return None; }
             if let Some(et) = id_usage.get(id_name) {
                 if element_usage.get(et).copied().unwrap_or(0) <= 1
                     && type_pos.zip(id_pos).is_some_and(|(tp, ip)| tp < ip) { return Some("element type".to_string()); }
@@ -166,6 +162,9 @@ impl Rule for ConsistentSelectorStyle {
             None
         };
 
+        // Pass 1: `:global { ... }` wrappers and `:global(…)` inline, only
+        // when `checkGlobal` is enabled. Every matched selector inside is
+        // reported against the same `check_*` closures.
         if check_global {
             let mut in_global_block = false;
             let mut global_brace_depth = 0i32;
@@ -197,22 +196,27 @@ impl Rule for ConsistentSelectorStyle {
                         && !trimmed.starts_with("//")
                     {
                         let sel_text = trimmed.find('{').map_or(trimmed, |b| &trimmed[..b]);
-                        flag_selectors_in_text(ctx, sel_text, base + byte_offset + leading,
-                            &check_class_selector, &check_type_selector, &check_id_selector, ELEMENT_SELECTORS);
+                        report_selectors_in_prelude(
+                            ctx, sel_text, base + byte_offset + leading,
+                            &check_class_selector, &check_type_selector, &check_id_selector,
+                        );
                     }
 
                     byte_offset += line.len() + 1;
                     continue;
                 }
 
+                // `:global(...)` inline — extract argument and parse.
                 let mut search_pos = 0usize;
                 while let Some(gpos) = line[search_pos..].find(":global(") {
                     let abs_pos = search_pos + gpos;
                     let inner_start = abs_pos + 8;
                     if let Some(close_paren) = find_matching_paren(&line[inner_start..]) {
                         let inner = &line[inner_start..inner_start + close_paren];
-                        flag_selectors_in_text(ctx, inner, base + byte_offset + inner_start,
-                            &check_class_selector, &check_type_selector, &check_id_selector, ELEMENT_SELECTORS);
+                        report_selectors_in_prelude(
+                            ctx, inner, base + byte_offset + inner_start,
+                            &check_class_selector, &check_type_selector, &check_id_selector,
+                        );
                     }
                     search_pos = inner_start;
                 }
@@ -223,6 +227,9 @@ impl Rule for ConsistentSelectorStyle {
 
         if allowed_styles.is_empty() { return; }
 
+        // Pass 2: regular (non-`:global`) rules. Brace-depth tracking
+        // identifies prelude lines; each prelude's text is handed to
+        // `report_selectors_in_prelude` for typed walking.
         let mut byte_offset = 0usize;
         let mut brace_depth = 0i32;
 
@@ -238,16 +245,11 @@ impl Rule for ConsistentSelectorStyle {
 
             if is_selector_line {
                 let selector_text = trimmed.find('{').map_or(trimmed, |bp| &trimmed[..bp]);
-
-                for sel_part in selector_text.split(',') {
-                    let sel = sel_part.trim();
-                    if sel.is_empty() { continue; }
-
-                    let sel_offset_in_line = line.find(sel).unwrap_or(leading);
-
-                    flag_selectors_in_text(ctx, sel, base + byte_offset + sel_offset_in_line,
-                        &check_class_selector, &check_type_selector, &check_id_selector, ELEMENT_SELECTORS);
-                }
+                let sel_offset_in_line = line.find(selector_text.trim_start()).unwrap_or(leading);
+                report_selectors_in_prelude(
+                    ctx, selector_text, base + byte_offset + sel_offset_in_line,
+                    &check_class_selector, &check_type_selector, &check_id_selector,
+                );
             }
 
             for ch in trimmed.chars() {
@@ -269,73 +271,89 @@ fn find_matching_paren(s: &str) -> Option<usize> {
     None
 }
 
-fn flag_selectors_in_text(
+/// Parse `prelude_text` as a CSS selector list and hand each class / id /
+/// tag component to the configured check closure. When a check returns a
+/// suggested alternative, emit a diagnostic pointing at the component's
+/// best-effort byte position in the prelude (we locate the `.name` /
+/// `#name` / bare tag name via a simple forward search — precise enough
+/// for line-accurate parity and fixture assertions).
+fn report_selectors_in_prelude(
     ctx: &mut LintContext,
-    text: &str,
+    prelude_text: &str,
     base_offset: usize,
     check_class: &dyn Fn(&str) -> Option<String>,
     check_type: &dyn Fn(&str) -> Option<String>,
     check_id: &dyn Fn(&str) -> Option<String>,
-    element_selectors: &[&str],
 ) {
-    let bytes = text.as_bytes();
-    let mut pos = 0usize;
-    while pos < bytes.len() {
-        match bytes[pos] {
-            b'.' | b'#' => {
-                let prefix_pos = pos;
-                let is_class = bytes[pos] == b'.';
-                pos += 1;
-                while pos < bytes.len() && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'-' || bytes[pos] == b'_') { pos += 1; }
-                if pos > prefix_pos + 1 {
-                    let name = &text[prefix_pos + 1..pos];
-                    let suggested = if is_class { check_class(name) } else { check_id(name) };
-                    if let Some(suggested) = suggested {
-                        let kind = if is_class { "class" } else { "ID" };
-                        ctx.diagnostic(format!("Selector should select by {} instead of {}", suggested, kind),
-                            Span::new((base_offset + prefix_pos) as u32, (base_offset + pos) as u32));
-                    }
-                }
-            }
-            b'[' => {
-                while pos < bytes.len() && bytes[pos] != b']' { pos += 1; }
-                if pos < bytes.len() { pos += 1; }
-            }
-            b':' => {
-                pos += 1;
-                if pos < bytes.len() && bytes[pos] == b':' { pos += 1; }
-                while pos < bytes.len() && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'-' || bytes[pos] == b'_') {
-                    pos += 1;
-                }
-                if pos < bytes.len() && bytes[pos] == b'(' {
-                    let mut depth = 1;
-                    pos += 1;
-                    while pos < bytes.len() && depth > 0 {
-                        if bytes[pos] == b'(' { depth += 1; }
-                        if bytes[pos] == b')' { depth -= 1; }
-                        pos += 1;
-                    }
-                }
-            }
-            b' ' | b'>' | b'+' | b'~' | b'*' => {
-                pos += 1;
-            }
-            _ if bytes[pos].is_ascii_alphabetic() || bytes[pos] == b'_' => {
-                let start = pos;
-                while pos < bytes.len() && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'-' || bytes[pos] == b'_') {
-                    pos += 1;
-                }
-                let name = &text[start..pos];
-                if element_selectors.contains(&name) {
-                    if let Some(suggested) = check_type(name) {
-                        ctx.diagnostic(format!("Selector should select by {} instead of element type", suggested),
-                            Span::new((base_offset + start) as u32, (base_offset + pos) as u32));
-                    }
-                }
-            }
-            _ => {
-                pos += 1;
+    let Some(list) = parse_selector_list(prelude_text) else { return };
+    // `:global(...)` bodies are only meaningful when the caller has opted
+    // into `checkGlobal`; we already pass inner text for those cases, so
+    // the walker here doesn't need to descend.
+    walk_components(&list, false, &mut |comp, _in_global| match comp {
+        Component::Class(atom) => {
+            let name = atom.as_str();
+            if let Some(suggested) = check_class(name) {
+                let (sp, end) = locate_prefixed(prelude_text, '.', name, base_offset);
+                ctx.diagnostic(
+                    format!("Selector should select by {} instead of class", suggested),
+                    Span::new(sp as u32, end as u32),
+                );
             }
         }
+        Component::ID(atom) => {
+            let name = atom.as_str();
+            if let Some(suggested) = check_id(name) {
+                let (sp, end) = locate_prefixed(prelude_text, '#', name, base_offset);
+                ctx.diagnostic(
+                    format!("Selector should select by {} instead of ID", suggested),
+                    Span::new(sp as u32, end as u32),
+                );
+            }
+        }
+        Component::LocalName(local) => {
+            let name = local.name.as_str();
+            if let Some(suggested) = check_type(name) {
+                let (sp, end) = locate_tag(prelude_text, name, base_offset);
+                ctx.diagnostic(
+                    format!("Selector should select by {} instead of element type", suggested),
+                    Span::new(sp as u32, end as u32),
+                );
+            }
+        }
+        _ => {}
+    });
+}
+
+/// Find `.name` / `#name` in `text` and return its absolute (start, end) in
+/// the source. Falls back to the prelude start if the prefix isn't found
+/// (which shouldn't happen for a selector the parser accepted, but we
+/// never want to panic on a position search).
+fn locate_prefixed(text: &str, prefix: char, name: &str, base_offset: usize) -> (usize, usize) {
+    let needle = format!("{}{}", prefix, name);
+    let rel = text.find(&needle).unwrap_or(0);
+    let start = base_offset + rel;
+    (start, start + needle.len())
+}
+
+/// Find a bare tag name in a selector (not preceded/followed by another
+/// identifier character) and return its absolute (start, end) in source.
+fn locate_tag(text: &str, name: &str, base_offset: usize) -> (usize, usize) {
+    let bytes = text.as_bytes();
+    let name_len = name.len();
+    let mut search = 0;
+    while let Some(rel) = text[search..].find(name) {
+        let abs_rel = search + rel;
+        let before = if abs_rel == 0 { 0u8 } else { bytes[abs_rel - 1] };
+        let after_idx = abs_rel + name_len;
+        let after = if after_idx < bytes.len() { bytes[after_idx] } else { 0u8 };
+        let bad_before = before.is_ascii_alphanumeric()
+            || matches!(before, b'_' | b'-' | b'.' | b'#' | b':' | b'[');
+        let bad_after = after.is_ascii_alphanumeric() || matches!(after, b'_' | b'-');
+        if !bad_before && !bad_after {
+            let start = base_offset + abs_rel;
+            return (start, start + name_len);
+        }
+        search = abs_rel + name_len;
     }
+    (base_offset, base_offset + name_len)
 }
