@@ -203,6 +203,38 @@ Create `oxvelte.config.json` in your project root:
 
 Without a config file, oxvelte runs the **recommended** ruleset (same as eslint-plugin-svelte's `flat/recommended`).
 
+## Custom rules
+
+Project-specific conventions that don't belong in the shared ruleset — forbidden imports, naming schemes, required attributes — can be written in JavaScript and loaded via `customRules`:
+
+```json
+{
+  "rules": { "custom/no-div-without-class": "error" },
+  "customRules": ["./rules/*.js"]
+}
+```
+
+```javascript
+// ./rules/no-div-without-class.js
+export default {
+  name: "custom/no-div-without-class",
+  run(ctx) {
+    ctx.walk((node) => {
+      if (node.type === "Element" && node.name === "div") {
+        const hasClass = node.attributes.some(
+          (a) => a.type === "NormalAttribute" && a.name === "class",
+        );
+        if (!hasClass) ctx.diagnostic("div must have a class attribute", node.span);
+      }
+    });
+  },
+};
+```
+
+Rules run in an embedded [Boa](https://boajs.dev/) engine — no Node.js dependency, no IPC. Requires the `custom-rules` feature at build time (`cargo install … --features custom-rules`).
+
+Full reference — AST shape, `ctx` API, auto-fix, limitations — in [`docs/custom-rules.md`](docs/custom-rules.md).
+
 ## What's implemented
 
 - **78 lint rules** from eslint-plugin-svelte, all ported to Rust
