@@ -4,15 +4,15 @@
 //!
 //! Vendor reference:
 //! `vendor/eslint-plugin-svelte/.../src/rules/html-closing-bracket-spacing.ts`.
-//! Vendor subscribes to `SvelteStartTag` / `SvelteEndTag` (each with its own
-//! range ending at the closing bracket) and reads `src.getText(node)` to
-//! inspect the tag text in isolation.
+//! Vendor subscribes to `'SvelteStartTag, SvelteEndTag'` (one visitor, both
+//! node types) and, for each hit, runs `/(\s*)\/?>$/` on `src.getText(node)`.
+//! `match[0].length` is `whitespace + bracket`, so the fix/diagnostic range
+//! anchors at `node.range[1] - match[0].length`.
 //!
-//! Our `Element<'a>` now carries `start_tag_end: u32` and
-//! `end_tag_span: Option<Span>` so this rule can do the same: slice the
-//! start-tag source (`el.span.start..=start_tag_end`) or the end-tag source
-//! (`end_tag_span`) directly — no brace / quote tokenization, no
-//! `rfind("</name")` against the whole element text.
+//! Our `Element<'a>` carries `start_tag_end: u32` and
+//! `end_tag_span: Option<Span>` (parser pre-records both, `#[serde(skip)]`
+//! so snapshots are byte-identical). We slice the tag's own source out of
+//! `ctx.source` and run the vendor-equivalent trim check.
 
 use crate::linter::{walk_template_nodes, Fix, LintContext, Rule};
 use crate::ast::TemplateNode;
@@ -41,62 +41,69 @@ impl Rule for HtmlClosingBracketSpacing {
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             let TemplateNode::Element(el) = node else { return };
 
-            // Start tag (or self-closing tag) — from `<` through `>`.
-            let start_tag_bracket = el.start_tag_end;
-            let start_tag_src_end = (start_tag_bracket + 1) as usize;
-            if start_tag_src_end <= ctx.source.len() {
-                let start_tag_src = &ctx.source[el.span.start as usize..start_tag_src_end];
-                if el.self_closing {
-                    if sc_mode != "ignore" {
-                        check(&sc_mode, start_tag_src, start_tag_bracket, 2, ctx);
-                    }
-                } else if start_mode != "ignore" {
-                    check(&start_mode, start_tag_src, start_tag_bracket, 1, ctx);
-                }
+            // Start tag (or self-closing). `start_tag_end` is the byte offset of
+            // the `>` character; the tag's source therefore ends one past it.
+            let start_src_end = (el.start_tag_end + 1) as usize;
+            if start_src_end <= ctx.source.len() {
+                let tag_src = &ctx.source[el.span.start as usize..start_src_end];
+                let tag_mode: &str = if el.self_closing { &sc_mode } else { &start_mode };
+                check_tag(tag_mode, tag_src, el.span.start, ctx);
             }
 
-            // End tag — scoped to its own span; no rescanning the whole element.
-            if end_mode != "ignore" {
-                if let Some(end_span) = el.end_tag_span {
-                    let end_src = &ctx.source[end_span.start as usize..end_span.end as usize];
-                    let bracket = end_span.end - 1;
-                    check(&end_mode, end_src, bracket, 1, ctx);
-                }
+            // End tag `</name>` — scoped to its own span.
+            if let Some(end_span) = el.end_tag_span {
+                let tag_src = &ctx.source[end_span.start as usize..end_span.end as usize];
+                check_tag(&end_mode, tag_src, end_span.start, ctx);
             }
         });
     }
 }
 
-/// Inspect the trailing whitespace before a tag's closing bracket and
-/// report/fix per `mode`. `tag_src` is the tag's own source slice ending
-/// at `>` (or `/>`). `bracket_pos` is the absolute byte offset of the
-/// `>` in `ctx.source`. `bracket_width` is 1 for `>`, 2 for `/>`.
-///
-/// Mirrors vendor's `/(\s*)\/?>$/` regex — we just count trailing space/tab
-/// characters before the bracket. A newline inside the whitespace run
-/// short-circuits the check (same as vendor's `containsNewline`).
-fn check(mode: &str, tag_src: &str, bracket_pos: u32, bracket_width: u32, ctx: &mut LintContext) {
-    let close_len = bracket_width as usize;
-    if tag_src.len() < close_len { return; }
+/// Port of vendor's `/(\s*)\/?>$/` check. `tag_src` ends at `>` or `/>`;
+/// `tag_src_start` is its absolute byte offset in `ctx.source`. Anchor
+/// positions (`bracket_start`, `bracket_end`, `space_start`) are computed
+/// exactly as vendor computes `start = range[1] - match[0].length` /
+/// `end = range[1]`: `bracket_start` is the first bracket character — `/`
+/// for `/>`, `>` for `>`. Insertions/removals anchor there, matching the
+/// vendor's `fixer.insertTextBeforeRange([start, end], ' ')` /
+/// `fixer.removeRange([start, start + spaces.length])` exactly.
+fn check_tag(mode: &str, tag_src: &str, tag_src_start: u32, ctx: &mut LintContext) {
+    if mode == "ignore" { return; }
+    let close_len = if tag_src.ends_with("/>") {
+        2
+    } else if tag_src.ends_with('>') {
+        1
+    } else {
+        return;
+    };
     let body = &tag_src[..tag_src.len() - close_len];
     let trimmed = body.trim_end_matches([' ', '\t', '\n', '\r']);
     let spaces = &body[trimmed.len()..];
     if spaces.contains('\n') { return; }
-    let space_start = bracket_pos - spaces.len() as u32;
+
+    let bracket_end = tag_src_start + tag_src.len() as u32;
+    let bracket_start = bracket_end - close_len as u32;
+    let space_start = bracket_start - spaces.len() as u32;
 
     match (mode, spaces.is_empty()) {
         ("always", true) => {
             ctx.diagnostic_with_fix(
                 "Expected space before '>', but not found.",
-                Span::new(bracket_pos, bracket_pos + bracket_width),
-                Fix { span: Span::new(bracket_pos, bracket_pos), replacement: " ".to_string() },
+                Span::new(bracket_start, bracket_end),
+                Fix {
+                    span: Span::new(bracket_start, bracket_start),
+                    replacement: " ".to_string(),
+                },
             );
         }
         ("never", false) => {
             ctx.diagnostic_with_fix(
                 "Expected no space before '>', but found.",
-                Span::new(space_start, bracket_pos + bracket_width),
-                Fix { span: Span::new(space_start, bracket_pos), replacement: String::new() },
+                Span::new(space_start, bracket_end),
+                Fix {
+                    span: Span::new(space_start, bracket_start),
+                    replacement: String::new(),
+                },
             );
         }
         _ => {}
