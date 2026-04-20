@@ -6,6 +6,11 @@
 //! is separated from the reactive statement's start by a "microtask boundary": `await`,
 //! Promise `.then`/`.catch` callbacks, or scheduled callbacks of `setTimeout`,
 //! `setInterval`, `queueMicrotask`, and Svelte's `tick` (including local aliases/imports).
+//!
+//! Legacy-only (vendor condition: `{svelteVersions: ['5'], runes: [false, 'undetermined']}`
+//! + `{svelteVersions: ['3/4']}`). When the file is in Svelte 5 runes mode, `$: ...`
+//! semantics change (the statement re-runs based on explicit dependencies, not mutation),
+//! so the microtask-loop heuristic no longer applies. Gated via `ctx.is_runes`.
 
 use crate::linter::{LintContext, Rule};
 use oxc::ast::ast::*;
@@ -27,6 +32,7 @@ impl Rule for InfiniteReactiveLoop {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
+        if ctx.is_runes { return; }
         let Some(semantic) = ctx.instance_semantic else { return };
         let program = semantic.nodes().program();
 
