@@ -11,15 +11,16 @@ pub mod expression;
 use oxc_diagnostics::OxcDiagnostic;
 use oxc::span::Span;
 use crate::ast::*;
+use std::marker::PhantomData;
 
 #[derive(Debug)]
-pub struct ParseResult {
-    pub ast: SvelteAst,
+pub struct ParseResult<'a> {
+    pub ast: SvelteAst<'a>,
     pub errors: Vec<OxcDiagnostic>,
 }
 
 /// Parse a `.svelte` source string.
-pub fn parse(source: &str) -> ParseResult {
+pub fn parse<'a>(source: &'a str) -> ParseResult<'a> {
     let mut errors = Vec::new();
     let regions = extract_regions(source);
 
@@ -42,11 +43,24 @@ pub fn parse(source: &str) -> ParseResult {
         Ok(fragment) => fragment,
         Err(e) => {
             errors.push(e);
-            Fragment { nodes: Vec::new(), span: Span::new(0, source.len() as u32) }
+            Fragment {
+                nodes: Vec::new(),
+                span: Span::new(0, source.len() as u32),
+                _phantom: PhantomData,
+            }
         }
     };
 
-    ParseResult { ast: SvelteAst { html, instance, module, css }, errors }
+    ParseResult {
+        ast: SvelteAst {
+            html,
+            instance,
+            module,
+            css,
+            _phantom: PhantomData,
+        },
+        errors,
+    }
 }
 
 // ─── Region extraction ─────────────────────────────────────────────────────
