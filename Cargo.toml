@@ -33,6 +33,9 @@ rustc-hash = "2"
 rayon = "1"
 atty = "0.2"
 boa_engine = { version = "0.20", optional = true }
+selectors = "0.37.0"
+precomputed-hash = "0.1.1"
+cssparser = "0.36"
 
 [dev-dependencies]
 insta = { version = "1", features = ["json"] }
