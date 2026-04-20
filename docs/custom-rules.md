@@ -228,9 +228,25 @@ oxvelte lint src/
 
 A runnable copy of this rule lives at [`examples/custom-rules/no-div-without-class.js`](../examples/custom-rules/no-div-without-class.js).
 
+## Is oxvelte the right layer?
+
+Before writing a custom rule, ask: **does this rule touch the Svelte template at all?**
+
+oxvelte custom rules only have access to template nodes (`Element`, `IfBlock`, `MustacheTag`, etc.). If your rule is purely about what's imported, exported, or called in the `<script>` block — `ImportDeclaration`, `ExportNamedDeclaration`, `CallExpression`, `Program:exit` — then **oxvelte is the wrong layer**. The script blocks are plain TypeScript files; a rule that only checks JS/TS semantics belongs in [oxlint's JS plugin API](https://oxc.rs/docs/guide/usage/linter/plugins) or as a standard ESLint rule targeting `*.ts` / `*.js`.
+
+A quick rule of thumb:
+
+| Your rule checks… | Use |
+|---|---|
+| Template structure — elements, directives, mustache tags, control flow blocks | oxvelte custom rule |
+| Imports, exports, call sites, variable declarations, type annotations | oxlint plugin / ESLint rule |
+| Both (e.g. a component that imports X must also use directive Y in its template) | oxvelte custom rule (template side) + oxlint plugin (script side) |
+
+`oxvelte migrate` will flag rules from your ESLint config that appear to be JS/TS-only and suggest the oxlint path.
+
 ## Limitations
 
-- **No JS/TS semantic model.** `ctx.ast.instance.content` is a string; there's no scope manager, symbol table, or typed expression AST. For rules that need to reason about JS semantics (variable resolution, import tracking, call-graph analysis), add them as built-in Rust rules instead.
+- **No JS/TS semantic model.** `ctx.ast.instance.content` is a string; there's no scope manager, symbol table, or typed expression AST. For rules that need to reason about JS semantics (variable resolution, import tracking, call-graph analysis), use oxlint's plugin API or implement them as built-in Rust rules instead.
 - **Synchronous only.** `run(ctx)` is called synchronously per file, with no `await` and no I/O bridge. A rule can't read sibling files, hit the network, or query a language server.
 - **Per-file, not cross-file.** Each file is linted in isolation. Rules that need to compare two files (component-to-usage, route-to-schema) aren't expressible here.
 - **Boa performance.** Boa is fast enough for a handful of rules across thousands of files, but it's ~100x slower than native Rust rules. If a custom rule becomes hot, port it to a Rust rule.
