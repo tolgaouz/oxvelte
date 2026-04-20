@@ -1156,7 +1156,7 @@ fn estree_simple_assign_target(target: &oxc::ast::ast::SimpleAssignmentTarget<'_
 }
 
 /// Filter out whitespace-only text nodes from block content.
-fn filter_whitespace_nodes(nodes: &[TemplateNode]) -> Vec<&TemplateNode> {
+fn filter_whitespace_nodes<'a, 'b>(nodes: &'b [TemplateNode<'a>]) -> Vec<&'b TemplateNode<'a>> {
     nodes.iter()
         .filter(|n| {
             if let TemplateNode::Text(t) = n {
@@ -1169,7 +1169,7 @@ fn filter_whitespace_nodes(nodes: &[TemplateNode]) -> Vec<&TemplateNode> {
 }
 
 /// For root fragments: only strip trailing whitespace-only text nodes.
-fn strip_trailing_whitespace(nodes: &[TemplateNode]) -> Vec<&TemplateNode> {
+fn strip_trailing_whitespace<'a, 'b>(nodes: &'b [TemplateNode<'a>]) -> Vec<&'b TemplateNode<'a>> {
     let mut result: Vec<&TemplateNode> = nodes.iter().collect();
     while let Some(last) = result.last() {
         if let TemplateNode::Text(t) = last {

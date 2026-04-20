@@ -5,12 +5,11 @@
 
 use oxc_diagnostics::OxcDiagnostic;
 use oxc::span::Span;
+use std::marker::PhantomData;
 use crate::ast::*;
 
 /// Parse a template source string into a [`Fragment`].
-///
-/// Parse a template source string into a [`Fragment`].
-pub fn parse_fragment(source: &str) -> Result<Fragment, OxcDiagnostic> {
+pub fn parse_fragment<'a>(source: &'a str) -> Result<Fragment<'a>, OxcDiagnostic> {
     let mut parser = TemplateParser::new(source);
     parser.parse_fragment()
 }
@@ -27,12 +26,12 @@ impl<'a> TemplateParser<'a> {
     }
 
     /// Parse the entire template into a fragment.
-    fn parse_fragment(&mut self) -> Result<Fragment, OxcDiagnostic> {
+    fn parse_fragment(&mut self) -> Result<Fragment<'a>, OxcDiagnostic> {
         self.parse_fragment_with_parent(None)
     }
 
     /// Parse a fragment, optionally with a parent element name for implicit closing.
-    fn parse_fragment_with_parent(&mut self, parent: Option<&str>) -> Result<Fragment, OxcDiagnostic> {
+    fn parse_fragment_with_parent(&mut self, parent: Option<&str>) -> Result<Fragment<'a>, OxcDiagnostic> {
         let start = self.pos as u32;
         let mut nodes = Vec::new();
 
@@ -137,7 +136,7 @@ impl<'a> TemplateParser<'a> {
             }
         }
 
-        Ok(Fragment {
+        Ok(Fragment { _phantom: PhantomData,
             nodes,
             span: Span::new(start, self.pos as u32),
         })
@@ -235,7 +234,7 @@ impl<'a> TemplateParser<'a> {
 
     /// Parse children of raw text elements (textarea, title).
     /// HTML tags are treated as text, but mustache expressions are parsed.
-    fn parse_raw_text_children(&mut self, tag_name: &str) -> Result<Vec<TemplateNode>, OxcDiagnostic> {
+    fn parse_raw_text_children(&mut self, tag_name: &str) -> Result<Vec<TemplateNode<'a>>, OxcDiagnostic> {
         let close_prefix = format!("</{}", tag_name);
         let mut nodes = Vec::new();
 
@@ -479,7 +478,7 @@ impl<'a> TemplateParser<'a> {
 
     // ─── Node parsers ──────────────────────────────────────────────────
 
-    fn parse_text(&mut self) -> Result<TemplateNode, OxcDiagnostic> {
+    fn parse_text(&mut self) -> Result<TemplateNode<'a>, OxcDiagnostic> {
         let start = self.pos as u32;
         let data = self.eat_until_any(&["<", "{", "<!--"]);
         Ok(TemplateNode::Text(Text {
@@ -488,7 +487,7 @@ impl<'a> TemplateParser<'a> {
         }))
     }
 
-    fn parse_comment(&mut self) -> Result<TemplateNode, OxcDiagnostic> {
+    fn parse_comment(&mut self) -> Result<TemplateNode<'a>, OxcDiagnostic> {
         let start = self.pos as u32;
         self.eat("<!--")?;
         let data = self.eat_until("-->");
@@ -499,30 +498,30 @@ impl<'a> TemplateParser<'a> {
         }))
     }
 
-    fn parse_mustache(&mut self) -> Result<TemplateNode, OxcDiagnostic> {
+    fn parse_mustache(&mut self) -> Result<TemplateNode<'a>, OxcDiagnostic> {
         let start = self.pos as u32;
         self.eat("{")?;
         let expression = self.read_expression()?;
         self.eat("}")?;
-        Ok(TemplateNode::MustacheTag(MustacheTag {
+        Ok(TemplateNode::MustacheTag(MustacheTag { _phantom: PhantomData,
             expression,
             span: Span::new(start, self.pos as u32),
         }))
     }
 
-    fn parse_raw_mustache(&mut self) -> Result<TemplateNode, OxcDiagnostic> {
+    fn parse_raw_mustache(&mut self) -> Result<TemplateNode<'a>, OxcDiagnostic> {
         let start = self.pos as u32;
         self.eat("{@html")?;
         self.skip_whitespace();
         let expression = self.read_expression()?;
         self.eat("}")?;
-        Ok(TemplateNode::RawMustacheTag(RawMustacheTag {
+        Ok(TemplateNode::RawMustacheTag(RawMustacheTag { _phantom: PhantomData,
             expression,
             span: Span::new(start, self.pos as u32),
         }))
     }
 
-    fn parse_debug_tag(&mut self) -> Result<TemplateNode, OxcDiagnostic> {
+    fn parse_debug_tag(&mut self) -> Result<TemplateNode<'a>, OxcDiagnostic> {
         let start = self.pos as u32;
         self.eat("{@debug")?;
         self.skip_whitespace();
@@ -533,37 +532,37 @@ impl<'a> TemplateParser<'a> {
             .filter(|s| !s.is_empty())
             .collect();
         self.eat("}")?;
-        Ok(TemplateNode::DebugTag(DebugTag {
+        Ok(TemplateNode::DebugTag(DebugTag { _phantom: PhantomData,
             identifiers,
             span: Span::new(start, self.pos as u32),
         }))
     }
 
-    fn parse_const_tag(&mut self) -> Result<TemplateNode, OxcDiagnostic> {
+    fn parse_const_tag(&mut self) -> Result<TemplateNode<'a>, OxcDiagnostic> {
         let start = self.pos as u32;
         self.eat("{@const")?;
         self.skip_whitespace();
         let declaration = self.read_expression()?;
         self.eat("}")?;
-        Ok(TemplateNode::ConstTag(ConstTag {
+        Ok(TemplateNode::ConstTag(ConstTag { _phantom: PhantomData,
             declaration,
             span: Span::new(start, self.pos as u32),
         }))
     }
 
-    fn parse_render_tag(&mut self) -> Result<TemplateNode, OxcDiagnostic> {
+    fn parse_render_tag(&mut self) -> Result<TemplateNode<'a>, OxcDiagnostic> {
         let start = self.pos as u32;
         self.eat("{@render")?;
         self.skip_whitespace();
         let expression = self.read_expression()?;
         self.eat("}")?;
-        Ok(TemplateNode::RenderTag(RenderTag {
+        Ok(TemplateNode::RenderTag(RenderTag { _phantom: PhantomData,
             expression,
             span: Span::new(start, self.pos as u32),
         }))
     }
 
-    fn parse_element(&mut self) -> Result<TemplateNode, OxcDiagnostic> {
+    fn parse_element(&mut self) -> Result<TemplateNode<'a>, OxcDiagnostic> {
         let start = self.pos as u32;
         self.eat("<")?;
 
@@ -844,7 +843,7 @@ impl<'a> TemplateParser<'a> {
 
     // ─── Block parsers ─────────────────────────────────────────────────
 
-    fn parse_if_block(&mut self) -> Result<TemplateNode, OxcDiagnostic> {
+    fn parse_if_block(&mut self) -> Result<TemplateNode<'a>, OxcDiagnostic> {
         let start = self.pos as u32;
         self.eat("{#if")?;
         self.skip_whitespace();
@@ -887,7 +886,7 @@ impl<'a> TemplateParser<'a> {
         }))
     }
 
-    fn parse_else_if_block(&mut self) -> Result<TemplateNode, OxcDiagnostic> {
+    fn parse_else_if_block(&mut self) -> Result<TemplateNode<'a>, OxcDiagnostic> {
         let start = self.pos as u32;
         self.eat("{:else if")?;
         self.skip_whitespace();
@@ -924,7 +923,7 @@ impl<'a> TemplateParser<'a> {
         }))
     }
 
-    fn parse_each_block(&mut self) -> Result<TemplateNode, OxcDiagnostic> {
+    fn parse_each_block(&mut self) -> Result<TemplateNode<'a>, OxcDiagnostic> {
         let start = self.pos as u32;
         self.eat("{#each")?;
         self.skip_whitespace();
@@ -992,7 +991,7 @@ impl<'a> TemplateParser<'a> {
         }))
     }
 
-    fn parse_await_block(&mut self) -> Result<TemplateNode, OxcDiagnostic> {
+    fn parse_await_block(&mut self) -> Result<TemplateNode<'a>, OxcDiagnostic> {
         let start = self.pos as u32;
         self.eat("{#await")?;
         self.skip_whitespace();
@@ -1108,7 +1107,7 @@ impl<'a> TemplateParser<'a> {
         }))
     }
 
-    fn parse_key_block(&mut self) -> Result<TemplateNode, OxcDiagnostic> {
+    fn parse_key_block(&mut self) -> Result<TemplateNode<'a>, OxcDiagnostic> {
         let start = self.pos as u32;
         self.eat("{#key")?;
         self.skip_whitespace();
@@ -1125,7 +1124,7 @@ impl<'a> TemplateParser<'a> {
         }))
     }
 
-    fn parse_snippet_block(&mut self) -> Result<TemplateNode, OxcDiagnostic> {
+    fn parse_snippet_block(&mut self) -> Result<TemplateNode<'a>, OxcDiagnostic> {
         let start = self.pos as u32;
         self.eat("{#snippet")?;
         self.skip_whitespace();

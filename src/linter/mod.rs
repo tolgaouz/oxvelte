@@ -32,7 +32,7 @@ pub struct RuleConfig {
 
 /// Context provided to lint rules during execution.
 pub struct LintContext<'a> {
-    pub ast: &'a SvelteAst,
+    pub ast: &'a SvelteAst<'a>,
     pub source: &'a str,
     pub config: RuleConfig,
     /// Path to the file being linted (for cross-file resolution)
@@ -54,7 +54,7 @@ pub struct LintContext<'a> {
 }
 
 impl<'a> LintContext<'a> {
-    pub fn new(ast: &'a SvelteAst, source: &'a str) -> Self {
+    pub fn new(ast: &'a SvelteAst<'a>, source: &'a str) -> Self {
         Self {
             ast, source, config: RuleConfig::default(), file_path: None, is_svelte_module: false,
             instance_semantic: None, module_semantic: None,
@@ -63,7 +63,7 @@ impl<'a> LintContext<'a> {
         }
     }
 
-    pub fn with_config(ast: &'a SvelteAst, source: &'a str, config: RuleConfig) -> Self {
+    pub fn with_config(ast: &'a SvelteAst<'a>, source: &'a str, config: RuleConfig) -> Self {
         Self {
             ast, source, config, file_path: None, is_svelte_module: false,
             instance_semantic: None, module_semantic: None,
@@ -150,7 +150,7 @@ impl Linter {
         &self.rules
     }
 
-    pub fn lint(&self, ast: &SvelteAst, source: &str) -> Vec<LintDiagnostic> {
+    pub fn lint<'a>(&self, ast: &'a SvelteAst<'a>, source: &'a str) -> Vec<LintDiagnostic> {
         self.lint_impl(ast, source, RuleConfig::default(), None, ScriptMode::Full, /*is_svelte_module*/ false)
     }
 
@@ -159,8 +159,9 @@ impl Linter {
     pub fn lint_script(&self, source: &str) -> Vec<LintDiagnostic> {
         if !self.has_script_rules { return vec![]; }
         use crate::ast::{SvelteAst, Script, Fragment};
+        use std::marker::PhantomData;
         let ast = SvelteAst {
-            html: Fragment { nodes: vec![], span: oxc::span::Span::new(0, 0) },
+            html: Fragment { nodes: vec![], span: oxc::span::Span::new(0, 0), _phantom: PhantomData },
             instance: Some(Script {
                 content: source.to_string(),
                 module: false,
@@ -170,6 +171,7 @@ impl Linter {
             }),
             module: None,
             css: None,
+            _phantom: PhantomData,
         };
         self.lint_impl(&ast, source, RuleConfig::default(), None, ScriptMode::ScriptOnly, /*is_svelte_module*/ false)
     }
@@ -177,8 +179,9 @@ impl Linter {
     /// Lint a `.svelte.js` or `.svelte.ts` module. Runs rules marked with
     /// `applies_to_scripts` or `applies_to_svelte_scripts`.
     pub fn lint_svelte_script(&self, source: &str, is_ts: bool) -> Vec<LintDiagnostic> {
+        use std::marker::PhantomData;
         let ast = SvelteAst {
-            html: Fragment { nodes: vec![], span: oxc::span::Span::new(0, 0) },
+            html: Fragment { nodes: vec![], span: oxc::span::Span::new(0, 0), _phantom: PhantomData },
             instance: Some(Script {
                 content: source.to_string(),
                 module: false,
@@ -188,25 +191,26 @@ impl Linter {
             }),
             module: None,
             css: None,
+            _phantom: PhantomData,
         };
         self.lint_impl(&ast, source, RuleConfig::default(), None, ScriptMode::SvelteModule, /*is_svelte_module*/ true)
     }
 
-    pub fn lint_with_config(&self, ast: &SvelteAst, source: &str, config: RuleConfig) -> Vec<LintDiagnostic> {
+    pub fn lint_with_config<'a>(&self, ast: &'a SvelteAst<'a>, source: &'a str, config: RuleConfig) -> Vec<LintDiagnostic> {
         self.lint_impl(ast, source, config, None, ScriptMode::Full, false)
     }
 
-    pub fn lint_with_config_and_path(&self, ast: &SvelteAst, source: &str, config: RuleConfig, file_path: &str) -> Vec<LintDiagnostic> {
+    pub fn lint_with_config_and_path<'a>(&self, ast: &'a SvelteAst<'a>, source: &'a str, config: RuleConfig, file_path: &str) -> Vec<LintDiagnostic> {
         self.lint_impl(ast, source, config, Some(file_path.to_string()), ScriptMode::Full, false)
     }
 
     /// Central lint driver. Creates an allocator, parses script blocks into oxc ASTs
     /// (with semantic), populates `LintContext`, runs each applicable rule, and filters
     /// suppressed diagnostics.
-    fn lint_impl(
+    fn lint_impl<'a>(
         &self,
-        ast: &SvelteAst,
-        source: &str,
+        ast: &'a SvelteAst<'a>,
+        source: &'a str,
         config: RuleConfig,
         file_path: Option<String>,
         script_mode: ScriptMode,
