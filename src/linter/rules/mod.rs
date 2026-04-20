@@ -75,7 +75,6 @@ mod first_attribute_linebreak;
 mod html_closing_bracket_new_line;
 mod html_closing_bracket_spacing;
 mod html_quotes;
-mod indent;
 mod max_attributes_per_line;
 mod mustache_spacing;
 mod sort_attributes;
@@ -158,7 +157,6 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(html_closing_bracket_new_line::HtmlClosingBracketNewLine),
         Box::new(html_closing_bracket_spacing::HtmlClosingBracketSpacing),
         Box::new(html_quotes::HtmlQuotes),
-        Box::new(indent::Indent),
         Box::new(max_attributes_per_line::MaxAttributesPerLine),
         Box::new(mustache_spacing::MustacheSpacing),
         Box::new(sort_attributes::SortAttributes),

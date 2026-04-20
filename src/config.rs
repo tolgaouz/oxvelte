@@ -7,7 +7,7 @@
 //!   "rules": {
 //!     "svelte/no-at-html-tags": "error",
 //!     "svelte/button-has-type": ["warn", { "button": false }],
-//!     "svelte/indent": "off"
+//!     "svelte/no-inline-styles": "off"
 //!   },
 //!   "settings": {
 //!     "svelte": {
@@ -268,9 +268,9 @@ mod tests {
 
     #[test]
     fn test_parse_off() {
-        let json = r#"{ "rules": { "svelte/indent": "off" } }"#;
+        let json = r#"{ "rules": { "svelte/no-inline-styles": "off" } }"#;
         let config = OxvelteConfig::parse(json).unwrap();
-        assert!(config.is_rule_off("svelte/indent"));
+        assert!(config.is_rule_off("svelte/no-inline-styles"));
     }
 
     #[test]
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip() {
-        let json = r#"{ "rules": { "svelte/no-at-html-tags": "error", "svelte/indent": ["warn", { "indentScript": false }] } }"#;
+        let json = r#"{ "rules": { "svelte/no-at-html-tags": "error", "svelte/button-has-type": ["warn", { "button": false }] } }"#;
         let config = OxvelteConfig::parse(json).unwrap();
         let output = config.to_json();
         let reparsed = OxvelteConfig::parse(&output).unwrap();

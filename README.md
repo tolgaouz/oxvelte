@@ -172,7 +172,7 @@ The binary will be at `./target/release/oxvelte`.
 oxvelte lint src/              # lint with recommended rules
 oxvelte lint --json src/       # JSON output
 oxvelte lint --fix src/        # auto-fix where supported
-oxvelte lint --all-rules src/  # run all 79 rules
+oxvelte lint --all-rules src/  # run all 78 rules
 oxvelte rules                  # list available rules
 ```
 
@@ -185,7 +185,7 @@ Create `oxvelte.config.json` in your project root:
   "rules": {
     "svelte/no-at-html-tags": "error",
     "svelte/button-has-type": ["warn", { "button": false }],
-    "svelte/indent": "off"
+    "svelte/no-inline-styles": "off"
   },
   "settings": {
     "svelte": {
@@ -205,7 +205,7 @@ Without a config file, oxvelte runs the **recommended** ruleset (same as eslint-
 
 ## What's implemented
 
-- **79 lint rules** from eslint-plugin-svelte, all ported to Rust
+- **78 lint rules** from eslint-plugin-svelte, all ported to Rust
 - **Full Svelte 4 + Svelte 5** template parser (106/106 parser fixture tests)
 - **281 tests passing** (lint rules + parser fixtures)
 - **Parallel file processing** via rayon
@@ -218,8 +218,9 @@ A few eslint-plugin-svelte rules are **not** implemented by design:
 
 - **`valid-compile`** — this rule *is* the Svelte compiler. Running it in a linter means invoking the full compiler on every file, which defeats the purpose of a fast native tool. Svelte already reports these errors at build time.
 - **`no-unused-svelte-ignore`** — requires the Svelte compiler to know which diagnostics were actually suppressed. Again, Svelte itself warns about this at build time.
+- **`indent`** — a formatting rule, not a lint rule. eslint-plugin-svelte itself marks it `recommended: false` with `conflictWithPrettier: true`. oxc tracks ESLint's `indent` as [🚫 *Not intending to implement*](https://github.com/oxc-project/oxc/issues/479) (*"Deprecated stylistic rule, can be used via the stylistic eslint plugin as a JS Plugin if necessary"*), and `@typescript-eslint/indent` is [likewise deprecated upstream](https://github.com/oxc-project/oxc/issues/503). Layout belongs in a formatter — use Prettier or `oxfmt`; don't re-encode it as lint diagnostics.
 
-These rules add latency with zero incremental value — your build step already catches them.
+These rules add latency with zero incremental value — your build step (or formatter) already catches them.
 
 ## Project structure
 
