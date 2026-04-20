@@ -66,7 +66,20 @@ pub struct Element<'a> {
     pub attributes: Vec<Attribute>,
     pub children: Vec<TemplateNode<'a>>,
     pub self_closing: bool,
+    /// Full element span: from `<` of the opening tag through `>` of the
+    /// end tag (or `/>` for self-closing / void elements).
     pub span: Span,
+    /// Byte offset of the `>` that closes the start tag. For self-closing
+    /// and void elements this is the `>` of `/>`. Format-level rules
+    /// (`html-closing-bracket-spacing`, `max-attributes-per-line`, …) use
+    /// this to scope trailing-whitespace inspection to the start tag
+    /// without walking the element source to find the bracket themselves.
+    #[serde(skip)]
+    pub start_tag_end: u32,
+    /// Span of the `</name>` end tag, from `<` through `>`. `None` for
+    /// self-closing and void elements.
+    #[serde(skip)]
+    pub end_tag_span: Option<Span>,
 }
 
 #[derive(Debug, Clone, Serialize)]

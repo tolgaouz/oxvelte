@@ -239,9 +239,10 @@ impl<'a> TemplateParser<'a> {
 
     /// Parse children of raw text elements (textarea, title).
     /// HTML tags are treated as text, but mustache expressions are parsed.
-    fn parse_raw_text_children(&mut self, tag_name: &str) -> Result<Vec<TemplateNode<'a>>, OxcDiagnostic> {
+    fn parse_raw_text_children(&mut self, tag_name: &str) -> Result<(Vec<TemplateNode<'a>>, Option<Span>), OxcDiagnostic> {
         let close_prefix = format!("</{}", tag_name);
         let mut nodes = Vec::new();
+        let mut end_tag_span = None;
 
         while self.pos < self.source.len() {
             // Check for closing tag — </tagname followed by whitespace or >
@@ -250,10 +251,12 @@ impl<'a> TemplateParser<'a> {
                 let next_ch = after_prefix.chars().next();
                 if next_ch == Some('>') || next_ch.map(|c| c.is_ascii_whitespace()).unwrap_or(true) {
                     // Valid closing tag — eat to >
+                    let end_tag_start = self.pos as u32;
                     self.eat_until(">");
                     if self.looking_at(">") {
                         self.eat(">")?;
                     }
+                    end_tag_span = Some(Span::new(end_tag_start, self.pos as u32));
                     break;
                 }
                 // Not a valid closing tag (e.g., </textaread) — treat as text
@@ -288,7 +291,7 @@ impl<'a> TemplateParser<'a> {
             }
         }
 
-        Ok(nodes)
+        Ok((nodes, end_tag_span))
     }
 
     /// Check if we're at `{:else` followed by whitespace then `}` (not `{:else if`).
@@ -592,35 +595,40 @@ impl<'a> TemplateParser<'a> {
 
         // Check for self-closing or void element
         self.skip_whitespace();
-        let self_closing = if self.looking_at("/>") {
+        let (self_closing, start_tag_end) = if self.looking_at("/>") {
+            // `>` is at self.pos + 1 (after the `/`).
+            let bracket = (self.pos + 1) as u32;
             self.eat("/>")?;
-            true
+            (true, bracket)
         } else if self.looking_at(">") {
+            let bracket = self.pos as u32;
             self.eat(">")?;
-            false
+            (false, bracket)
         } else {
-            // No > found — unclosed opening tag. Treat as self-closing.
-            // This handles cases like `<Comp foo={bar}` without closing >
-            true
+            // No > found — unclosed opening tag. Treat as self-closing. The
+            // bracket offset falls back to the current position so the field
+            // is still valid for length arithmetic.
+            (true, self.pos as u32)
         };
 
         let is_void = is_void_element(&name);
 
         let is_raw_text = name == "textarea" || name == "title";
-        let children = if self_closing || is_void {
-            Vec::new()
+        let (children, end_tag_span) = if self_closing || is_void {
+            (Vec::new(), None)
         } else if is_raw_text {
-            // Raw text elements: parse as text with mustache expressions, no HTML elements
             self.parse_raw_text_children(&name)?
         } else {
             // Parse children until closing tag (with implicit closing for li, p, etc.)
             let fragment = self.parse_fragment_with_parent(Some(&name))?;
-            // Eat closing tag if present
+            let mut end_tag = None;
             if self.looking_at(&format!("</{}", name)) {
+                let end_tag_start = self.pos as u32;
                 self.eat_until(">");
                 self.eat(">")?;
+                end_tag = Some(Span::new(end_tag_start, self.pos as u32));
             }
-            fragment.nodes
+            (fragment.nodes, end_tag)
         };
 
         // For unclosed elements at EOF, trim trailing whitespace from span
@@ -637,6 +645,8 @@ impl<'a> TemplateParser<'a> {
             children,
             self_closing,
             span: Span::new(start, end),
+            start_tag_end,
+            end_tag_span,
         }))
     }
 
