@@ -221,6 +221,119 @@ pub fn parse_selector_list(text: &str) -> Option<SelectorList<OxSelector>> {
     SelectorList::parse(&OxSelectorParser, &mut parser, ParseRelative::No).ok()
 }
 
+/// Walk every qualified-rule prelude in `css`, driven by cssparser's
+/// `StyleSheetParser`. The callback receives:
+///   - `prelude_text` — the raw source slice before the rule's `{ … }` body,
+///   - `source_start_byte` — byte offset of the prelude in the original
+///     document (`css_start + prelude_offset_within_css`),
+///   - `inside_global` — whether this rule sits inside a `:global { … }`
+///     wrapper.
+///
+/// At-rule bodies (`@media`, `@supports`, …) are recursed into so nested
+/// qualified rules are visited exactly once. Declarations are dropped on
+/// the floor — we only care about selector preludes. Invalid rules are
+/// skipped per cssparser's `StyleSheetParser::next` iterator semantics.
+pub fn for_each_rule_prelude<F>(css: &str, css_start_in_source: u32, mut f: F)
+where
+    F: FnMut(&str, u32, bool),
+{
+    let mut input = ParserInput::new(css);
+    let mut parser = CssParser::new(&mut input);
+    let mut walker = RuleWalker {
+        f: &mut f,
+        source_offset: css_start_in_source,
+        inside_global: false,
+    };
+    let mut sheet = cssparser::StyleSheetParser::new(&mut parser, &mut walker);
+    while sheet.next().is_some() {}
+}
+
+struct RuleWalker<'cb, F: FnMut(&str, u32, bool)> {
+    f: &'cb mut F,
+    source_offset: u32,
+    inside_global: bool,
+}
+
+type WalkError<'i> = cssparser::ParseError<'i, ()>;
+
+impl<'i, F> cssparser::QualifiedRuleParser<'i> for RuleWalker<'_, F>
+where
+    F: FnMut(&str, u32, bool),
+{
+    type Prelude = (String, u32);
+    type QualifiedRule = ();
+    type Error = ();
+
+    fn parse_prelude<'t>(
+        &mut self,
+        input: &mut CssParser<'i, 't>,
+    ) -> Result<Self::Prelude, WalkError<'i>> {
+        let start = input.position();
+        // `input` is already delimited to stop at the upcoming `{` — the
+        // `next_including_whitespace` loop just drains to the end of that
+        // delimited region so `input.slice(...)` picks up the full prelude.
+        while input.next_including_whitespace().is_ok() {}
+        let end = input.position();
+        let text = input.slice(start..end).to_string();
+        Ok((text, self.source_offset + start.byte_index() as u32))
+    }
+
+    fn parse_block<'t>(
+        &mut self,
+        prelude: Self::Prelude,
+        _start: &cssparser::ParserState,
+        input: &mut CssParser<'i, 't>,
+    ) -> Result<Self::QualifiedRule, WalkError<'i>> {
+        let (text, start_byte) = prelude;
+        if text.trim() == ":global" {
+            let prev = std::mem::replace(&mut self.inside_global, true);
+            let mut nested = cssparser::StyleSheetParser::new(input, self);
+            while nested.next().is_some() {}
+            self.inside_global = prev;
+        } else {
+            (self.f)(&text, start_byte, self.inside_global);
+        }
+        Ok(())
+    }
+}
+
+impl<'i, F> cssparser::AtRuleParser<'i> for RuleWalker<'_, F>
+where
+    F: FnMut(&str, u32, bool),
+{
+    type Prelude = ();
+    type AtRule = ();
+    type Error = ();
+
+    fn parse_prelude<'t>(
+        &mut self,
+        _name: cssparser::CowRcStr<'i>,
+        input: &mut CssParser<'i, 't>,
+    ) -> Result<Self::Prelude, WalkError<'i>> {
+        while input.next_including_whitespace().is_ok() {}
+        Ok(())
+    }
+
+    fn parse_block<'t>(
+        &mut self,
+        _prelude: Self::Prelude,
+        _start: &cssparser::ParserState,
+        input: &mut CssParser<'i, 't>,
+    ) -> Result<Self::AtRule, WalkError<'i>> {
+        let mut nested = cssparser::StyleSheetParser::new(input, self);
+        while nested.next().is_some() {}
+        Ok(())
+    }
+
+    fn rule_without_block(
+        &mut self,
+        _prelude: Self::Prelude,
+        _start: &cssparser::ParserState,
+    ) -> Result<Self::AtRule, ()> {
+        Ok(())
+    }
+}
+
 /// Iterate every `Component` across every `Selector` in a list, descending
 /// into `:is()` / `:where()` / `:not()` / `:has()` and into `:global(...)`
 /// when `visit_global` is true. The callback receives `(component, in_global)`
@@ -343,5 +456,41 @@ mod tests {
     fn survives_bad_input() {
         assert!(parse_selector_list("").is_none());
         assert!(parse_selector_list("{{{").is_none());
+    }
+
+    #[test]
+    fn walks_rule_preludes() {
+        let css = "a {}\n.x .y {}\n@media (min-width: 0) { #z {} }\n";
+        let mut got: Vec<(String, bool)> = Vec::new();
+        for_each_rule_prelude(css, 0, |text, _, in_global| {
+            got.push((text.trim().to_string(), in_global));
+        });
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0], ("a".to_string(), false));
+        assert_eq!(got[1], (".x .y".to_string(), false));
+        assert_eq!(got[2], ("#z".to_string(), false));
+    }
+
+    #[test]
+    fn recurses_into_global_wrapper() {
+        let css = ":global { .a {} .b {} }";
+        let mut got: Vec<(String, bool)> = Vec::new();
+        for_each_rule_prelude(css, 0, |text, _, in_global| {
+            got.push((text.trim().to_string(), in_global));
+        });
+        assert_eq!(
+            got,
+            vec![(".a".to_string(), true), (".b".to_string(), true)]
+        );
+    }
+
+    #[test]
+    fn offsets_are_absolute() {
+        // Feed a non-zero css_start to make sure it's added to positions.
+        let css = ".foo {}";
+        let mut got_start = None;
+        for_each_rule_prelude(css, 100, |_, start, _| got_start = Some(start));
+        // Prelude starts at byte 0 within `css`; css_start is 100.
+        assert_eq!(got_start, Some(100));
     }
 }
