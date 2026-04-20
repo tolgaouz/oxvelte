@@ -27,29 +27,17 @@ impl Rule for NoUnusedClassName {
             } else { allowed_plain.insert(name.clone()); }
         }
 
-        let mut css_classes = HashSet::new();
+        // Collect every `.classname` referenced anywhere in the stylesheet.
+        // We walk the CSS once at byte level to isolate each rule's prelude
+        // (the chunk of text ending at `{`), parse that prelude through the
+        // typed selector AST, and harvest `Component::Class(name)` across
+        // every descendant selector list — including `:global(...)` bodies,
+        // `:is(...)`, `:where(...)`, `:not(...)`, `:has(...)`, etc. This
+        // replaces the old `bytes[i] == b'.'` loop, which also matched
+        // spurious dots inside declaration values and string literals.
+        let mut css_classes: HashSet<String> = HashSet::new();
         if let Some(style) = &ctx.ast.css {
-            let css = &style.content;
-            let bytes = css.as_bytes();
-            let mut i = 0;
-            while i < bytes.len() {
-                if bytes[i] == b'.' {
-                    let start = i + 1;
-                    let mut end = start;
-                    while end < bytes.len()
-                        && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'-' || bytes[end] == b'_')
-                    {
-                        end += 1;
-                    }
-                    if end > start {
-                        let class_name = &css[start..end];
-                        css_classes.insert(class_name.to_string());
-                    }
-                    i = end;
-                } else {
-                    i += 1;
-                }
-            }
+            collect_css_classes(&style.content, &mut css_classes);
         }
 
         walk_template_nodes(&ctx.ast.html, &mut |node| {
@@ -77,6 +65,57 @@ impl Rule for NoUnusedClassName {
                 }
             }
         });
+    }
+}
+
+/// Collect every `.classname` referenced anywhere in `css` by walking the
+/// full cssparser token stream (no hand-rolled tokenizer, no brace tracking,
+/// no string/comment handling — `Parser::next` does all of that).
+///
+/// A class selector tokenizes as `Delim('.')` immediately followed by
+/// `Ident(name)`. We flatten nested blocks (`{...}`, `(...)`, `[...]`,
+/// `func(...)`) by recursing through `parse_nested_block`, so class names
+/// appearing inside `:global(...)`, `:is(...)`, media-rule preludes, or
+/// even malformed CSS bodies are all picked up — matching the lenient
+/// behavior the old byte scanner provided for the invalid-style fixture.
+fn collect_css_classes(css: &str, out: &mut HashSet<String>) {
+    let mut input = cssparser::ParserInput::new(css);
+    let mut parser = cssparser::Parser::new(&mut input);
+    walk_tokens(&mut parser, &mut |tok, prev_is_dot| {
+        if prev_is_dot {
+            if let cssparser::Token::Ident(name) = tok {
+                out.insert(name.as_ref().to_string());
+            }
+        }
+    });
+}
+
+fn walk_tokens<F>(parser: &mut cssparser::Parser<'_, '_>, f: &mut F)
+where
+    F: FnMut(&cssparser::Token<'_>, bool),
+{
+    let mut prev_is_dot = false;
+    loop {
+        let token = match parser.next() {
+            Ok(t) => t.clone(),
+            Err(_) => return,
+        };
+        f(&token, prev_is_dot);
+        prev_is_dot = matches!(&token, cssparser::Token::Delim('.'));
+        match &token {
+            cssparser::Token::Function(_)
+            | cssparser::Token::ParenthesisBlock
+            | cssparser::Token::CurlyBracketBlock
+            | cssparser::Token::SquareBracketBlock => {
+                let _ = parser.parse_nested_block(
+                    |inner| -> Result<(), cssparser::ParseError<'_, ()>> {
+                        walk_tokens(inner, f);
+                        Ok(())
+                    },
+                );
+            }
+            _ => {}
+        }
     }
 }
 
