@@ -49,6 +49,14 @@ pub struct LintContext<'a> {
     pub instance_content_offset: u32,
     /// Byte offset in `source` where the module script's content starts.
     pub module_content_offset: u32,
+    /// True iff the instance or module `<script>` block has at least one rune
+    /// call (`$state(…)`, `$derived(…)`, `$effect(…)`, `$props()`, `$bindable()`,
+    /// `$inspect(…)`, `$host()`, or their member forms like `$state.raw(…)` /
+    /// `$effect.root(…)`). Rules that are legacy-only (vendor's
+    /// `runes: [false, 'undetermined']` condition) should early-return when this
+    /// is `true`. When no rune calls are found, this stays `false` — mirroring
+    /// vendor's `undetermined` bucket, which runs both legacy and runes rules.
+    pub is_runes: bool,
     diagnostics: Vec<LintDiagnostic>,
     current_rule: &'static str,
 }
@@ -59,6 +67,7 @@ impl<'a> LintContext<'a> {
             ast, source, config: RuleConfig::default(), file_path: None, is_svelte_module: false,
             instance_semantic: None, module_semantic: None,
             instance_content_offset: 0, module_content_offset: 0,
+            is_runes: false,
             diagnostics: Vec::new(), current_rule: "",
         }
     }
@@ -68,6 +77,7 @@ impl<'a> LintContext<'a> {
             ast, source, config, file_path: None, is_svelte_module: false,
             instance_semantic: None, module_semantic: None,
             instance_content_offset: 0, module_content_offset: 0,
+            is_runes: false,
             diagnostics: Vec::new(), current_rule: "",
         }
     }
@@ -246,6 +256,9 @@ impl Linter {
         let instance_semantic = instance_parse.as_ref().map(|p| SemanticBuilder::new().build(&p.program).semantic);
         let module_semantic = module_parse.as_ref().map(|p| SemanticBuilder::new().build(&p.program).semantic);
 
+        let is_runes = instance_semantic.as_ref().is_some_and(detect_runes)
+            || module_semantic.as_ref().is_some_and(detect_runes);
+
         let mut ctx = LintContext::with_config(ast, source, config);
         ctx.file_path = file_path;
         ctx.is_svelte_module = is_svelte_module;
@@ -253,6 +266,7 @@ impl Linter {
         ctx.module_semantic = module_semantic.as_ref();
         ctx.instance_content_offset = instance_offset;
         ctx.module_content_offset = module_offset;
+        ctx.is_runes = is_runes;
 
         for rule in &self.rules {
             let include = match script_mode {
@@ -285,6 +299,36 @@ fn script_content_offset(script: &Script, source: &str) -> u32 {
     let tag_text = &source[script.span.start as usize..script.span.end as usize];
     let gt = tag_text.find('>').unwrap_or(0);
     script.span.start + gt as u32 + 1
+}
+
+/// Svelte 5 runes. A file is runes-mode iff it contains a call expression whose
+/// callee (or, for member forms, its root object) is one of these identifiers.
+/// Matches vendor's `svelteParseContext.runes === true` signal — see
+/// `utils/svelte-context.ts` in `eslint-plugin-svelte`. We conservatively
+/// classify "no rune call" as "undetermined" rather than "legacy", which matches
+/// vendor's default when the parser can't prove the mode.
+const RUNE_NAMES: &[&str] = &[
+    "$state", "$derived", "$effect", "$props", "$bindable", "$inspect", "$host",
+];
+
+fn detect_runes(semantic: &oxc::semantic::Semantic) -> bool {
+    use oxc::ast::AstKind;
+    use oxc::ast::ast::Expression;
+    for node in semantic.nodes().iter() {
+        let AstKind::CallExpression(ce) = node.kind() else { continue };
+        let root_name: Option<&str> = match &ce.callee {
+            Expression::Identifier(id) => Some(id.name.as_str()),
+            Expression::StaticMemberExpression(mem) => match &mem.object {
+                Expression::Identifier(id) => Some(id.name.as_str()),
+                _ => None,
+            },
+            _ => None,
+        };
+        if root_name.is_some_and(|n| RUNE_NAMES.contains(&n)) {
+            return true;
+        }
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------
