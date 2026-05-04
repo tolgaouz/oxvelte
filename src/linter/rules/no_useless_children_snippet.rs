@@ -1,8 +1,8 @@
 //! `svelte/no-useless-children-snippet` — disallow useless children snippets.
 //! ⭐ Recommended
 
-use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::TemplateNode;
+use crate::linter::{walk_template_nodes, LintContext, Rule};
 
 pub struct NoUselessChildrenSnippet;
 
@@ -21,8 +21,7 @@ impl Rule for NoUselessChildrenSnippet {
                 for child in &el.children {
                     if let TemplateNode::SnippetBlock(snippet) = child {
                         if snippet.name == "children" && snippet.params.trim().is_empty() {
-                            ctx.diagnostic("Found an unnecessary children snippet.",
-                                snippet.span);
+                            ctx.diagnostic("Found an unnecessary children snippet.", snippet.span);
                         }
                     }
                 }

@@ -2,9 +2,7 @@
 //! ⭐ Recommended 💡
 
 use crate::linter::{LintContext, Rule};
-use oxc::ast::ast::{
-    Argument, AssignmentTarget, Expression, Statement,
-};
+use oxc::ast::ast::{Argument, AssignmentTarget, Expression, Statement};
 use oxc::ast::AstKind;
 use oxc::span::Span;
 use oxc::syntax::operator::AssignmentOperator;
@@ -21,24 +19,46 @@ impl Rule for PreferWritableDerived {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let Some(semantic) = ctx.instance_semantic else { return };
+        let Some(semantic) = ctx.instance_semantic else {
+            return;
+        };
         let content_offset = ctx.instance_content_offset;
         let scoping = semantic.scoping();
         let nodes = semantic.nodes();
 
         for node in nodes.iter() {
-            let AstKind::CallExpression(ce) = node.kind() else { continue };
-            if !is_effect_or_effect_pre(&ce.callee) { continue; }
-            if ce.arguments.len() != 1 { continue; }
+            let AstKind::CallExpression(ce) = node.kind() else {
+                continue;
+            };
+            if !is_effect_or_effect_pre(&ce.callee) {
+                continue;
+            }
+            if ce.arguments.len() != 1 {
+                continue;
+            }
 
-            let Some(body_statements) = fn_arg_block_body(&ce.arguments[0]) else { continue };
-            if body_statements.len() != 1 { continue; }
-            let Statement::ExpressionStatement(es) = &body_statements[0] else { continue };
-            let Expression::AssignmentExpression(ae) = &es.expression else { continue };
-            if ae.operator != AssignmentOperator::Assign { continue; }
-            let AssignmentTarget::AssignmentTargetIdentifier(id) = &ae.left else { continue };
+            let Some(body_statements) = fn_arg_block_body(&ce.arguments[0]) else {
+                continue;
+            };
+            if body_statements.len() != 1 {
+                continue;
+            }
+            let Statement::ExpressionStatement(es) = &body_statements[0] else {
+                continue;
+            };
+            let Expression::AssignmentExpression(ae) = &es.expression else {
+                continue;
+            };
+            if ae.operator != AssignmentOperator::Assign {
+                continue;
+            }
+            let AssignmentTarget::AssignmentTargetIdentifier(id) = &ae.left else {
+                continue;
+            };
 
-            let Some(sid) = scoping.get_reference(id.reference_id()).symbol_id() else { continue };
+            let Some(sid) = scoping.get_reference(id.reference_id()).symbol_id() else {
+                continue;
+            };
             let decl_node_id = scoping.symbol_declaration(sid);
             let declarator = std::iter::once(decl_node_id)
                 .chain(nodes.ancestor_ids(decl_node_id))
@@ -47,9 +67,15 @@ impl Rule for PreferWritableDerived {
                     _ => None,
                 });
             let Some(decl) = declarator else { continue };
-            let Some(Expression::CallExpression(init_ce)) = &decl.init else { continue };
-            let Expression::Identifier(init_id) = &init_ce.callee else { continue };
-            if init_id.name != "$state" { continue; }
+            let Some(Expression::CallExpression(init_ce)) = &decl.init else {
+                continue;
+            };
+            let Expression::Identifier(init_id) = &init_ce.callee else {
+                continue;
+            };
+            if init_id.name != "$state" {
+                continue;
+            }
 
             let s = content_offset + decl.span.start;
             let e = content_offset + decl.span.end;
@@ -78,12 +104,18 @@ fn is_effect_or_effect_pre(callee: &Expression<'_>) -> bool {
 fn fn_arg_block_body<'a>(arg: &'a Argument<'a>) -> Option<&'a [Statement<'a>]> {
     match arg {
         Argument::ArrowFunctionExpression(a) => {
-            if !a.params.items.is_empty() || a.params.rest.is_some() { return None; }
-            if a.expression { return None; }
+            if !a.params.items.is_empty() || a.params.rest.is_some() {
+                return None;
+            }
+            if a.expression {
+                return None;
+            }
             Some(a.body.statements.as_slice())
         }
         Argument::FunctionExpression(f) => {
-            if !f.params.items.is_empty() || f.params.rest.is_some() { return None; }
+            if !f.params.items.is_empty() || f.params.rest.is_some() {
+                return None;
+            }
             f.body.as_ref().map(|b| b.statements.as_slice())
         }
         _ => None,

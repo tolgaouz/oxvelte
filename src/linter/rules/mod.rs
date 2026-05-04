@@ -4,87 +4,87 @@
 //! - `all_rules()` — every implemented rule
 //! - `recommended_rules()` — only rules marked ⭐
 
-mod no_at_html_tags;
+mod block_lang;
+mod button_has_type;
+mod html_self_closing;
+mod infinite_reactive_loop;
+mod max_lines_per_block;
+mod no_add_event_listener;
 mod no_at_debug_tags;
+mod no_at_html_tags;
+mod no_dom_manipulating;
 mod no_dupe_else_if_blocks;
+mod no_dupe_on_directives;
 mod no_dupe_style_properties;
 mod no_dupe_use_directives;
-mod no_dupe_on_directives;
-mod require_each_key;
-mod no_object_in_text_mustaches;
-mod no_useless_mustaches;
-mod no_target_blank;
-mod button_has_type;
-mod no_raw_special_elements;
-mod no_inspect;
-mod no_svelte_internal;
-mod no_inline_styles;
-mod valid_each_key;
-mod no_not_function_handler;
-mod no_ignored_unsubscribe;
-mod no_inner_declarations;
-mod spaced_html_comment;
-mod no_trailing_spaces;
-mod require_event_dispatcher_types;
-mod no_unused_svelte_ignore;
-mod html_self_closing;
-mod no_unknown_style_directive_property;
-mod no_shorthand_style_property_overrides;
-mod shorthand_attribute;
-mod shorthand_directive;
-mod no_reactive_literals;
-mod no_reactive_functions;
-mod no_useless_children_snippet;
-mod no_immutable_reactive_statements;
-mod no_dom_manipulating;
-mod no_reactive_reassign;
-mod no_store_async;
-mod prefer_class_directive;
 mod no_export_load_in_svelte_module_in_kit_pages;
-mod infinite_reactive_loop;
+mod no_extra_reactive_curlies;
+mod no_ignored_unsubscribe;
+mod no_immutable_reactive_statements;
+mod no_inline_styles;
+mod no_inner_declarations;
+mod no_inspect;
+mod no_not_function_handler;
+mod no_object_in_text_mustaches;
+mod no_raw_special_elements;
+mod no_reactive_functions;
+mod no_reactive_literals;
+mod no_reactive_reassign;
+mod no_restricted_html_elements;
+mod no_shorthand_style_property_overrides;
+mod no_spaces_around_equal_signs_in_attribute;
+mod no_store_async;
+mod no_svelte_internal;
+mod no_target_blank;
+mod no_trailing_spaces;
+mod no_unknown_style_directive_property;
 mod no_unnecessary_state_wrap;
 mod no_unused_props;
-mod prefer_writable_derived;
-mod require_stores_init;
-mod no_add_event_listener;
-mod block_lang;
-mod max_lines_per_block;
-mod require_optimized_style_attribute;
+mod no_unused_svelte_ignore;
+mod no_useless_children_snippet;
+mod no_useless_mustaches;
+mod prefer_class_directive;
 mod prefer_style_directive;
-mod no_spaces_around_equal_signs_in_attribute;
-mod no_restricted_html_elements;
-mod no_extra_reactive_curlies;
+mod prefer_writable_derived;
+mod require_each_key;
+mod require_event_dispatcher_types;
+mod require_optimized_style_attribute;
+mod require_stores_init;
+mod shorthand_attribute;
+mod shorthand_directive;
+mod spaced_html_comment;
+mod valid_each_key;
 
 mod no_dynamic_slot_name;
 mod no_goto_without_base;
 mod no_navigation_without_base;
 
 // New rules
-mod no_top_level_browser_globals;
-mod prefer_svelte_reactivity;
-mod require_store_callbacks_use_set_param;
-mod require_store_reactive_access;
-mod valid_compile;
-mod valid_style_parse;
-mod no_unused_class_name;
-mod prefer_const;
-mod prefer_destructured_store_props;
+mod comment_directive;
 mod consistent_selector_style;
 mod derived_has_same_inputs_outputs;
+mod experimental_require_slot_types;
+mod experimental_require_strict_events;
 mod first_attribute_linebreak;
 mod html_closing_bracket_new_line;
 mod html_closing_bracket_spacing;
 mod html_quotes;
 mod max_attributes_per_line;
 mod mustache_spacing;
-mod sort_attributes;
-mod require_event_prefix;
-mod valid_prop_names_in_kit_pages;
 mod no_navigation_without_resolve;
-mod experimental_require_slot_types;
-mod experimental_require_strict_events;
-mod comment_directive;
+mod no_top_level_browser_globals;
+mod no_unused_class_name;
+mod prefer_const;
+mod prefer_destructured_store_props;
+mod prefer_svelte_reactivity;
+mod require_event_prefix;
+mod require_store_callbacks_use_set_param;
+mod require_store_reactive_access;
+mod sort_attributes;
 mod system;
+mod valid_compile;
+mod valid_prop_names_in_kit_pages;
+mod valid_style_parse;
 
 use super::Rule;
 
@@ -127,7 +127,9 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
         Box::new(no_reactive_reassign::NoReactiveReassign),
         Box::new(no_store_async::NoStoreAsync),
         Box::new(prefer_class_directive::PreferClassDirective),
-        Box::new(no_export_load_in_svelte_module_in_kit_pages::NoExportLoadInSvelteModuleInKitPages),
+        Box::new(
+            no_export_load_in_svelte_module_in_kit_pages::NoExportLoadInSvelteModuleInKitPages,
+        ),
         Box::new(infinite_reactive_loop::InfiniteReactiveLoop),
         Box::new(no_unnecessary_state_wrap::NoUnnecessaryStateWrap),
         Box::new(no_unused_props::NoUnusedProps),

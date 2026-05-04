@@ -32,8 +32,12 @@ impl Rule for InfiniteReactiveLoop {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        if ctx.is_runes { return; }
-        let Some(semantic) = ctx.instance_semantic else { return };
+        if ctx.is_runes {
+            return;
+        }
+        let Some(semantic) = ctx.instance_semantic else {
+            return;
+        };
         let program = semantic.nodes().program();
 
         // Fast bail: no `$:` labeled statements.
@@ -56,13 +60,20 @@ impl Rule for InfiniteReactiveLoop {
 
         let content_offset = ctx.instance_content_offset;
         for stmt in &program.body {
-            let Statement::LabeledStatement(ls) = stmt else { continue };
+            let Statement::LabeledStatement(ls) = stmt else {
+                continue;
+            };
             if ls.label.name != "$" {
                 continue;
             }
             check_reactive_statement(
-                ctx, semantic, content_offset, ls,
-                &task_call_spans, &module_top_names, &reactive_declared_names,
+                ctx,
+                semantic,
+                content_offset,
+                ls,
+                &task_call_spans,
+                &module_top_names,
+                &reactive_declared_names,
             );
         }
     }
@@ -111,9 +122,13 @@ fn collect_task_scheduler_call_spans<'a>(semantic: &'a Semantic<'a>) -> Vec<Span
     loop {
         let before = names.len();
         for stmt in &program.body {
-            let Statement::VariableDeclaration(vd) = stmt else { continue };
+            let Statement::VariableDeclaration(vd) = stmt else {
+                continue;
+            };
             for d in &vd.declarations {
-                let BindingPattern::BindingIdentifier(local) = &d.id else { continue };
+                let BindingPattern::BindingIdentifier(local) = &d.id else {
+                    continue;
+                };
                 let Some(init) = &d.init else { continue };
                 if let Expression::Identifier(src) = init {
                     if names.contains(src.name.as_str()) {
@@ -130,7 +145,9 @@ fn collect_task_scheduler_call_spans<'a>(semantic: &'a Semantic<'a>) -> Vec<Span
     // 3) Walk all CallExpressions; record span if callee is one of our names.
     let mut spans = Vec::new();
     for node in nodes.iter() {
-        let AstKind::CallExpression(ce) = node.kind() else { continue };
+        let AstKind::CallExpression(ce) = node.kind() else {
+            continue;
+        };
         if let Expression::Identifier(callee) = &ce.callee {
             if names.contains(callee.name.as_str()) {
                 spans.push(ce.span);
@@ -163,7 +180,9 @@ fn collect_reactive_declared_names<'a>(semantic: &'a Semantic<'a>) -> FxHashSet<
     let mut names = FxHashSet::default();
     let program = semantic.nodes().program();
     for stmt in &program.body {
-        let Statement::LabeledStatement(ls) = stmt else { continue };
+        let Statement::LabeledStatement(ls) = stmt else {
+            continue;
+        };
         if ls.label.name != "$" {
             continue;
         }
@@ -198,7 +217,12 @@ fn collect_tracked<'a>(
     range: Span,
     module_top_names: &FxHashSet<String>,
     reactive_declared_names: &FxHashSet<String>,
-) -> (FxHashSet<SymbolId>, FxHashSet<String>, FxHashSet<String>, FxHashSet<String>) {
+) -> (
+    FxHashSet<SymbolId>,
+    FxHashSet<String>,
+    FxHashSet<String>,
+    FxHashSet<String>,
+) {
     let scoping = semantic.scoping();
     let nodes = semantic.nodes();
     let root_scope = scoping.root_scope_id();
@@ -236,7 +260,9 @@ fn collect_tracked<'a>(
     };
 
     for node in nodes.iter() {
-        let AstKind::IdentifierReference(id) = node.kind() else { continue };
+        let AstKind::IdentifierReference(id) = node.kind() else {
+            continue;
+        };
         let span = id.span;
         if span.start < range.start || span.end > range.end {
             continue;
@@ -247,7 +273,11 @@ fn collect_tracked<'a>(
         if is_call_callee {
             continue;
         }
-        if scoping.get_reference(id.reference_id()).symbol_id().is_some() {
+        if scoping
+            .get_reference(id.reference_id())
+            .symbol_id()
+            .is_some()
+        {
             continue;
         }
         let name = id.name.as_str();
@@ -270,7 +300,12 @@ fn collect_tracked<'a>(
         }
     }
 
-    (tracked_symbols, tracked_names_module, tracked_names_reactive_all, tracked_names_reactive_read)
+    (
+        tracked_symbols,
+        tracked_names_module,
+        tracked_names_reactive_all,
+        tracked_names_reactive_read,
+    )
 }
 
 // ─── Reactive-statement walk ────────────────────────────────────────────────
@@ -284,8 +319,12 @@ fn check_reactive_statement<'a>(
     module_top_names: &FxHashSet<String>,
     reactive_declared_names: &FxHashSet<String>,
 ) {
-    let (tracked_symbols, tracked_names_module, tracked_names_reactive_all, tracked_names_reactive_read) =
-        collect_tracked(semantic, ls.span, module_top_names, reactive_declared_names);
+    let (
+        tracked_symbols,
+        tracked_names_module,
+        tracked_names_reactive_all,
+        tracked_names_reactive_read,
+    ) = collect_tracked(semantic, ls.span, module_top_names, reactive_declared_names);
     if tracked_symbols.is_empty()
         && tracked_names_module.is_empty()
         && tracked_names_reactive_all.is_empty()
@@ -326,14 +365,20 @@ fn check_reactive_statement<'a>(
 fn collect_promise_callback_spans<'a>(semantic: &'a Semantic<'a>) -> Vec<Span> {
     let mut out = Vec::new();
     for node in semantic.nodes().iter() {
-        let AstKind::CallExpression(ce) = node.kind() else { continue };
-        let Expression::StaticMemberExpression(mem) = &ce.callee else { continue };
+        let AstKind::CallExpression(ce) = node.kind() else {
+            continue;
+        };
+        let Expression::StaticMemberExpression(mem) = &ce.callee else {
+            continue;
+        };
         let prop = mem.property.name.as_str();
         if prop != "then" && prop != "catch" {
             continue;
         }
         for arg in &ce.arguments {
-            let Some(expr) = arg.as_expression() else { continue };
+            let Some(expr) = arg.as_expression() else {
+                continue;
+            };
             match expr {
                 Expression::ArrowFunctionExpression(a) => out.push(a.span),
                 Expression::FunctionExpression(f) => out.push(f.span),
@@ -349,7 +394,9 @@ fn collect_promise_callback_spans<'a>(semantic: &'a Semantic<'a>) -> Vec<Span> {
 fn collect_await_lhs_spans<'a>(semantic: &'a Semantic<'a>) -> Vec<Span> {
     let mut out = Vec::new();
     for node in semantic.nodes().iter() {
-        let AstKind::AssignmentExpression(ae) = node.kind() else { continue };
+        let AstKind::AssignmentExpression(ae) = node.kind() else {
+            continue;
+        };
         if matches!(&ae.right, Expression::AwaitExpression(_)) {
             out.push(ae.left.span());
         }
@@ -407,8 +454,7 @@ impl<'a, 'ctx> MicrotaskVisitor<'a, 'ctx> {
     /// Is the current node positioned such that execution reaches it only after
     /// a microtask boundary relative to the reactive-statement start?
     fn is_microtask_different(&self, _span: Span) -> bool {
-        !self.is_same_microtask
-            || self.frames.last().map_or(false, |f| f.await_seen)
+        !self.is_same_microtask || self.frames.last().map_or(false, |f| f.await_seen)
     }
 
     /// Does `kind` qualify as a "different-microtask boundary marker"? Matches
@@ -421,7 +467,11 @@ impl<'a, 'ctx> MicrotaskVisitor<'a, 'ctx> {
         if self.promise_cb_spans.iter().any(|s| *s == span) {
             return true;
         }
-        if self.task_call_spans.iter().any(|s| span.start > s.start && span.end <= s.end) {
+        if self
+            .task_call_spans
+            .iter()
+            .any(|s| span.start > s.start && span.end <= s.end)
+        {
             return true;
         }
         if self.await_lhs_spans.iter().any(|s| *s == span) {
@@ -484,7 +534,9 @@ impl<'a, 'ctx> MicrotaskVisitor<'a, 'ctx> {
     /// True if this identifier is on the left-hand-side of any assignment
     /// (direct identifier LHS, or `id.prop = ...` / `id[x] = ...`).
     fn is_assignment_target(&self, id_span: Span) -> bool {
-        let Some(parent) = self.parent() else { return false };
+        let Some(parent) = self.parent() else {
+            return false;
+        };
         match parent {
             // Direct: `id = ...`, `id += ...`
             AstKind::AssignmentExpression(ae) => ae.left.span() == id_span,
@@ -531,7 +583,10 @@ impl<'a, 'ctx> MicrotaskVisitor<'a, 'ctx> {
             match nodes.kind(ancestor_id) {
                 AstKind::Function(func) if func.is_declaration() => {
                     let body = func.body.as_ref()?;
-                    return Some(CallableBody { node_id: ancestor_id, body: CallableBodyKind::Block(body) });
+                    return Some(CallableBody {
+                        node_id: ancestor_id,
+                        body: CallableBodyKind::Block(body),
+                    });
                 }
                 AstKind::VariableDeclarator(vd) => {
                     let init = vd.init.as_ref()?;
@@ -540,10 +595,12 @@ impl<'a, 'ctx> MicrotaskVisitor<'a, 'ctx> {
                             node_id: ancestor_id,
                             body: CallableBodyKind::Function(&arr.body),
                         }),
-                        Expression::FunctionExpression(f) => f.body.as_ref().map(|b| CallableBody {
-                            node_id: ancestor_id,
-                            body: CallableBodyKind::Block(b),
-                        }),
+                        Expression::FunctionExpression(f) => {
+                            f.body.as_ref().map(|b| CallableBody {
+                                node_id: ancestor_id,
+                                body: CallableBodyKind::Block(b),
+                            })
+                        }
                         _ => None,
                     };
                 }
@@ -553,7 +610,11 @@ impl<'a, 'ctx> MicrotaskVisitor<'a, 'ctx> {
         None
     }
 
-    fn recurse_into_function(&mut self, callee_id: &'a IdentifierReference<'a>, body: CallableBody<'a>) {
+    fn recurse_into_function(
+        &mut self,
+        callee_id: &'a IdentifierReference<'a>,
+        body: CallableBody<'a>,
+    ) {
         if !self.visited_function_bodies.insert(body.node_id) {
             return;
         }
@@ -568,7 +629,9 @@ impl<'a, 'ctx> MicrotaskVisitor<'a, 'ctx> {
         self.is_outer = false;
         // Fresh marker state inside the recursed body.
         self.is_same_microtask = true;
-        self.frames.push(FunctionFrame { await_seen: carry_await });
+        self.frames.push(FunctionFrame {
+            await_seen: carry_await,
+        });
         let saved_stack_len = self.node_stack.len();
 
         match body.body {

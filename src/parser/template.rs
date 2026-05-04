@@ -167,11 +167,11 @@ struct ElementContext {
 /// element with children opens, popped when the element finishes (explicit
 /// close, implicit close, or EOF). Mirrors entries on vendor Svelte's
 /// `parser.stack` for `RegularElement` and related node types.
-struct OpenElement {
+struct OpenElement<'a> {
     name: String,
     name_span: Span,
     attributes: Vec<Attribute>,
-    attribute_meta: Vec<AttributeMeta>,
+    attribute_meta: Vec<AttributeMeta<'a>>,
     span_start: u32,
     start_tag_end: u32,
     is_head_title: bool,
@@ -185,7 +185,7 @@ struct OpenElement {
 /// bearing blocks like `{#each}` swap fragments on `{:else}` while keeping
 /// the same `OpenNode::Block` entry on the stack.
 enum OpenNode<'a> {
-    Element(OpenElement),
+    Element(OpenElement<'a>),
     Block(OpenBlock<'a>),
 }
 
@@ -3769,7 +3769,12 @@ impl<'a> TemplateParser<'a> {
         self.report_slot_attribute_tree_diagnostics(nodes, &mut ancestors);
     }
 
-    fn parse_attributes(&mut self) -> Result<(Vec<Attribute>, Vec<AttributeMeta>), OxcDiagnostic> {
+    fn parse_attributes<'b>(
+        &'b mut self,
+    ) -> Result<(Vec<Attribute>, Vec<AttributeMeta<'a>>), OxcDiagnostic>
+    where
+        'a: 'b,
+    {
         let mut attributes = Vec::new();
         let mut attribute_meta = Vec::new();
 
@@ -3836,6 +3841,7 @@ impl<'a> TemplateParser<'a> {
                     value_span: None,
                     expression_span: Some(expression_span),
                     mustache_span: Some(Span::new(start, self.pos as u32)),
+                    expression_ast: None,
                     parts: Vec::new(),
                 });
                 continue;
@@ -3863,6 +3869,7 @@ impl<'a> TemplateParser<'a> {
                     value_span: Some(expression_span),
                     expression_span: Some(expression_span),
                     mustache_span: Some(Span::new(start, self.pos as u32)),
+                    expression_ast: None,
                     parts: Vec::new(),
                 });
                 continue;
@@ -3890,6 +3897,7 @@ impl<'a> TemplateParser<'a> {
                     value_span: Some(expression_span),
                     expression_span: Some(expression_span),
                     mustache_span: Some(Span::new(start, self.pos as u32)),
+                    expression_ast: None,
                     parts: Vec::new(),
                 });
                 continue;
@@ -3976,6 +3984,7 @@ impl<'a> TemplateParser<'a> {
                         value_span: None,
                         expression_span: None,
                         mustache_span: None,
+                        expression_ast: None,
                         parts: Vec::new(),
                     });
                 }
@@ -3998,6 +4007,7 @@ impl<'a> TemplateParser<'a> {
                         value_span: None,
                         expression_span: None,
                         mustache_span: None,
+                        expression_ast: None,
                         parts: Vec::new(),
                     },
                 )
@@ -4029,7 +4039,12 @@ impl<'a> TemplateParser<'a> {
         }
     }
 
-    fn parse_attribute_value(&mut self) -> Result<ParsedAttributeValue, OxcDiagnostic> {
+    fn parse_attribute_value<'b>(
+        &'b mut self,
+    ) -> Result<ParsedAttributeValue<'a>, OxcDiagnostic>
+    where
+        'a: 'b,
+    {
         if self.looking_at("\"") {
             self.eat("\"")?;
             let value_start = self.pos as u32;
@@ -4053,6 +4068,7 @@ impl<'a> TemplateParser<'a> {
                         value_span: Some(value_span),
                         expression_span: None,
                         mustache_span: None,
+                        expression_ast: None,
                         parts: Vec::new(),
                     },
                 ))
@@ -4079,6 +4095,7 @@ impl<'a> TemplateParser<'a> {
                         value_span: Some(value_span),
                         expression_span: None,
                         mustache_span: None,
+                        expression_ast: None,
                         parts: Vec::new(),
                     },
                 ))
@@ -4088,7 +4105,12 @@ impl<'a> TemplateParser<'a> {
         }
     }
 
-    fn parse_unquoted_attribute_value(&mut self) -> Result<ParsedAttributeValue, OxcDiagnostic> {
+    fn parse_unquoted_attribute_value<'b>(
+        &'b mut self,
+    ) -> Result<ParsedAttributeValue<'a>, OxcDiagnostic>
+    where
+        'a: 'b,
+    {
         let value_start = self.pos;
         let mut static_start = self.pos;
         let mut parts = Vec::new();
@@ -4109,6 +4131,7 @@ impl<'a> TemplateParser<'a> {
                         span: Span::new(static_start as u32, self.pos as u32),
                         expression_span: None,
                         mustache_span: None,
+                        expression_ast: None,
                     });
                 }
 
@@ -4129,6 +4152,7 @@ impl<'a> TemplateParser<'a> {
                     span: mustache_span,
                     expression_span: Some(expression_span),
                     mustache_span: Some(mustache_span),
+                    expression_ast: None,
                 });
                 static_start = self.pos;
             } else {
@@ -4146,6 +4170,7 @@ impl<'a> TemplateParser<'a> {
                     value_span: Some(Span::new(value_start as u32, value_start as u32)),
                     expression_span: None,
                     mustache_span: None,
+                    expression_ast: None,
                     parts: Vec::new(),
                 },
             ));
@@ -4159,6 +4184,7 @@ impl<'a> TemplateParser<'a> {
                 span: Span::new(static_start as u32, self.pos as u32),
                 expression_span: None,
                 mustache_span: None,
+                expression_ast: None,
             });
         }
 
@@ -4171,6 +4197,7 @@ impl<'a> TemplateParser<'a> {
                     value_span: Some(Span::new(value_start as u32, self.pos as u32)),
                     expression_span: None,
                     mustache_span: None,
+                    expression_ast: None,
                     parts: Vec::new(),
                 },
             ));
@@ -4188,6 +4215,7 @@ impl<'a> TemplateParser<'a> {
                             value_span: Some(meta.span),
                             expression_span: None,
                             mustache_span: None,
+                            expression_ast: None,
                             parts: Vec::new(),
                         },
                     ));
@@ -4202,6 +4230,7 @@ impl<'a> TemplateParser<'a> {
                             value_span: Some(expression_span),
                             expression_span: Some(expression_span),
                             mustache_span: meta.mustache_span,
+                            expression_ast: None,
                             parts: Vec::new(),
                         },
                     ));
@@ -4217,6 +4246,7 @@ impl<'a> TemplateParser<'a> {
                 value_span: Some(Span::new(value_start as u32, self.pos as u32)),
                 expression_span: None,
                 mustache_span: None,
+                expression_ast: None,
                 parts: part_meta,
             },
         ))
@@ -4465,13 +4495,13 @@ struct EachHeaderParts {
     key_span: Option<Span>,
 }
 
-struct ParsedAttributeValue {
+struct ParsedAttributeValue<'a> {
     value: AttributeValue,
-    meta: AttributeMeta,
+    meta: AttributeMeta<'a>,
 }
 
-impl ParsedAttributeValue {
-    fn new(value: AttributeValue, meta: AttributeMeta) -> Self {
+impl<'a> ParsedAttributeValue<'a> {
+    fn new(value: AttributeValue, meta: AttributeMeta<'a>) -> Self {
         Self { value, meta }
     }
 }
@@ -5040,12 +5070,12 @@ fn parse_expr_into<'a>(
 }
 
 /// Parse a concatenated attribute value like `"hello {name}!"`.
-fn parse_concat_value(
+fn parse_concat_value<'a>(
     value: &str,
     value_start: u32,
-    allocator: &Allocator,
+    allocator: &'a Allocator,
     errors: &mut Vec<OxcDiagnostic>,
-) -> ParsedAttributeValue {
+) -> ParsedAttributeValue<'a> {
     let mut parts = Vec::new();
     let mut part_meta = Vec::new();
     let mut parser = TemplateParser::new(value, allocator);
@@ -5065,6 +5095,7 @@ fn parse_concat_value(
                     ),
                     expression_span: None,
                     mustache_span: None,
+                    expression_ast: None,
                 });
             }
             let mustache_start = value_start + parser.pos as u32;
@@ -5085,6 +5116,7 @@ fn parse_concat_value(
                 span: mustache_span,
                 expression_span: Some(expression_span),
                 mustache_span: Some(mustache_span),
+                expression_ast: None,
             });
             static_start = parser.pos;
         } else {
@@ -5103,6 +5135,7 @@ fn parse_concat_value(
             ),
             expression_span: None,
             mustache_span: None,
+            expression_ast: None,
         });
     }
 
@@ -5114,6 +5147,7 @@ fn parse_concat_value(
             value_span: Some(Span::new(value_start, value_start + value.len() as u32)),
             expression_span: None,
             mustache_span: None,
+            expression_ast: None,
             parts: part_meta,
         },
     )

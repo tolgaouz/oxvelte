@@ -15,15 +15,25 @@ impl Rule for NoExtraReactiveCurlies {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let Some(semantic) = ctx.instance_semantic else { return };
+        // Vendor's `meta.conditions` excludes Svelte 5 runes mode.
+        if ctx.is_runes {
+            return;
+        }
+        let Some(semantic) = ctx.instance_semantic else {
+            return;
+        };
         let content_offset = ctx.instance_content_offset;
 
         for stmt in &semantic.nodes().program().body {
-            let Statement::LabeledStatement(ls) = stmt else { continue };
+            let Statement::LabeledStatement(ls) = stmt else {
+                continue;
+            };
             if ls.label.name != "$" {
                 continue;
             }
-            let Statement::BlockStatement(b) = &ls.body else { continue };
+            let Statement::BlockStatement(b) = &ls.body else {
+                continue;
+            };
             // Flag only when the block contains a single statement — the braces
             // are unnecessary wrapper in that case.
             if b.body.len() != 1 {

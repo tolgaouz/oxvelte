@@ -90,12 +90,7 @@ impl ScriptRule {
         let file_path_json = ctx
             .file_path
             .as_ref()
-            .map(|p| {
-                format!(
-                    "\"{}\"",
-                    p.replace('\\', "\\\\").replace('"', "\\\"")
-                )
-            })
+            .map(|p| format!("\"{}\"", p.replace('\\', "\\\\").replace('"', "\\\"")))
             .unwrap_or_else(|| "null".to_string());
 
         let script = format!(

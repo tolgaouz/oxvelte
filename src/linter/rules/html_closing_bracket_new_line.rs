@@ -2,8 +2,8 @@
 //! the closing bracket of elements.
 //! 🔧 Fixable
 
-use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::TemplateNode;
+use crate::linter::{walk_template_nodes, LintContext, Rule};
 
 pub struct HtmlClosingBracketNewLine;
 
@@ -17,12 +17,23 @@ impl Rule for HtmlClosingBracketNewLine {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let opts = ctx.config.options.as_ref().and_then(|v| v.as_array()).and_then(|arr| arr.first());
+        let opts = ctx
+            .config
+            .options
+            .as_ref()
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first());
         let get_str = |key: &str| opts.and_then(|o| o.get(key)).and_then(|v| v.as_str());
-        let singleline_expect_newline = get_str("singleline").map(|s| s == "always").unwrap_or(false);
+        let singleline_expect_newline = get_str("singleline")
+            .map(|s| s == "always")
+            .unwrap_or(false);
         let multiline_expect_newline = get_str("multiline").map(|s| s == "always").unwrap_or(true);
         let sc = opts.and_then(|o| o.get("selfClosingTag"));
-        let sc_get = |key: &str| sc.and_then(|o| o.get(key)).and_then(|v| v.as_str()).map(|s| s == "always");
+        let sc_get = |key: &str| {
+            sc.and_then(|o| o.get(key))
+                .and_then(|v| v.as_str())
+                .map(|s| s == "always")
+        };
         let (sc_singleline, sc_multiline) = (sc_get("singleline"), sc_get("multiline"));
 
         walk_template_nodes(&ctx.ast.html, &mut |node| {
@@ -42,7 +53,9 @@ impl Rule for HtmlClosingBracketNewLine {
                     b'"' | b'\'' => {
                         let q = bytes[i];
                         i += 1;
-                        while i < bytes.len() && bytes[i] != q { i += 1; }
+                        while i < bytes.len() && bytes[i] != q {
+                            i += 1;
+                        }
                     }
                     b'{' => depth += 1,
                     b'}' => depth -= 1,
@@ -62,11 +75,17 @@ impl Rule for HtmlClosingBracketNewLine {
 
             let is_self_closing = bracket_pos > 0 && bytes[bracket_pos - 1] == b'/';
 
-            let bracket_start = if is_self_closing { bracket_pos - 1 } else { bracket_pos };
+            let bracket_start = if is_self_closing {
+                bracket_pos - 1
+            } else {
+                bracket_pos
+            };
 
             let before_bracket = &tag_text[..bracket_start];
 
-            let last_content_pos = before_bracket.rfind(|c: char| !c.is_whitespace()).unwrap_or(0);
+            let last_content_pos = before_bracket
+                .rfind(|c: char| !c.is_whitespace())
+                .unwrap_or(0);
             let between = &before_bracket[last_content_pos + 1..];
             let line_breaks = between.chars().filter(|&c| c == '\n').count();
 
@@ -74,12 +93,18 @@ impl Rule for HtmlClosingBracketNewLine {
             let is_multiline = attrs_count > 0 && first_line_end < bracket_start;
 
             let close_tag_start = if !is_self_closing {
-                let tag_name_end = tag_text[1..].find(|c: char| !c.is_alphanumeric() && c != '-' && c != '_' && c != ':' && c != '.')
-                    .map(|p| p + 1).unwrap_or(1);
+                let tag_name_end = tag_text[1..]
+                    .find(|c: char| {
+                        !c.is_alphanumeric() && c != '-' && c != '_' && c != ':' && c != '.'
+                    })
+                    .map(|p| p + 1)
+                    .unwrap_or(1);
                 let name = &tag_text[1..tag_name_end];
                 let close_pattern = format!("</{}", name);
                 tag_text.rfind(&close_pattern)
-            } else { None };
+            } else {
+                None
+            };
 
             if let Some(close_start) = close_tag_start {
                 let close_text = &tag_text[close_start..];
@@ -95,18 +120,28 @@ impl Rule for HtmlClosingBracketNewLine {
             }
 
             let expect_newline = if is_multiline {
-                if is_self_closing { sc_multiline.unwrap_or(multiline_expect_newline) }
-                else { multiline_expect_newline }
-            } else if is_self_closing { sc_singleline.unwrap_or(singleline_expect_newline) }
-            else { singleline_expect_newline };
+                if is_self_closing {
+                    sc_multiline.unwrap_or(multiline_expect_newline)
+                } else {
+                    multiline_expect_newline
+                }
+            } else if is_self_closing {
+                sc_singleline.unwrap_or(singleline_expect_newline)
+            } else {
+                singleline_expect_newline
+            };
 
             let bracket_len = if is_self_closing { 2u32 } else { 1 };
             if expect_newline && line_breaks != 1 {
                 let abs_pos = span.start + bracket_start as u32;
                 let msg = if line_breaks == 0 {
-                    "Expected 1 line break before closing bracket, but no line breaks found.".to_string()
+                    "Expected 1 line break before closing bracket, but no line breaks found."
+                        .to_string()
                 } else {
-                    format!("Expected 1 line break before closing bracket, but {} line breaks found.", line_breaks)
+                    format!(
+                        "Expected 1 line break before closing bracket, but {} line breaks found.",
+                        line_breaks
+                    )
                 };
                 ctx.diagnostic(msg, oxc::span::Span::new(abs_pos, abs_pos + bracket_len));
             } else if !expect_newline && line_breaks > 0 {

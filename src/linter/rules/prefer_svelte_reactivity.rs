@@ -1,18 +1,41 @@
 //! `svelte/prefer-svelte-reactivity` — prefer Svelte reactive classes over mutable
-//! built-in JS classes (Date, Map, Set, URL, URLSearchParams).
-//! ⭐ Recommended
+//! built-in JS classes (`Date`, `Map`, `Set`, `URL`, `URLSearchParams`).
+//! ⭐ Recommended.
 //!
-//! Uses `oxc_semantic` for scope-based analysis. For each `new BuiltinClass()`,
-//! resolves the assigned variable symbol, then checks if the resulting value is
-//! mutated before being overwritten by another assignment.
+//! Vendor algorithm: walk every `new Builtin(...)` whose callee resolves to the
+//! corresponding **global** binding, find the `VariableDeclarator` it
+//! initializes, then look at the resulting symbol's references for mutating
+//! method calls or assignments to mutable properties. In `.svelte.[js|ts]`
+//! files, an export of any of those declarators is also reported. Vendor
+//! relies on `@eslint-community/eslint-utils`'s `ReferenceTracker`, which
+//! follows aliasing and renamed-import chains via the scope manager.
+//!
+//! Our equivalent uses `oxc_semantic`'s scope manager:
+//! * "global" callee = the `Identifier`'s `reference_id` has no resolved
+//!   binding (`scoping.has_binding` returns `false`) — same shape as vendor's
+//!   `iterateGlobalReferences`.
+//! * Aliasing through `const m2 = m;` (or assignment) is handled by walking
+//!   the tracked symbol's resolved-references and queueing any symbol it
+//!   initializes. We iterate to a fixed point so chains of any length work.
+//! * Template mustaches: traverse `MustacheTag.expression_ast` (already
+//!   typed in our template AST) and report direct `new Builtin().mutator(...)`
+//!   chains, plus mutations on names that match a tracked binding from any
+//!   script. The mustache AST has its own allocator, so we identify by name
+//!   rather than `SymbolId`.
 
-use crate::linter::{LintContext, Rule};
-use oxc::ast::ast::{ImportDeclarationSpecifier, Statement};
-use oxc::semantic::Semantic;
-use oxc::span::Span;
+use crate::ast::{MustacheTag, TemplateNode};
+use crate::linter::{walk_template_nodes, LintContext, Rule};
+use oxc::ast::ast::{AssignmentTarget, BindingPattern, Expression};
+use oxc::ast::AstKind;
+use oxc::semantic::{AstNodes, NodeId, Scoping, Semantic, SymbolId};
+use oxc::span::{GetSpan, Span};
+use std::collections::{HashMap, HashSet};
 
 pub struct PreferSvelteReactivity;
 
+/// `mutating_methods` are detected as `obj.method(...)` (CallExpression on a
+/// member access). `mutating_props` are detected as the LHS of an
+/// `AssignmentExpression` — used by `URL` (vendor's `isURLMutable`).
 struct BuiltinClass {
     name: &'static str,
     svelte_name: &'static str,
@@ -20,10 +43,10 @@ struct BuiltinClass {
     mutating_props: &'static [&'static str],
 }
 
+#[rustfmt::skip]
 const BUILTIN_CLASSES: &[BuiltinClass] = &[
     BuiltinClass {
-        name: "Date",
-        svelte_name: "SvelteDate",
+        name: "Date", svelte_name: "SvelteDate",
         mutating_methods: &[
             "setDate", "setFullYear", "setHours", "setMilliseconds", "setMinutes",
             "setMonth", "setSeconds", "setTime", "setUTCDate", "setUTCFullYear",
@@ -32,34 +55,31 @@ const BUILTIN_CLASSES: &[BuiltinClass] = &[
         ],
         mutating_props: &[],
     },
-    BuiltinClass {
-        name: "Map",
-        svelte_name: "SvelteMap",
-        mutating_methods: &["set", "delete", "clear"],
-        mutating_props: &[],
-    },
-    BuiltinClass {
-        name: "Set",
-        svelte_name: "SvelteSet",
-        mutating_methods: &["add", "delete", "clear"],
-        mutating_props: &[],
-    },
-    BuiltinClass {
-        name: "URL",
-        svelte_name: "SvelteURL",
+    BuiltinClass { name: "Map", svelte_name: "SvelteMap",
+        mutating_methods: &["clear", "delete", "set"], mutating_props: &[] },
+    BuiltinClass { name: "Set", svelte_name: "SvelteSet",
+        mutating_methods: &["add", "clear", "delete"], mutating_props: &[] },
+    BuiltinClass { name: "URL", svelte_name: "SvelteURL",
         mutating_methods: &[],
         mutating_props: &[
             "hash", "host", "hostname", "href", "password",
             "pathname", "port", "protocol", "search", "username",
         ],
     },
-    BuiltinClass {
-        name: "URLSearchParams",
-        svelte_name: "SvelteURLSearchParams",
-        mutating_methods: &["append", "delete", "set", "sort"],
-        mutating_props: &[],
-    },
+    BuiltinClass { name: "URLSearchParams", svelte_name: "SvelteURLSearchParams",
+        mutating_methods: &["append", "delete", "set", "sort"], mutating_props: &[] },
 ];
+
+fn message(builtin: &BuiltinClass) -> String {
+    format!(
+        "Found a mutable instance of the built-in {} class. Use {} instead.",
+        builtin.name, builtin.svelte_name
+    )
+}
+
+fn lookup_builtin(name: &str) -> Option<&'static BuiltinClass> {
+    BUILTIN_CLASSES.iter().find(|b| b.name == name)
+}
 
 impl Rule for PreferSvelteReactivity {
     fn name(&self) -> &'static str {
@@ -75,444 +95,257 @@ impl Rule for PreferSvelteReactivity {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let is_svelte_module = ctx.is_svelte_module;
-        for (sem, content, offset) in [
-            (
-                ctx.instance_semantic,
-                ctx.ast.instance.as_ref().map(|s| s.content.as_str()),
-                ctx.instance_content_offset as usize,
-            ),
-            (
-                ctx.module_semantic,
-                ctx.ast.module.as_ref().map(|s| s.content.as_str()),
-                ctx.module_content_offset as usize,
-            ),
+        let is_module = ctx.is_svelte_module;
+
+        // Names of any tracked symbol (per builtin) across both scripts —
+        // used by the template walker to spot `name.mutator(...)` patterns.
+        let mut template_targets: HashMap<&'static str, HashSet<String>> = HashMap::new();
+        for b in BUILTIN_CLASSES {
+            template_targets.insert(b.name, HashSet::new());
+        }
+
+        for (sem, offset) in [
+            (ctx.instance_semantic, ctx.instance_content_offset),
+            (ctx.module_semantic, ctx.module_content_offset),
         ] {
-            let (Some(sem), Some(content)) = (sem, content) else { continue };
-            if content.trim().is_empty() {
-                continue;
-            }
-            self.check_script(ctx, sem, content, offset, is_svelte_module);
+            let Some(sem) = sem else { continue };
+            check_script(ctx, sem, offset, is_module, &mut template_targets);
         }
 
-        if !ctx.is_svelte_module {
-            detect_chained_new_in_template(ctx);
-        }
-    }
-}
-
-impl PreferSvelteReactivity {
-    fn check_script<'a>(
-        &self,
-        ctx: &mut LintContext<'a>,
-        semantic: &'a oxc::semantic::Semantic<'a>,
-        content: &str,
-        content_offset: usize,
-        is_svelte_module: bool,
-    ) {
-        use oxc::ast::ast::Expression;
-        use oxc::ast::AstKind;
-        use oxc::semantic::SymbolId;
-
-        let scoping = semantic.scoping();
-        let nodes = semantic.nodes();
-
-        let shadowed = collect_shadowed_classes(semantic);
-        let mut flagged_symbols = std::collections::HashSet::<SymbolId>::new();
-
-        for ast_node in nodes.iter() {
-            let AstKind::NewExpression(new_expr) = ast_node.kind() else { continue };
-            let Expression::Identifier(callee) = &new_expr.callee else { continue };
-            let class_name = callee.name.as_str();
-
-            let Some(builtin) = BUILTIN_CLASSES.iter().find(|b| b.name == class_name) else { continue };
-            if shadowed.contains(&class_name.to_string()) { continue; }
-
-            if scoping.has_binding(callee.reference_id()) { continue; }
-            if class_name == "URL" || class_name == "URLSearchParams" {
-                if ast_node.scope_id() != scoping.root_scope_id() {
-                    continue;
-                }
-            }
-
-            let new_node_id = callee.node_id.get();
-            let new_node_id = nodes.parent_id(new_node_id); // up to NewExpression
-            if is_inside_state_call(nodes, new_node_id) { continue; }
-
-            let new_span = || Span::new(
-                (content_offset + new_expr.span.start as usize) as u32,
-                (content_offset + new_expr.span.end as usize) as u32,
-            );
-
-            if is_svelte_module && is_inside_export(nodes, new_node_id) {
-                ctx.diagnostic(mutable_class_msg(builtin), new_span());
-                continue;
-            }
-
-            if is_directly_mutated(nodes, new_node_id, builtin) {
-                ctx.diagnostic(mutable_class_msg(builtin), new_span());
-                continue;
-            }
-
-            let (symbol_id, var_name_fallback) = find_target_symbol_or_name(nodes, scoping, new_node_id);
-            let symbol_id = match symbol_id {
-                Some(sid) => sid,
-                None => {
-                    if let Some(var_name) = &var_name_fallback {
-                        if var_name.starts_with('$') { continue; }
-                        if check_mutation_in(ctx.source, var_name, builtin, None) {
-                            ctx.diagnostic(mutable_class_msg(builtin), new_span());
-                        }
-                    }
-                    continue;
-                }
-            };
-
-            if flagged_symbols.contains(&symbol_id) { continue; }
-            let is_mut = is_symbol_mutated(scoping, nodes, symbol_id, builtin);
-            let is_transitive_mut = if !is_mut {
-                is_transitively_mutated(scoping, nodes, symbol_id, builtin)
-            } else {
-                false
-            };
-
-            let is_template_mut = !is_mut && !is_transitive_mut
-                && scoping.symbol_scope_id(symbol_id) == scoping.root_scope_id()
-                && {
-                    let vn = scoping.symbol_name(symbol_id);
-                    check_mutation_in(ctx.source, vn, builtin, Some(content))
-                        || scoping.get_resolved_references(symbol_id).any(|ref_id| {
-                            ref_id.is_read() && {
-                                let (ds, _) = find_target_symbol_or_name(nodes, scoping, ref_id.node_id());
-                                ds.is_some_and(|s| check_mutation_in(ctx.source, scoping.symbol_name(s), builtin, Some(content)))
-                            }
-                        })
-                };
-
-            if is_mut || is_transitive_mut || is_template_mut {
-                flagged_symbols.insert(symbol_id);
-                ctx.diagnostic(mutable_class_msg(builtin), new_span());
-            }
+        // Template: detect both `new Builtin().mutator(...)` chains directly
+        // appearing in a mustache and bare `name.mutator(...)` patterns where
+        // `name` is a tracked symbol from either script.
+        if !is_module {
+            check_templates(ctx, &template_targets);
         }
     }
 }
 
-fn mutable_class_msg(builtin: &BuiltinClass) -> String {
-    format!("Found a mutable instance of the built-in {} class. Use {} instead.", builtin.name, builtin.svelte_name)
+// ---------------------------------------------------------------------------
+// Script analysis
+// ---------------------------------------------------------------------------
+
+fn check_script<'a>(
+    ctx: &mut LintContext<'a>,
+    sem: &'a Semantic<'a>,
+    content_offset: u32,
+    is_module: bool,
+    template_targets: &mut HashMap<&'static str, HashSet<String>>,
+) {
+    let scoping = sem.scoping();
+    let nodes = sem.nodes();
+
+    // Pass 1: find every `new Builtin(...)` whose callee is the global
+    // builtin. Group them by builtin name.
+    let mut constructions: Vec<Construction> = Vec::new();
+    for node in nodes.iter() {
+        let AstKind::NewExpression(ne) = node.kind() else {
+            continue;
+        };
+        let Expression::Identifier(callee) = &ne.callee else {
+            continue;
+        };
+        let name = callee.name.as_str();
+        let Some(builtin) = lookup_builtin(name) else {
+            continue;
+        };
+        // `scoping.has_binding(reference_id)` returns true if the identifier
+        // resolves to a local binding (import, let, function, etc.).
+        // Vendor's `iterateGlobalReferences` skips those entirely.
+        if scoping.has_binding(callee.reference_id()) {
+            continue;
+        }
+        constructions.push(Construction {
+            builtin,
+            new_expr_span: ne.span,
+            new_expr_node_id: node.id(),
+        });
+    }
+    if constructions.is_empty() {
+        return;
+    }
+
+    // Pass 2: collect symbols that are re-exported via specifier
+    // (`export { a, b as default }`). For exports that include their
+    // declaration directly (`export const x = ...`, `export default x`),
+    // we walk ancestors at construction-detection time instead.
+    let exported_specifier_symbols: HashSet<SymbolId> = if is_module {
+        collect_exported_specifier_symbols(sem)
+    } else {
+        HashSet::new()
+    };
+
+    // Pass 3: for each construction find the symbol it initializes, then
+    // expand to the set of aliased symbols. A construction may not bind to
+    // any symbol (e.g. `new Date(); foo()`, `export default new Date()`,
+    // `array.push(new Date())`).
+    //
+    // `tracked` maps a tracked symbol → (builtin, origin construction span).
+    let mut tracked: HashMap<SymbolId, (&'static BuiltinClass, Span)> = HashMap::new();
+    // Set of construction spans we'll report — keyed on (start, end) for dedup.
+    let mut to_report: HashSet<(u32, u32, &'static str)> = HashSet::new();
+
+    for ctor in &constructions {
+        // Module-export check (vendor's `isIn(node, exportedVar)`):
+        //   * `export const x = new Date()` — the construction's ancestor
+        //     chain hits an `ExportNamedDeclaration` directly.
+        //   * `export default new Date()` — ditto for `ExportDefaultDeclaration`.
+        //   * `export default x;` / `export { x }` — the construction binds
+        //     to `x` (a tracked symbol below); we mark `x` as exported and
+        //     report after we know the construction's symbol.
+        if is_module && is_inside_export_decl(nodes, ctor.new_expr_node_id) {
+            to_report.insert((
+                ctor.new_expr_span.start,
+                ctor.new_expr_span.end,
+                ctor.builtin.name,
+            ));
+            continue;
+        }
+
+        // Direct mutation: `new Date().setHours(...)` or
+        // `(new URL(...)).href = "..."`.
+        if is_directly_mutated(nodes, ctor.new_expr_node_id, ctor.builtin) {
+            to_report.insert((
+                ctor.new_expr_span.start,
+                ctor.new_expr_span.end,
+                ctor.builtin.name,
+            ));
+            continue;
+        }
+
+        // Otherwise, locate the binding the construction flows into.
+        if let Some(sym) = target_symbol(nodes, scoping, ctor.new_expr_node_id) {
+            tracked
+                .entry(sym)
+                .or_insert((ctor.builtin, ctor.new_expr_span));
+        }
+    }
+
+    // Specifier-style export: `const v = new Date(); export { v };` →
+    // anything tracked + in `exported_specifier_symbols` reports.
+    if is_module {
+        for (sid, &(builtin, origin_span)) in &tracked {
+            if exported_specifier_symbols.contains(sid) {
+                to_report.insert((origin_span.start, origin_span.end, builtin.name));
+            }
+        }
+    }
+
+    // Aliasing closure: `const m2 = m;` where `m` is tracked → also track `m2`.
+    expand_aliases(scoping, nodes, &mut tracked);
+
+    // Pass 4: detect mutations on every tracked symbol.
+    for (&sid, &(builtin, origin_span)) in &tracked {
+        if symbol_is_mutated(scoping, nodes, sid, builtin) {
+            to_report.insert((origin_span.start, origin_span.end, builtin.name));
+        }
+    }
+
+    // Pass 5: feed tracked names into the template-side detector.
+    for (&sid, &(builtin, _)) in &tracked {
+        let name = scoping.symbol_name(sid).to_string();
+        template_targets
+            .get_mut(builtin.name)
+            .expect("builtin entry seeded")
+            .insert(name);
+    }
+
+    // Emit, in source order.
+    let mut sorted: Vec<_> = to_report.into_iter().collect();
+    sorted.sort_by_key(|(s, e, _)| (*s, *e));
+    for (start, end, name) in sorted {
+        let builtin = lookup_builtin(name).expect("seeded");
+        let abs = Span::new(content_offset + start, content_offset + end);
+        ctx.diagnostic(message(builtin), abs);
+    }
 }
 
-fn is_inside_export(nodes: &oxc::semantic::AstNodes, node_id: oxc::semantic::NodeId) -> bool {
-    use oxc::ast::AstKind;
-    for ancestor_id in nodes.ancestor_ids(node_id) {
-        match nodes.kind(ancestor_id) {
-            AstKind::ExportNamedDeclaration(_) | AstKind::ExportDefaultDeclaration(_) => return true,
-            AstKind::FunctionBody(_) | AstKind::ArrowFunctionExpression(_) => return false,
-            _ => continue,
+struct Construction {
+    builtin: &'static BuiltinClass,
+    new_expr_span: Span,
+    new_expr_node_id: NodeId,
+}
+
+/// True if any ancestor of `node_id` is an `ExportNamedDeclaration` or
+/// `ExportDefaultDeclaration`. Mirrors vendor's `isIn(node, exportedVar)`
+/// for the inline-declaration cases (`export const x = ...`,
+/// `export default new Foo()`).
+fn is_inside_export_decl(nodes: &AstNodes, node_id: NodeId) -> bool {
+    for ancestor in nodes.ancestor_ids(node_id) {
+        match nodes.kind(ancestor) {
+            AstKind::ExportNamedDeclaration(_) | AstKind::ExportDefaultDeclaration(_) => {
+                return true;
+            }
+            _ => {}
         }
     }
     false
 }
 
-fn is_directly_mutated(nodes: &oxc::semantic::AstNodes, new_expr_id: oxc::semantic::NodeId, builtin: &BuiltinClass) -> bool {
-    use oxc::ast::AstKind;
+/// Collect symbols referenced by *specifier-only* exports
+/// (`export { a, b as default }`) — i.e. exports whose declaration AST
+/// is an `ExportNamedDeclaration` with `declaration: None`. Inline
+/// declarations are handled by `is_inside_export_decl`.
+fn collect_exported_specifier_symbols<'a>(sem: &'a Semantic<'a>) -> HashSet<SymbolId> {
+    let scoping = sem.scoping();
+    let nodes = sem.nodes();
+    let mut out = HashSet::new();
+    for node in nodes.iter() {
+        let AstKind::ExportNamedDeclaration(end) = node.kind() else {
+            continue;
+        };
+        if end.declaration.is_some() {
+            continue;
+        }
+        for spec in &end.specifiers {
+            // `spec.local` is a `ModuleExportName`. For specifier-only
+            // exports it's almost always an `IdentifierReference` whose
+            // `reference_id` resolves to a local binding.
+            if let oxc::ast::ast::ModuleExportName::IdentifierReference(ident) = &spec.local {
+                if let Some(rid) = ident.reference_id.get() {
+                    if let Some(sid) = scoping.get_reference(rid).symbol_id() {
+                        out.insert(sid);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// True if the `new Builtin(...)` expression itself is the receiver of a
+/// directly mutating method/property, e.g. `new Map().set(1,2)` or
+/// `(new URL(s)).href = "/"`. We climb past `( )`, `cond ? a : b` (when
+/// the `new` is one branch), `a || b`, etc., matching vendor's reach.
+fn is_directly_mutated(nodes: &AstNodes, new_expr_id: NodeId, builtin: &BuiltinClass) -> bool {
     let mut current = new_expr_id;
-    while matches!(nodes.kind(nodes.parent_id(current)),
-        AstKind::ParenthesizedExpression(_) | AstKind::LogicalExpression(_) | AstKind::ConditionalExpression(_)) {
-        current = nodes.parent_id(current);
-    }
-    let parent_id = nodes.parent_id(current);
-    if let AstKind::StaticMemberExpression(member) = nodes.kind(parent_id) {
-        let prop = member.property.name.as_str();
-        let gp = nodes.parent_id(parent_id);
-        (builtin.mutating_methods.contains(&prop) && matches!(nodes.kind(gp), AstKind::CallExpression(_)))
-            || (builtin.mutating_props.contains(&prop) && matches!(nodes.kind(gp), AstKind::AssignmentExpression(_)))
-    } else { false }
-}
-
-fn is_inside_state_call(nodes: &oxc::semantic::AstNodes, new_expr_id: oxc::semantic::NodeId) -> bool {
-    use oxc::ast::ast::Expression;
-    use oxc::ast::AstKind;
-
-    for ancestor_id in nodes.ancestor_ids(new_expr_id) {
-        match nodes.kind(ancestor_id) {
-            AstKind::CallExpression(call) => {
-                if let Expression::Identifier(ident) = &call.callee {
-                    if matches!(ident.name.as_str(), "$state" | "$derived") {
-                        return true;
-                    }
-                }
-                return false;
-            }
-            AstKind::ParenthesizedExpression(_) => continue,
-            _ => return false,
-        }
-    }
-    false
-}
-
-fn find_target_symbol_or_name(nodes: &oxc::semantic::AstNodes, scoping: &oxc::semantic::Scoping, node_id: oxc::semantic::NodeId) -> (Option<oxc::semantic::SymbolId>, Option<String>) {
-    use oxc::ast::ast::{AssignmentTarget, BindingPattern};
-    use oxc::ast::AstKind;
-
-    for ancestor_id in nodes.ancestor_ids(node_id) {
-        match nodes.kind(ancestor_id) {
-            AstKind::VariableDeclarator(decl) => {
-                if let BindingPattern::BindingIdentifier(ident) = &decl.id {
-                    let name = ident.name.to_string();
-                    return (ident.symbol_id.get(), Some(name));
-                }
-                return (None, None);
-            }
-            AstKind::AssignmentExpression(assign) => {
-                if let AssignmentTarget::AssignmentTargetIdentifier(ident) = &assign.left {
-                    let name = ident.name.to_string();
-                    let ref_id = ident.reference_id.get();
-                    let sym = ref_id.and_then(|r| scoping.get_reference(r).symbol_id());
-                    return (sym, Some(name));
-                }
-                return (None, None);
-            }
+    loop {
+        let parent = nodes.parent_id(current);
+        match nodes.kind(parent) {
             AstKind::ParenthesizedExpression(_)
-            | AstKind::ExpressionStatement(_)
-            | AstKind::LabeledStatement(_)
-            | AstKind::CallExpression(_)
             | AstKind::LogicalExpression(_)
             | AstKind::ConditionalExpression(_)
-            | AstKind::SequenceExpression(_) => continue,
-            _ => return (None, None),
+            | AstKind::SequenceExpression(_) => current = parent,
+            _ => break,
         }
     }
-    (None, None)
-}
-
-fn is_symbol_mutated(scoping: &oxc::semantic::Scoping, nodes: &oxc::semantic::AstNodes, symbol_id: oxc::semantic::SymbolId, builtin: &BuiltinClass) -> bool {
-    use oxc::ast::AstKind;
-    use oxc::span::GetSpan;
-    for reference in scoping.get_resolved_references(symbol_id) {
-        if !reference.is_read() { continue; }
-        let parent_id = nodes.parent_id(reference.node_id());
-        if let AstKind::StaticMemberExpression(member) = nodes.kind(parent_id) {
-            let prop = member.property.name.as_str();
-            let gp = nodes.parent_id(parent_id);
-            if builtin.mutating_methods.contains(&prop) && matches!(nodes.kind(gp), AstKind::CallExpression(_)) { return true; }
-            if builtin.mutating_props.contains(&prop)
-                && matches!(nodes.kind(gp), AstKind::AssignmentExpression(a) if member.span.start == a.left.span().start) { return true; }
-        }
-    }
-    false
-}
-
-fn is_transitively_mutated(scoping: &oxc::semantic::Scoping, nodes: &oxc::semantic::AstNodes, symbol_id: oxc::semantic::SymbolId, builtin: &BuiltinClass) -> bool {
-    use oxc::ast::AstKind;
-    use oxc::ast::ast::BindingPattern;
-
-    for reference in scoping.get_resolved_references(symbol_id) {
-        if !reference.is_read() { continue; }
-        for ancestor_id in nodes.ancestor_ids(reference.node_id()) {
-            let target_sym = match nodes.kind(ancestor_id) {
-                AstKind::VariableDeclarator(decl) => {
-                    if let BindingPattern::BindingIdentifier(ident) = &decl.id { ident.symbol_id.get() } else { None }
-                }
-                AstKind::AssignmentExpression(assign) => {
-                    if let oxc::ast::ast::AssignmentTarget::AssignmentTargetIdentifier(ident) = &assign.left {
-                        ident.reference_id.get().and_then(|r| scoping.get_reference(r).symbol_id())
-                    } else { None }
-                }
-                AstKind::ParenthesizedExpression(_) | AstKind::LogicalExpression(_)
-                | AstKind::ConditionalExpression(_) | AstKind::SequenceExpression(_) => continue,
-                _ => break,
-            };
-            if let Some(s) = target_sym {
-                if s != symbol_id && is_symbol_mutated(scoping, nodes, s, builtin) { return true; }
-            }
-            break;
-        }
-    }
-    false
-}
-
-fn check_mutation_in(text: &str, var_name: &str, builtin: &BuiltinClass, exclude: Option<&str>) -> bool {
-    for method in builtin.mutating_methods {
-        let pat = format!("{}.{}(", var_name, method);
-        if find_word_boundary_pos(text, &pat).is_some() {
-            if exclude.is_none_or(|ex| find_word_boundary_pos(ex, &pat).is_none()) { return true; }
-        }
-    }
-    for prop in builtin.mutating_props {
-        let pat = format!("{}.{} =", var_name, prop);
-        if let Some(pos) = find_word_boundary_pos(text, &pat) {
-            if !text[pos + pat.len()..].starts_with('=')
-                && exclude.is_none_or(|ex| find_word_boundary_pos(ex, &pat).is_none()) { return true; }
-        }
-    }
-    false
-}
-
-fn find_word_boundary_pos(content: &str, pat: &str) -> Option<usize> {
-    let mut start = 0;
-    while let Some(pos) = content[start..].find(pat) {
-        let abs = start + pos;
-        if abs == 0 || !matches!(content.as_bytes()[abs - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$') {
-            return Some(abs);
-        }
-        start = abs + 1;
-    }
-    None
-}
-
-/// Returns names of `BUILTIN_CLASSES` that are shadowed by a top-level import
-/// (either as a specifier local or an `as` alias) in the given script.
-fn collect_shadowed_classes(semantic: &Semantic<'_>) -> Vec<String> {
-    let mut shadowed = Vec::new();
-    for stmt in &semantic.nodes().program().body {
-        let Statement::ImportDeclaration(imp) = stmt else { continue };
-        let Some(specifiers) = &imp.specifiers else { continue };
-        for spec in specifiers {
-            let local = match spec {
-                ImportDeclarationSpecifier::ImportSpecifier(s) => s.local.name.as_str(),
-                ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => s.local.name.as_str(),
-                ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => s.local.name.as_str(),
-            };
-            for b in BUILTIN_CLASSES {
-                if local == b.name { shadowed.push(b.name.to_string()); }
+    let parent = nodes.parent_id(current);
+    let AstKind::StaticMemberExpression(member) = nodes.kind(parent) else {
+        return false;
+    };
+    let prop = member.property.name.as_str();
+    let gp = nodes.parent_id(parent);
+    if builtin.mutating_methods.contains(&prop) {
+        if let AstKind::CallExpression(ce) = nodes.kind(gp) {
+            // `obj.method(...)` — confirm member is the callee, not an arg.
+            if ce.callee.span() == member.span {
+                return true;
             }
         }
     }
-    shadowed
-}
-
-fn detect_chained_new_in_template(ctx: &mut LintContext) {
-    let source = ctx.source;
-    let scripts: Vec<_> = [&ctx.ast.instance, &ctx.ast.module].into_iter().flatten().collect();
-    let script_ranges: Vec<_> = scripts.iter().map(|s| (s.span.start as usize, s.span.end as usize)).collect();
-    let shadowed: Vec<_> = [ctx.instance_semantic, ctx.module_semantic]
-        .into_iter()
-        .flatten()
-        .flat_map(collect_shadowed_classes)
-        .collect();
-
-    for builtin in BUILTIN_CLASSES {
-        if shadowed.iter().any(|s| s == builtin.name) { continue; }
-
-        let new_pat = format!("new {}(", builtin.name);
-        let mut search = 0;
-
-        while let Some(rel) = source[search..].find(&new_pat) {
-            let abs = search + rel;
-
-            if abs > 0 && matches!(source.as_bytes()[abs - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$') {
-                search = abs + 1; continue;
-            }
-
-            if script_ranges.iter().any(|&(s, e)| abs >= s && abs < e) {
-                search = abs + new_pat.len();
-                continue;
-            }
-
-            let paren_start = abs + new_pat.len() - 1;
-            let close = match find_matching_paren(source, paren_start) {
-                Some(p) => p,
-                None => { search = abs + 1; continue; }
-            };
-
-            let after = &source[close + 1..];
-            let mut found_chained = false;
-            if after.starts_with('.') {
-                let method_start = &after[1..];
-                for method in builtin.mutating_methods {
-                    let call = format!("{}(", method);
-                    if method_start.starts_with(&call) {
-                        ctx.diagnostic(mutable_class_msg(builtin), Span::new(abs as u32, (close + 1) as u32));
-                        found_chained = true;
-                        break;
-                    }
-                }
-            }
-
-            if !found_chained && builtin.name != "URL" && builtin.name != "URLSearchParams" {
-                if let Some(var_name) = extract_assigned_var(source, abs) {
-                    if let Some((scope_start, scope_end)) = find_enclosing_brace_scope(source, abs) {
-                        let scope_text = &source[scope_start..scope_end];
-                        if has_mutating_call_in_scope(scope_text, &var_name, builtin) {
-                            ctx.diagnostic(mutable_class_msg(builtin), Span::new(abs as u32, (close + 1) as u32));
-                        }
-                    }
-                }
-            }
-
-            search = abs + 4;
-        }
-    }
-}
-
-fn extract_assigned_var(source: &str, new_pos: usize) -> Option<String> {
-    let before = &source[..new_pos];
-    let trimmed = before.trim_end();
-    if !trimmed.ends_with('=') { return None; }
-    let before_eq = trimmed[..trimmed.len() - 1].trim_end();
-    if before_eq.ends_with('=') || before_eq.ends_with('!') || before_eq.ends_with('>') || before_eq.ends_with('<') {
-        return None;
-    }
-    let bytes = before_eq.as_bytes();
-    let mut end = bytes.len();
-    while end > 0 && (bytes[end - 1].is_ascii_alphanumeric() || bytes[end - 1] == b'_' || bytes[end - 1] == b'$') {
-        end -= 1;
-    }
-    let var_name = &before_eq[end..];
-    if var_name.is_empty() { return None; }
-    if matches!(var_name, "return" | "const" | "let" | "var" | "new" | "typeof" | "void" | "delete") {
-        return None;
-    }
-    Some(var_name.to_string())
-}
-
-fn find_enclosing_brace_scope(source: &str, pos: usize) -> Option<(usize, usize)> {
-    let bytes = source.as_bytes();
-    let mut depth = 0i32;
-    let mut i = pos;
-    let mut scope_start = None;
-    while i > 0 {
-        i -= 1;
-        match bytes[i] {
-            b'}' => depth += 1,
-            b'{' => {
-                if depth == 0 {
-                    scope_start = Some(i);
-                    break;
-                }
-                depth -= 1;
-            }
-            _ => {}
-        }
-    }
-    let scope_start = scope_start?;
-    depth = 1;
-    let mut j = scope_start + 1;
-    while j < bytes.len() && depth > 0 {
-        match bytes[j] {
-            b'{' => depth += 1,
-            b'}' => {
-                depth -= 1;
-                if depth == 0 { return Some((scope_start, j + 1)); }
-            }
-            _ => {}
-        }
-        j += 1;
-    }
-    None
-}
-
-fn has_mutating_call_in_scope(scope_text: &str, var_name: &str, builtin: &BuiltinClass) -> bool {
-    for method in builtin.mutating_methods {
-        let pat = format!("{}.{}(", var_name, method);
-        if scope_text.contains(&pat) { return true; }
-    }
-    for prop in builtin.mutating_props {
-        let pat = format!("{}.{}", var_name, prop);
-        for (pos, _) in scope_text.match_indices(&pat) {
-            let after = &scope_text[pos + pat.len()..];
-            let next = after.trim_start();
-            if next.starts_with('=') && !next.starts_with("==") {
+    if builtin.mutating_props.contains(&prop) {
+        if let AstKind::AssignmentExpression(ae) = nodes.kind(gp) {
+            if ae.left.span() == member.span {
                 return true;
             }
         }
@@ -520,25 +353,267 @@ fn has_mutating_call_in_scope(scope_text: &str, var_name: &str, builtin: &Builti
     false
 }
 
-fn find_matching_paren(source: &str, pos: usize) -> Option<usize> {
-    let bytes = source.as_bytes();
-    if bytes.get(pos) != Some(&b'(') { return None; }
-    let mut depth = 1i32;
-    let mut i = pos + 1;
-    let mut in_str = false;
-    let mut sch = b'"';
-    while i < bytes.len() && depth > 0 {
-        if in_str {
-            if bytes[i] == sch && (i == 0 || bytes[i - 1] != b'\\') { in_str = false; }
-        } else {
-            match bytes[i] {
-                b'\'' | b'"' | b'`' => { in_str = true; sch = bytes[i]; }
-                b'(' => depth += 1,
-                b')' => { depth -= 1; if depth == 0 { return Some(i); } }
-                _ => {}
+/// Walk from a `new Builtin(...)` up through `( )`, `cond ? a : b`,
+/// `a ?? b`, `(a, b)` etc. until we hit a `VariableDeclarator` or
+/// `AssignmentExpression`. Returns the bound symbol if one exists.
+fn target_symbol(nodes: &AstNodes, scoping: &Scoping, new_expr_id: NodeId) -> Option<SymbolId> {
+    for ancestor in nodes.ancestor_ids(new_expr_id) {
+        match nodes.kind(ancestor) {
+            AstKind::VariableDeclarator(decl) => {
+                return binding_symbol_from_pattern(&decl.id);
             }
+            AstKind::AssignmentExpression(assign) => {
+                let AssignmentTarget::AssignmentTargetIdentifier(ident) = &assign.left else {
+                    return None;
+                };
+                return ident
+                    .reference_id
+                    .get()
+                    .and_then(|r| scoping.get_reference(r).symbol_id());
+            }
+            AstKind::ParenthesizedExpression(_)
+            | AstKind::LogicalExpression(_)
+            | AstKind::ConditionalExpression(_)
+            | AstKind::SequenceExpression(_)
+            | AstKind::TSAsExpression(_)
+            | AstKind::TSSatisfiesExpression(_)
+            | AstKind::TSNonNullExpression(_) => continue,
+            _ => return None,
         }
-        i += 1;
     }
     None
 }
+
+fn binding_symbol_from_pattern(pat: &BindingPattern<'_>) -> Option<SymbolId> {
+    match pat {
+        BindingPattern::BindingIdentifier(id) => id.symbol_id.get(),
+        // Destructuring patterns don't have a single target — vendor's
+        // `ReferenceTracker` follows them member-by-member, but in practice
+        // none of the fixtures destructure a `new Map()`. We bail rather
+        // than guessing.
+        _ => None,
+    }
+}
+
+/// Given an initial set of tracked symbols, expand it to include every
+/// symbol that is initialized from a tracked symbol's value.
+/// `const m = new Map(); const m2 = m; const m3 = m2;` → all three tracked.
+///
+/// We iterate to a fixed point so chains of any length resolve.
+fn expand_aliases(
+    scoping: &Scoping,
+    nodes: &AstNodes,
+    tracked: &mut HashMap<SymbolId, (&'static BuiltinClass, Span)>,
+) {
+    loop {
+        let mut added: Vec<(SymbolId, &'static BuiltinClass, Span)> = Vec::new();
+        for (&sid, &(builtin, origin)) in tracked.iter() {
+            for reference in scoping.get_resolved_references(sid) {
+                if !reference.is_read() {
+                    continue;
+                }
+                let ref_node = reference.node_id();
+                // `let x = m;`, `x = m;`, `const x = (m);` — walk the same
+                // wrappers `target_symbol` does.
+                if let Some(other) = target_symbol(nodes, scoping, ref_node) {
+                    if !tracked.contains_key(&other) {
+                        added.push((other, builtin, origin));
+                    }
+                }
+            }
+        }
+        if added.is_empty() {
+            break;
+        }
+        for (s, b, origin) in added {
+            tracked.entry(s).or_insert((b, origin));
+        }
+    }
+}
+
+/// True if any reference of `sid` reads into a mutating member access.
+fn symbol_is_mutated(
+    scoping: &Scoping,
+    nodes: &AstNodes,
+    sid: SymbolId,
+    builtin: &BuiltinClass,
+) -> bool {
+    for reference in scoping.get_resolved_references(sid) {
+        if !reference.is_read() {
+            continue;
+        }
+        let parent = nodes.parent_id(reference.node_id());
+        let AstKind::StaticMemberExpression(member) = nodes.kind(parent) else {
+            continue;
+        };
+        let prop = member.property.name.as_str();
+        let gp = nodes.parent_id(parent);
+        if builtin.mutating_methods.contains(&prop) {
+            if let AstKind::CallExpression(ce) = nodes.kind(gp) {
+                if ce.callee.span() == member.span {
+                    return true;
+                }
+            }
+        }
+        if builtin.mutating_props.contains(&prop) {
+            if let AstKind::AssignmentExpression(ae) = nodes.kind(gp) {
+                if ae.left.span() == member.span {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+// ---------------------------------------------------------------------------
+// Template walk
+// ---------------------------------------------------------------------------
+
+fn check_templates<'a>(
+    ctx: &mut LintContext<'a>,
+    template_targets: &HashMap<&'static str, HashSet<String>>,
+) {
+    let mut diagnostics: Vec<(Span, &'static BuiltinClass)> = Vec::new();
+    walk_template_nodes(&ctx.ast.html, &mut |node| {
+        if let TemplateNode::MustacheTag(tag) = node {
+            scan_mustache(tag, template_targets, &mut diagnostics);
+        }
+        // Note: attribute-value expressions (`value={…}`, `style:foo={…}`)
+        // are still strings in the template AST today — no fixtures exercise
+        // tracked-binding mutation inside an attribute value, so we don't
+        // re-parse them here. If needed later, we'd thread the same
+        // `walk_expr` through `parse_template_expression`.
+    });
+
+    for (span, builtin) in diagnostics {
+        ctx.diagnostic(message(builtin), span);
+    }
+}
+
+fn scan_mustache<'a>(
+    tag: &MustacheTag<'a>,
+    template_targets: &HashMap<&'static str, HashSet<String>>,
+    out: &mut Vec<(Span, &'static BuiltinClass)>,
+) {
+    let Some(expr) = tag.expression_ast else {
+        return;
+    };
+    walk_expr(expr, template_targets, tag.span, out);
+}
+
+/// Recursively scan an expression for two patterns:
+/// 1. `new Builtin(...).<mutator>(...)` — a chained mutating call where the
+///    receiver is a fresh construction.
+/// 2. `<name>.<mutator>(...)` or `<name>.<prop> = ...` where `<name>` is in
+///    `template_targets[builtin]` — a tracked binding mutated from inside
+///    the template.
+fn walk_expr<'a>(
+    expr: &'a Expression<'a>,
+    targets: &HashMap<&'static str, HashSet<String>>,
+    span: Span,
+    out: &mut Vec<(Span, &'static BuiltinClass)>,
+) {
+    match expr {
+        Expression::CallExpression(ce) => {
+            if let Expression::StaticMemberExpression(mem) = &ce.callee {
+                check_template_member(&mem.object, mem.property.name.as_str(), false, targets, span, out);
+                walk_expr(&mem.object, targets, span, out);
+            } else {
+                walk_expr(&ce.callee, targets, span, out);
+            }
+            for arg in &ce.arguments {
+                if let Some(e) = arg.as_expression() {
+                    walk_expr(e, targets, span, out);
+                }
+            }
+        }
+        Expression::AssignmentExpression(ae) => {
+            if let AssignmentTarget::StaticMemberExpression(mem) = &ae.left {
+                check_template_member(&mem.object, mem.property.name.as_str(), true, targets, span, out);
+            }
+            walk_expr(&ae.right, targets, span, out);
+        }
+        Expression::NewExpression(ne) => {
+            for arg in &ne.arguments {
+                if let Some(e) = arg.as_expression() {
+                    walk_expr(e, targets, span, out);
+                }
+            }
+        }
+        Expression::ParenthesizedExpression(p) => walk_expr(&p.expression, targets, span, out),
+        Expression::SequenceExpression(s) => {
+            for e in &s.expressions {
+                walk_expr(e, targets, span, out);
+            }
+        }
+        Expression::ConditionalExpression(c) => {
+            walk_expr(&c.test, targets, span, out);
+            walk_expr(&c.consequent, targets, span, out);
+            walk_expr(&c.alternate, targets, span, out);
+        }
+        Expression::LogicalExpression(l) => {
+            walk_expr(&l.left, targets, span, out);
+            walk_expr(&l.right, targets, span, out);
+        }
+        Expression::BinaryExpression(b) => {
+            walk_expr(&b.left, targets, span, out);
+            walk_expr(&b.right, targets, span, out);
+        }
+        Expression::UnaryExpression(u) => walk_expr(&u.argument, targets, span, out),
+        Expression::StaticMemberExpression(mem) => walk_expr(&mem.object, targets, span, out),
+        _ => {}
+    }
+}
+
+/// Common backend for the two template patterns above. `is_assign = true`
+/// means we're handling `<receiver>.<prop> = ...`, otherwise `<receiver>.<method>(...)`.
+fn check_template_member<'a>(
+    receiver: &'a Expression<'a>,
+    prop: &str,
+    is_assign: bool,
+    targets: &HashMap<&'static str, HashSet<String>>,
+    span: Span,
+    out: &mut Vec<(Span, &'static BuiltinClass)>,
+) {
+    let bare = peel(receiver);
+    let matches = |b: &BuiltinClass| {
+        if is_assign {
+            b.mutating_props.contains(&prop)
+        } else {
+            b.mutating_methods.contains(&prop)
+        }
+    };
+    // Pattern 1: chained on a fresh construction.
+    if let Expression::NewExpression(ne) = bare {
+        if let Expression::Identifier(id) = &ne.callee {
+            if let Some(builtin) = lookup_builtin(id.name.as_str()) {
+                if matches(builtin) {
+                    out.push((span, builtin));
+                    return;
+                }
+            }
+        }
+    }
+    // Pattern 2: tracked-by-name binding.
+    if let Expression::Identifier(id) = bare {
+        let name = id.name.as_str();
+        for builtin in BUILTIN_CLASSES.iter().filter(|b| matches(b)) {
+            if targets
+                .get(builtin.name)
+                .is_some_and(|s| s.contains(name))
+            {
+                out.push((span, builtin));
+                return;
+            }
+        }
+    }
+}
+
+fn peel<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
+    match expr {
+        Expression::ParenthesizedExpression(p) => peel(&p.expression),
+        _ => expr,
+    }
+}
+

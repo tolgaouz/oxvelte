@@ -4,14 +4,15 @@
 
 use crate::linter::{LintContext, Rule};
 use oxc::ast::ast::{
-    BindingPattern, Declaration, Expression, ExportNamedDeclaration,
-    Statement, VariableDeclarationKind,
+    BindingPattern, Declaration, ExportNamedDeclaration, Expression, Statement,
+    VariableDeclarationKind,
 };
 use oxc::span::Span;
 
 const VALID_KIT_PROPS: &[&str] = &["data", "errors", "form", "params", "snapshot"];
 
-const VALID_KIT_PROPS_SVELTE5: &[&str] = &["data", "errors", "form", "params", "snapshot", "children"];
+const VALID_KIT_PROPS_SVELTE5: &[&str] =
+    &["data", "errors", "form", "params", "snapshot", "children"];
 
 pub struct ValidPropNamesInKitPages;
 
@@ -25,7 +26,9 @@ impl Rule for ValidPropNamesInKitPages {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let Some(file_path) = &ctx.file_path else { return; };
+        let Some(file_path) = &ctx.file_path else {
+            return;
+        };
         let fname = file_path.rsplit('/').next().unwrap_or(file_path);
         let fname = fname.rsplit('\\').next().unwrap_or(fname);
         if fname != "+page.svelte" && fname != "+layout.svelte" && fname != "+error.svelte" {
@@ -46,7 +49,9 @@ impl Rule for ValidPropNamesInKitPages {
             }
         }
 
-        let Some(semantic) = ctx.instance_semantic else { return };
+        let Some(semantic) = ctx.instance_semantic else {
+            return;
+        };
         let content_offset = ctx.instance_content_offset;
 
         for stmt in &semantic.nodes().program().body {
@@ -66,7 +71,12 @@ impl Rule for ValidPropNamesInKitPages {
                             _ => false,
                         });
                         if is_props_call {
-                            report_pattern_names(ctx, content_offset, &d.id, VALID_KIT_PROPS_SVELTE5);
+                            report_pattern_names(
+                                ctx,
+                                content_offset,
+                                &d.id,
+                                VALID_KIT_PROPS_SVELTE5,
+                            );
                         }
                     }
                 }
@@ -82,8 +92,13 @@ fn check_export_named<'a>(
     exp: &'a ExportNamedDeclaration<'a>,
 ) {
     let Some(decl) = &exp.declaration else { return };
-    let Declaration::VariableDeclaration(vd) = decl else { return };
-    if !matches!(vd.kind, VariableDeclarationKind::Let | VariableDeclarationKind::Var) {
+    let Declaration::VariableDeclaration(vd) = decl else {
+        return;
+    };
+    if !matches!(
+        vd.kind,
+        VariableDeclarationKind::Let | VariableDeclarationKind::Var
+    ) {
         return;
     }
     for d in &vd.declarations {

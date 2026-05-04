@@ -1,8 +1,8 @@
 //! `svelte/no-at-debug-tags` — disallow the use of `{@debug}`.
 //! ⭐ Recommended, 💡 Suggestion
 
-use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::TemplateNode;
+use crate::linter::{walk_template_nodes, LintContext, Rule};
 
 pub struct NoAtDebugTags;
 
@@ -18,8 +18,7 @@ impl Rule for NoAtDebugTags {
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::DebugTag(tag) = node {
-                ctx.diagnostic("Unexpected `{@debug}`.",
-                    tag.span);
+                ctx.diagnostic("Unexpected `{@debug}`.", tag.span);
             }
         });
     }

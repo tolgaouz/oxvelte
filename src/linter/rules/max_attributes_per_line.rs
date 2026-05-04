@@ -1,8 +1,8 @@
 //! `svelte/max-attributes-per-line` — enforce the maximum number of attributes per line.
 //! 🔧 Fixable
 
+use crate::ast::{Attribute, AttributeValue, DirectiveKind, TemplateNode};
 use crate::linter::{walk_template_nodes, LintContext, Rule};
-use crate::ast::{Attribute, DirectiveKind, AttributeValue, TemplateNode};
 
 pub struct MaxAttributesPerLine;
 
@@ -16,22 +16,30 @@ impl Rule for MaxAttributesPerLine {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let opts = ctx.config.options.as_ref()
+        let opts = ctx
+            .config
+            .options
+            .as_ref()
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first())
             .and_then(|v| v.as_object())
             .cloned();
 
-        let get_opt = |key: &str| opts.as_ref()
-            .and_then(|o| o.get(key)).and_then(|v| v.as_u64())
-            .map(|v| v as usize).unwrap_or(1);
+        let get_opt = |key: &str| {
+            opts.as_ref()
+                .and_then(|o| o.get(key))
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize)
+                .unwrap_or(1)
+        };
         let singleline_max = get_opt("singleline");
         let multiline_max = get_opt("multiline");
 
         let source = ctx.source;
         let line_starts: Vec<usize> = std::iter::once(0)
             .chain(
-                source.bytes()
+                source
+                    .bytes()
                     .enumerate()
                     .filter(|(_, b)| *b == b'\n')
                     .map(|(i, _)| i + 1),
@@ -39,7 +47,9 @@ impl Rule for MaxAttributesPerLine {
             .collect();
 
         let offset_to_line = |offset: usize| -> usize {
-            line_starts.partition_point(|&start| start <= offset).saturating_sub(1)
+            line_starts
+                .partition_point(|&start| start <= offset)
+                .saturating_sub(1)
         };
 
         walk_template_nodes(&ctx.ast.html, &mut |node| {
@@ -52,8 +62,11 @@ impl Rule for MaxAttributesPerLine {
                 let el_start = el.span.start as usize;
                 let el_end = el.span.end as usize;
 
-                let tag_close = source.get(el_start..el_end)
-                    .and_then(|s| s.find('>')).map(|p| el_start + p).unwrap_or(el_end);
+                let tag_close = source
+                    .get(el_start..el_end)
+                    .and_then(|s| s.find('>'))
+                    .map(|p| el_start + p)
+                    .unwrap_or(el_end);
                 let opening_tag_end_line = offset_to_line(tag_close);
 
                 let opening_start_line = offset_to_line(el_start);
@@ -62,13 +75,19 @@ impl Rule for MaxAttributesPerLine {
                 if is_singleline {
                     if let Some(attr) = attrs.get(singleline_max) {
                         let name = attr_name(attr, source);
-                        ctx.diagnostic(format!("'{}' should be on a new line.", name), attr_span(attr));
+                        ctx.diagnostic(
+                            format!("'{}' should be on a new line.", name),
+                            attr_span(attr),
+                        );
                     }
                 } else {
                     for group in group_attrs_by_line(attrs, &offset_to_line) {
                         if let Some(attr) = group.get(multiline_max) {
                             let name = attr_name(attr, source);
-                            ctx.diagnostic(format!("'{}' should be on a new line.", name), attr_span(attr));
+                            ctx.diagnostic(
+                                format!("'{}' should be on a new line.", name),
+                                attr_span(attr),
+                            );
                         }
                     }
                 }
@@ -79,14 +98,12 @@ impl Rule for MaxAttributesPerLine {
 
 fn attr_name(attr: &Attribute, source: &str) -> String {
     match attr {
-        Attribute::NormalAttribute { name, value, .. } => {
-            match value {
-                AttributeValue::Expression(expr) if expr == name => {
-                    format!("{{{}}}", name)
-                }
-                _ => name.clone(),
+        Attribute::NormalAttribute { name, value, .. } => match value {
+            AttributeValue::Expression(expr) if expr == name => {
+                format!("{{{}}}", name)
             }
-        }
+            _ => name.clone(),
+        },
         Attribute::Spread { span } => {
             let start = span.start as usize;
             let end = span.end as usize;
@@ -96,7 +113,12 @@ fn attr_name(attr: &Attribute, source: &str) -> String {
                 "{...}".to_string()
             }
         }
-        Attribute::Directive { kind, name, modifiers, .. } => {
+        Attribute::Directive {
+            kind,
+            name,
+            modifiers,
+            ..
+        } => {
             let prefix = directive_prefix(kind);
             if modifiers.is_empty() {
                 format!("{}:{}", prefix, name)
@@ -109,7 +131,9 @@ fn attr_name(attr: &Attribute, source: &str) -> String {
 
 fn attr_span(attr: &Attribute) -> oxc::span::Span {
     match attr {
-        Attribute::NormalAttribute { span, .. } | Attribute::Spread { span } | Attribute::Directive { span, .. } => *span,
+        Attribute::NormalAttribute { span, .. }
+        | Attribute::Spread { span }
+        | Attribute::Directive { span, .. } => *span,
     }
 }
 
@@ -129,14 +153,23 @@ fn directive_prefix(kind: &DirectiveKind) -> &'static str {
 }
 
 fn group_attrs_by_line<'a, F>(attrs: &'a [Attribute], offset_to_line: &F) -> Vec<Vec<&'a Attribute>>
-where F: Fn(usize) -> usize {
+where
+    F: Fn(usize) -> usize,
+{
     let mut groups: Vec<Vec<&Attribute>> = Vec::new();
     for attr in attrs {
         let start_line = offset_to_line(attr_span(attr).start as usize);
-        let same = groups.last().and_then(|g| g.first())
-            .map_or(false, |first| offset_to_line(attr_span(first).end as usize) == start_line);
-        if same { groups.last_mut().unwrap().push(attr); }
-        else { groups.push(vec![attr]); }
+        let same = groups
+            .last()
+            .and_then(|g| g.first())
+            .map_or(false, |first| {
+                offset_to_line(attr_span(first).end as usize) == start_line
+            });
+        if same {
+            groups.last_mut().unwrap().push(attr);
+        } else {
+            groups.push(vec![attr]);
+        }
     }
     groups
 }

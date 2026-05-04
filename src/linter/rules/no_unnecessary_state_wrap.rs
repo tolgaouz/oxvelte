@@ -4,17 +4,23 @@
 //! Svelte's reactive classes (SvelteSet, SvelteMap, etc.) are already reactive
 //! and don't need `$state()` wrapping.
 
-use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::{Attribute, AttributeValue, DirectiveKind, Fragment, TemplateNode};
-use oxc::ast::ast::{Argument, Expression, ImportDeclarationSpecifier, ModuleExportName, Statement};
+use crate::linter::{walk_template_nodes, LintContext, Rule};
+use oxc::ast::ast::{
+    Argument, Expression, ImportDeclarationSpecifier, ModuleExportName, Statement,
+};
 use oxc::ast::AstKind;
 use oxc::semantic::SymbolId;
 use oxc::span::Span;
 use rustc_hash::FxHashSet;
 
 const REACTIVE_CLASSES: &[&str] = &[
-    "SvelteSet", "SvelteMap", "SvelteURL", "SvelteURLSearchParams",
-    "SvelteDate", "MediaQuery",
+    "SvelteSet",
+    "SvelteMap",
+    "SvelteURL",
+    "SvelteURLSearchParams",
+    "SvelteDate",
+    "MediaQuery",
 ];
 
 pub struct NoUnnecessaryStateWrap;
@@ -29,14 +35,25 @@ impl Rule for NoUnnecessaryStateWrap {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let Some(semantic) = ctx.instance_semantic else { return };
+        let Some(semantic) = ctx.instance_semantic else {
+            return;
+        };
         let content_offset = ctx.instance_content_offset;
 
-        let opts = ctx.config.options.as_ref().and_then(|o| o.as_array()).and_then(|a| a.first());
+        let opts = ctx
+            .config
+            .options
+            .as_ref()
+            .and_then(|o| o.as_array())
+            .and_then(|a| a.first());
         let additional: Vec<String> = opts
             .and_then(|o| o.get("additionalReactiveClasses"))
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|c| c.as_str().map(String::from)).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|c| c.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
         let allow_reassign = opts
             .and_then(|o| o.get("allowReassign"))
@@ -46,7 +63,8 @@ impl Rule for NoUnnecessaryStateWrap {
         // Build a map: local name → original name.
         // Seed with bare `SvelteSet` / `SvelteMap` etc. (direct use without import alias)
         // and with any `additionalReactiveClasses` names (used directly).
-        let mut name_map: Vec<(String, String)> = REACTIVE_CLASSES.iter()
+        let mut name_map: Vec<(String, String)> = REACTIVE_CLASSES
+            .iter()
             .map(|s| (s.to_string(), s.to_string()))
             .chain(additional.iter().cloned().map(|s| (s.clone(), s)))
             .collect();
@@ -54,12 +72,18 @@ impl Rule for NoUnnecessaryStateWrap {
         let nodes = semantic.nodes();
         let program = nodes.program();
         for stmt in &program.body {
-            let Statement::ImportDeclaration(imp) = stmt else { continue };
+            let Statement::ImportDeclaration(imp) = stmt else {
+                continue;
+            };
             let src = imp.source.value.as_str();
             let is_svelte = src.starts_with("svelte/") || src == "svelte";
-            let Some(specifiers) = &imp.specifiers else { continue };
+            let Some(specifiers) = &imp.specifiers else {
+                continue;
+            };
             for spec in specifiers {
-                let ImportDeclarationSpecifier::ImportSpecifier(s) = spec else { continue };
+                let ImportDeclarationSpecifier::ImportSpecifier(s) = spec else {
+                    continue;
+                };
                 let imported = match &s.imported {
                     ModuleExportName::IdentifierName(n) => n.name.as_str(),
                     ModuleExportName::IdentifierReference(n) => n.name.as_str(),
@@ -76,15 +100,26 @@ impl Rule for NoUnnecessaryStateWrap {
 
         let scoping = semantic.scoping();
         for node in nodes.iter() {
-            let AstKind::CallExpression(ce) = node.kind() else { continue };
-            let Expression::Identifier(callee) = &ce.callee else { continue };
+            let AstKind::CallExpression(ce) = node.kind() else {
+                continue;
+            };
+            let Expression::Identifier(callee) = &ce.callee else {
+                continue;
+            };
             if callee.name != "$state" {
                 continue;
             }
-            let Some(first_arg) = ce.arguments.first() else { continue };
-            let Argument::NewExpression(new_expr) = first_arg else { continue };
-            let Expression::Identifier(class_id) = &new_expr.callee else { continue };
-            let Some((_, original)) = name_map.iter().find(|(l, _)| l == class_id.name.as_str()) else {
+            let Some(first_arg) = ce.arguments.first() else {
+                continue;
+            };
+            let Argument::NewExpression(new_expr) = first_arg else {
+                continue;
+            };
+            let Expression::Identifier(class_id) = &new_expr.callee else {
+                continue;
+            };
+            let Some((_, original)) = name_map.iter().find(|(l, _)| l == class_id.name.as_str())
+            else {
                 continue;
             };
 
@@ -114,7 +149,8 @@ impl Rule for NoUnnecessaryStateWrap {
                             _ => break,
                         };
                         if let oxc::ast::ast::BindingPattern::BindingIdentifier(id) = &vd.id {
-                            decl_symbol = scoping.get_binding(scoping.root_scope_id(), id.name.as_str().into());
+                            decl_symbol = scoping
+                                .get_binding(scoping.root_scope_id(), id.name.as_str().into());
                         }
                     }
                     break;
@@ -145,7 +181,10 @@ impl Rule for NoUnnecessaryStateWrap {
             let s = content_offset + callee.span.start;
             let e = content_offset + callee.span.end + 1; // include `(`
             ctx.diagnostic(
-                format!("{} is already reactive, $state wrapping is unnecessary.", original),
+                format!(
+                    "{} is already reactive, $state wrapping is unnecessary.",
+                    original
+                ),
                 Span::new(s, e),
             );
         }
@@ -166,11 +205,22 @@ fn is_symbol_reassigned<'a>(
     let name = scoping.symbol_name(sid);
     let mut found = false;
     walk_template_nodes(html, &mut |node| {
-        if found { return; }
-        let TemplateNode::Element(el) = node else { return };
+        if found {
+            return;
+        }
+        let TemplateNode::Element(el) = node else {
+            return;
+        };
         for attr in &el.attributes {
-            let Attribute::Directive { kind: DirectiveKind::Binding, name: dir_name, value, .. } = attr
-                else { continue };
+            let Attribute::Directive {
+                kind: DirectiveKind::Binding,
+                name: dir_name,
+                value,
+                ..
+            } = attr
+            else {
+                continue;
+            };
             // `bind:name` shorthand — the directive name is the bound symbol.
             if dir_name == name {
                 found = true;
@@ -179,7 +229,10 @@ fn is_symbol_reassigned<'a>(
             // `bind:anything={name}` / nested member writing through name.
             if let AttributeValue::Expression(text) = value {
                 let trimmed = text.trim();
-                let base = trimmed.split(|c: char| c == '.' || c == '[').next().unwrap_or(trimmed);
+                let base = trimmed
+                    .split(|c: char| c == '.' || c == '[')
+                    .next()
+                    .unwrap_or(trimmed);
                 if base == name {
                     found = true;
                     return;
@@ -192,4 +245,6 @@ fn is_symbol_reassigned<'a>(
 
 // Ensure we import FxHashSet to keep the module compile clean even when unused.
 #[allow(dead_code)]
-fn _keep_imports() -> FxHashSet<SymbolId> { FxHashSet::default() }
+fn _keep_imports() -> FxHashSet<SymbolId> {
+    FxHashSet::default()
+}

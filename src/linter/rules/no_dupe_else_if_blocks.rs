@@ -1,8 +1,8 @@
 //! `svelte/no-dupe-else-if-blocks` — disallow duplicate conditions in `{#if}` / `{:else if}` chains.
 //! ⭐ Recommended
 
-use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::TemplateNode;
+use crate::linter::{walk_template_nodes, LintContext, Rule};
 
 pub struct NoDupeElseIfBlocks;
 
@@ -28,8 +28,14 @@ impl Rule for NoDupeElseIfBlocks {
 const MSG: &str = "This branch can never execute. Its condition is a duplicate or covered by previous conditions in the `{#if}` / `{:else if}` chain.";
 
 fn split_or_and(cond: &str) -> Vec<Vec<String>> {
-    split_top_level(cond.trim(), "||").into_iter()
-        .map(|branch| split_top_level(&branch, "&&").into_iter().map(|s| s.trim().to_string()).collect())
+    split_top_level(cond.trim(), "||")
+        .into_iter()
+        .map(|branch| {
+            split_top_level(&branch, "&&")
+                .into_iter()
+                .map(|s| s.trim().to_string())
+                .collect()
+        })
         .collect()
 }
 
@@ -42,14 +48,25 @@ fn split_top_level(s: &str, op: &str) -> Vec<String> {
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
-            b'(' => { depth += 1; i += 1; }
-            b')' => { depth -= 1; i += 1; }
-            _ if depth == 0 && i + op_bytes.len() <= bytes.len() && &bytes[i..i + op_bytes.len()] == op_bytes => {
+            b'(' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' => {
+                depth -= 1;
+                i += 1;
+            }
+            _ if depth == 0
+                && i + op_bytes.len() <= bytes.len()
+                && &bytes[i..i + op_bytes.len()] == op_bytes =>
+            {
                 parts.push(s[start..i].trim().to_string());
                 i += op_bytes.len();
                 start = i;
             }
-            _ => { i += 1; }
+            _ => {
+                i += 1;
+            }
         }
     }
     parts.push(s[start..].trim().to_string());
@@ -58,17 +75,28 @@ fn split_top_level(s: &str, op: &str) -> Vec<String> {
 
 fn is_covered(current: &[Vec<String>], seen: &[Vec<Vec<String>>]) -> bool {
     current.iter().all(|cur| {
-        seen.iter().any(|prev| prev.iter().any(|prev_and| prev_and.iter().all(|p| cur.contains(p))))
+        seen.iter().any(|prev| {
+            prev.iter()
+                .any(|prev_and| prev_and.iter().all(|p| cur.contains(p)))
+        })
     })
 }
 
-fn check_alternate(alternate: &Option<Box<TemplateNode>>, seen: &mut Vec<Vec<Vec<String>>>, ctx: &mut LintContext<'_>) {
+fn check_alternate(
+    alternate: &Option<Box<TemplateNode>>,
+    seen: &mut Vec<Vec<Vec<String>>>,
+    ctx: &mut LintContext<'_>,
+) {
     let Some(alt) = alternate else { return };
-    let TemplateNode::IfBlock(block) = alt.as_ref() else { return };
+    let TemplateNode::IfBlock(block) = alt.as_ref() else {
+        return;
+    };
     let condition = block.test.trim();
     if !condition.is_empty() {
         let parsed = split_or_and(condition);
-        if is_covered(&parsed, seen) { ctx.diagnostic(MSG, block.span); }
+        if is_covered(&parsed, seen) {
+            ctx.diagnostic(MSG, block.span);
+        }
         seen.push(parsed);
         check_alternate(&block.alternate, seen, ctx);
     } else {
@@ -77,7 +105,9 @@ fn check_alternate(alternate: &Option<Box<TemplateNode>>, seen: &mut Vec<Vec<Vec
                 let cond = inner.test.trim();
                 if !cond.is_empty() {
                     let parsed = split_or_and(cond);
-                    if is_covered(&parsed, seen) { ctx.diagnostic(MSG, inner.span); }
+                    if is_covered(&parsed, seen) {
+                        ctx.diagnostic(MSG, inner.span);
+                    }
                 }
             }
         }

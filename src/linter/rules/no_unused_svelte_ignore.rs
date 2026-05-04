@@ -1,8 +1,8 @@
 //! `svelte/no-unused-svelte-ignore` — disallow unused svelte-ignore comments.
 //! ⭐ Recommended
 
-use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::TemplateNode;
+use crate::linter::{walk_template_nodes, LintContext, Rule};
 use oxc::span::Span;
 
 pub struct NoUnusedSvelteIgnore;

@@ -25,16 +25,15 @@ impl Rule for NoInspect {
         .filter_map(|(s, o)| s.map(|s| (s, o)))
         {
             for node in sem.nodes().iter() {
-                let AstKind::IdentifierReference(id) = node.kind() else { continue };
+                let AstKind::IdentifierReference(id) = node.kind() else {
+                    continue;
+                };
                 if id.name != "$inspect" {
                     continue;
                 }
                 let s = offset + id.span.start;
                 let e = offset + id.span.end;
-                ctx.diagnostic(
-                    "Do not use $inspect directive",
-                    Span::new(s, e),
-                );
+                ctx.diagnostic("Do not use $inspect directive", Span::new(s, e));
             }
         }
     }

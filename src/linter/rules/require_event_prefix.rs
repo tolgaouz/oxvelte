@@ -2,8 +2,7 @@
 
 use crate::linter::{LintContext, Rule};
 use oxc::ast::ast::{
-    Expression, PropertyKey, Statement, TSSignature, TSType, TSTypeName,
-    VariableDeclarationKind,
+    Expression, PropertyKey, Statement, TSSignature, TSType, TSTypeName, VariableDeclarationKind,
 };
 use oxc::span::Span;
 
@@ -15,11 +14,18 @@ impl Rule for RequireEventPrefix {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let Some(script) = ctx.ast.instance.as_ref() else { return };
-        if !matches!(script.lang.as_deref(), Some("ts" | "typescript" | "TS" | "Typescript" | "TypeScript")) {
+        let Some(script) = ctx.ast.instance.as_ref() else {
+            return;
+        };
+        if !matches!(
+            script.lang.as_deref(),
+            Some("ts" | "typescript" | "TS" | "Typescript" | "TypeScript")
+        ) {
             return;
         }
-        let Some(semantic) = ctx.instance_semantic else { return };
+        let Some(semantic) = ctx.instance_semantic else {
+            return;
+        };
         let content_offset = ctx.instance_content_offset;
 
         let check_async = ctx
@@ -33,8 +39,15 @@ impl Rule for RequireEventPrefix {
             .unwrap_or(false);
 
         for stmt in &semantic.nodes().program().body {
-            let Statement::VariableDeclaration(vd) = stmt else { continue };
-            if !matches!(vd.kind, VariableDeclarationKind::Let | VariableDeclarationKind::Const | VariableDeclarationKind::Var) {
+            let Statement::VariableDeclaration(vd) = stmt else {
+                continue;
+            };
+            if !matches!(
+                vd.kind,
+                VariableDeclarationKind::Let
+                    | VariableDeclarationKind::Const
+                    | VariableDeclarationKind::Var
+            ) {
                 continue;
             }
             for d in &vd.declarations {
@@ -45,9 +58,19 @@ impl Rule for RequireEventPrefix {
                     ),
                     _ => false,
                 });
-                if !is_props_call { continue; }
-                let Some(ann) = d.type_annotation.as_deref() else { continue };
-                check_props_type(ctx, content_offset, semantic, &ann.type_annotation, check_async);
+                if !is_props_call {
+                    continue;
+                }
+                let Some(ann) = d.type_annotation.as_deref() else {
+                    continue;
+                };
+                check_props_type(
+                    ctx,
+                    content_offset,
+                    semantic,
+                    &ann.type_annotation,
+                    check_async,
+                );
             }
         }
     }
@@ -80,13 +103,25 @@ fn check_props_type(
                     }
                 } else if let Statement::TSTypeAliasDeclaration(alias) = stmt {
                     if alias.id.name == name {
-                        check_props_type(ctx, content_offset, semantic, &alias.type_annotation, check_async);
+                        check_props_type(
+                            ctx,
+                            content_offset,
+                            semantic,
+                            &alias.type_annotation,
+                            check_async,
+                        );
                     }
                 }
             }
         }
         TSType::TSParenthesizedType(p) => {
-            check_props_type(ctx, content_offset, semantic, &p.type_annotation, check_async);
+            check_props_type(
+                ctx,
+                content_offset,
+                semantic,
+                &p.type_annotation,
+                check_async,
+            );
         }
         _ => {}
     }
@@ -100,16 +135,30 @@ fn check_signature(
 ) {
     match sig {
         TSSignature::TSMethodSignature(m) => {
-            let Some((name, span)) = key_name_and_span(&m.key) else { return };
-            if name.starts_with("on") { return; }
-            if !check_async && method_returns_promise(m) { return; }
+            let Some((name, span)) = key_name_and_span(&m.key) else {
+                return;
+            };
+            if name.starts_with("on") {
+                return;
+            }
+            if !check_async && method_returns_promise(m) {
+                return;
+            }
             report(ctx, content_offset, span);
         }
         TSSignature::TSPropertySignature(p) => {
-            let Some(ann) = &p.type_annotation else { return };
-            if !matches!(&ann.type_annotation, TSType::TSFunctionType(_)) { return; }
-            let Some((name, span)) = key_name_and_span(&p.key) else { return };
-            if name.starts_with("on") { return; }
+            let Some(ann) = &p.type_annotation else {
+                return;
+            };
+            if !matches!(&ann.type_annotation, TSType::TSFunctionType(_)) {
+                return;
+            }
+            let Some((name, span)) = key_name_and_span(&p.key) else {
+                return;
+            };
+            if name.starts_with("on") {
+                return;
+            }
             // Vendor's `isFunctionAsync` only matches TSMethodSignature, so
             // `() => Promise<void>` is always reported here — mirror that.
             report(ctx, content_offset, span);
@@ -127,8 +176,12 @@ fn key_name_and_span<'a>(key: &'a PropertyKey<'a>) -> Option<(&'a str, Span)> {
 }
 
 fn method_returns_promise(m: &oxc::ast::ast::TSMethodSignature<'_>) -> bool {
-    let Some(rt) = &m.return_type else { return false };
-    let TSType::TSTypeReference(tr) = &rt.type_annotation else { return false };
+    let Some(rt) = &m.return_type else {
+        return false;
+    };
+    let TSType::TSTypeReference(tr) = &rt.type_annotation else {
+        return false;
+    };
     matches!(&tr.type_name, TSTypeName::IdentifierReference(id) if id.name == "Promise")
 }
 

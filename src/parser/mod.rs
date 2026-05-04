@@ -61,8 +61,15 @@ pub fn parse<'a>(source: &'a str, allocator: &'a Allocator) -> ParseResult<'a> {
         content_span: r.content_span,
     });
 
-    let (html, template_errors) = template::parse_fragment_with_errors(trimmed, allocator);
+    let (mut html, template_errors) = template::parse_fragment_with_errors(trimmed, allocator);
     errors.extend(template_errors);
+
+    // Post-pass: parse every attribute expression's text into a typed AST so
+    // rules can pattern-match on `oxc::ast::Expression` instead of substring-
+    // searching the raw text. Doing this here (rather than inside the
+    // template parser) sidesteps a borrow-checker false positive — by this
+    // point the template AST is fully owned and we just need `&'a Allocator`.
+    populate_attribute_expression_asts(&mut html, allocator);
 
     ParseResult {
         ast: SvelteAst {
@@ -74,6 +81,110 @@ pub fn parse<'a>(source: &'a str, allocator: &'a Allocator) -> ParseResult<'a> {
         },
         errors,
     }
+}
+
+/// Walks every `Element` in the parsed fragment and fills in
+/// `AttributeMeta::expression_ast` (single-expression attributes) and
+/// `AttributePartMeta::expression_ast` (mustache parts of `Concat` values).
+fn populate_attribute_expression_asts<'a>(
+    fragment: &mut crate::ast::Fragment<'a>,
+    allocator: &'a oxc::allocator::Allocator,
+) {
+    use crate::ast::{Attribute, AttributeValue, AttributeValuePart, TemplateNode};
+
+    fn parse_text<'a>(
+        text: &str,
+        allocator: &'a oxc::allocator::Allocator,
+    ) -> Option<&'a oxc::ast::ast::Expression<'a>> {
+        use oxc::allocator::CloneIn;
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let result = crate::parser::expression::parse_template_expression(trimmed, allocator);
+        if !result.errors.is_empty() {
+            return None;
+        }
+        let expr = crate::parser::expression::unwrap_template_expression(&result)?;
+        Some(allocator.alloc(expr.clone_in(allocator)))
+    }
+
+    fn walk<'a>(nodes: &mut [TemplateNode<'a>], allocator: &'a oxc::allocator::Allocator) {
+        for node in nodes {
+            match node {
+                TemplateNode::Element(el) => {
+                    for (idx, attr) in el.attributes.iter().enumerate() {
+                        let Some(meta) = el.attribute_meta.get_mut(idx) else { continue };
+                        let expr_text = match attr {
+                            Attribute::NormalAttribute {
+                                value: AttributeValue::Expression(s),
+                                ..
+                            } => Some(s.as_str()),
+                            Attribute::Directive {
+                                value: AttributeValue::Expression(s),
+                                ..
+                            } => Some(s.as_str()),
+                            _ => None,
+                        };
+                        if let Some(text) = expr_text {
+                            meta.expression_ast = parse_text(text, allocator);
+                        }
+                        // Concat parts.
+                        let concat_parts = match attr {
+                            Attribute::NormalAttribute {
+                                value: AttributeValue::Concat(parts),
+                                ..
+                            } => Some(parts),
+                            Attribute::Directive {
+                                value: AttributeValue::Concat(parts),
+                                ..
+                            } => Some(parts),
+                            _ => None,
+                        };
+                        if let Some(parts) = concat_parts {
+                            for (part_idx, part) in parts.iter().enumerate() {
+                                let Some(part_meta) = meta.parts.get_mut(part_idx) else {
+                                    continue;
+                                };
+                                if let AttributeValuePart::Expression(s) = part {
+                                    part_meta.expression_ast = parse_text(s, allocator);
+                                }
+                            }
+                        }
+                    }
+                    walk(&mut el.children, allocator);
+                }
+                TemplateNode::IfBlock(b) => {
+                    walk(&mut b.consequent.nodes, allocator);
+                    if let Some(alt) = &mut b.alternate {
+                        walk(std::slice::from_mut(alt.as_mut()), allocator);
+                    }
+                }
+                TemplateNode::EachBlock(b) => {
+                    walk(&mut b.body.nodes, allocator);
+                    if let Some(fb) = &mut b.fallback {
+                        walk(&mut fb.nodes, allocator);
+                    }
+                }
+                TemplateNode::AwaitBlock(b) => {
+                    if let Some(p) = &mut b.pending {
+                        walk(&mut p.nodes, allocator);
+                    }
+                    if let Some(t) = &mut b.then {
+                        walk(&mut t.nodes, allocator);
+                    }
+                    if let Some(c) = &mut b.catch {
+                        walk(&mut c.nodes, allocator);
+                    }
+                }
+                TemplateNode::KeyBlock(b) => walk(&mut b.body.nodes, allocator),
+                TemplateNode::SnippetBlock(b) => walk(&mut b.body.nodes, allocator),
+                _ => {}
+            }
+        }
+    }
+
+    walk(&mut fragment.nodes, allocator);
 }
 
 // ─── Region extraction ─────────────────────────────────────────────────────

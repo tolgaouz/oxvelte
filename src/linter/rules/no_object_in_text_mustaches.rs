@@ -1,8 +1,8 @@
 //! `svelte/no-object-in-text-mustaches` — disallow objects in text mustache interpolation.
 //! ⭐ Recommended
 
-use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::{Attribute, AttributeValue, AttributeValuePart, TemplateNode};
+use crate::linter::{walk_template_nodes, LintContext, Rule};
 
 pub struct NoObjectInTextMustaches;
 
@@ -16,33 +16,43 @@ impl Rule for NoObjectInTextMustaches {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        walk_template_nodes(&ctx.ast.html, &mut |node| {
-            match node {
-                TemplateNode::MustacheTag(tag) => {
-                    let expr = tag.expression.trim();
-                    let kind = detect_expression_kind(expr);
-                    if let Some(label) = kind {
-                        ctx.diagnostic(format!("Unexpected {} in text mustache interpolation.", label),
-                            tag.span);
-                    }
+        walk_template_nodes(&ctx.ast.html, &mut |node| match node {
+            TemplateNode::MustacheTag(tag) => {
+                let expr = tag.expression.trim();
+                let kind = detect_expression_kind(expr);
+                if let Some(label) = kind {
+                    ctx.diagnostic(
+                        format!("Unexpected {} in text mustache interpolation.", label),
+                        tag.span,
+                    );
                 }
-                TemplateNode::Element(el) => {
-                    for attr in &el.attributes {
-                        if let Attribute::NormalAttribute { value: AttributeValue::Concat(parts), span, .. } = attr {
-                            for part in parts {
-                                if let AttributeValuePart::Expression(expr) = part {
-                                    let trimmed = expr.trim();
-                                    if let Some(label) = detect_expression_kind(trimmed) {
-                                        ctx.diagnostic(format!("Unexpected {} in text mustache interpolation.", label),
-                                            *span);
-                                    }
+            }
+            TemplateNode::Element(el) => {
+                for attr in &el.attributes {
+                    if let Attribute::NormalAttribute {
+                        value: AttributeValue::Concat(parts),
+                        span,
+                        ..
+                    } = attr
+                    {
+                        for part in parts {
+                            if let AttributeValuePart::Expression(expr) = part {
+                                let trimmed = expr.trim();
+                                if let Some(label) = detect_expression_kind(trimmed) {
+                                    ctx.diagnostic(
+                                        format!(
+                                            "Unexpected {} in text mustache interpolation.",
+                                            label
+                                        ),
+                                        *span,
+                                    );
                                 }
                             }
                         }
                     }
                 }
-                _ => {}
             }
+            _ => {}
         });
     }
 }
@@ -66,7 +76,11 @@ fn detect_expression_kind(expr: &str) -> Option<&'static str> {
     }
     if expr.starts_with("function") {
         let after = &expr["function".len()..];
-        if after.is_empty() || after.starts_with(' ') || after.starts_with('(') || after.starts_with('*') {
+        if after.is_empty()
+            || after.starts_with(' ')
+            || after.starts_with('(')
+            || after.starts_with('*')
+        {
             return Some("function");
         }
     }
@@ -87,9 +101,12 @@ fn is_top_level_arrow(expr: &str) -> bool {
         None => s,
     };
     if s.starts_with('(') {
-        return find_matching(s, '(', ')').is_some_and(|close| s[close + 1..].trim_start().starts_with("=>"));
+        return find_matching(s, '(', ')')
+            .is_some_and(|close| s[close + 1..].trim_start().starts_with("=>"));
     }
-    let end = s.find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$').unwrap_or(s.len());
+    let end = s
+        .find(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
+        .unwrap_or(s.len());
     end > 0 && s[end..].trim_start().starts_with("=>")
 }
 
@@ -103,7 +120,9 @@ fn find_matching(s: &str, open: char, close: char) -> Option<usize> {
             c2 if c2 == open && in_string.is_none() => depth += 1,
             c2 if c2 == close && in_string.is_none() => {
                 depth -= 1;
-                if depth == 0 { return Some(i); }
+                if depth == 0 {
+                    return Some(i);
+                }
             }
             _ => {}
         }

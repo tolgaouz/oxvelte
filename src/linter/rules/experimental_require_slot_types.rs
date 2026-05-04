@@ -1,8 +1,8 @@
 //! `svelte/experimental-require-slot-types` — require slot types to be defined
 //! for components that expose slots.
 
-use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::TemplateNode;
+use crate::linter::{walk_template_nodes, LintContext, Rule};
 use oxc::ast::ast::Statement;
 use oxc::ast::AstKind;
 use oxc::span::Span;
@@ -10,7 +10,9 @@ use oxc::span::Span;
 pub struct ExperimentalRequireSlotTypes;
 
 fn is_ts(lang: Option<&str>) -> bool {
-    lang.map_or(false, |l| l.eq_ignore_ascii_case("ts") || l.eq_ignore_ascii_case("typescript"))
+    lang.map_or(false, |l| {
+        l.eq_ignore_ascii_case("ts") || l.eq_ignore_ascii_case("typescript")
+    })
 }
 
 impl Rule for ExperimentalRequireSlotTypes {
@@ -19,6 +21,10 @@ impl Rule for ExperimentalRequireSlotTypes {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
+        // Vendor's `meta.conditions` excludes Svelte 5 runes mode.
+        if ctx.is_runes {
+            return;
+        }
         let is_ts_file = [&ctx.ast.instance, &ctx.ast.module]
             .iter()
             .any(|s| s.as_ref().map_or(false, |s| is_ts(s.lang.as_deref())));

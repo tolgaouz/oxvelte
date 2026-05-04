@@ -13,13 +13,19 @@ impl Rule for NoIgnoredUnsubscribe {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let Some(semantic) = ctx.instance_semantic else { return };
+        let Some(semantic) = ctx.instance_semantic else {
+            return;
+        };
         let content_offset = ctx.instance_content_offset;
         let nodes = semantic.nodes();
 
         for node in nodes.iter() {
-            let AstKind::CallExpression(ce) = node.kind() else { continue };
-            let Expression::StaticMemberExpression(mem) = &ce.callee else { continue };
+            let AstKind::CallExpression(ce) = node.kind() else {
+                continue;
+            };
+            let Expression::StaticMemberExpression(mem) = &ce.callee else {
+                continue;
+            };
             if mem.property.name != "subscribe" {
                 continue;
             }

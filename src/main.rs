@@ -1,11 +1,15 @@
-use oxvelte::{parser, linter};
+use oxvelte::{linter, parser};
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 #[derive(Parser)]
-#[command(name = "oxvelte", version, about = "A fast Svelte linter powered by oxc")]
+#[command(
+    name = "oxvelte",
+    version,
+    about = "A fast Svelte linter powered by oxc"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -60,8 +64,18 @@ enum Command {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
-        Command::Lint { paths, all_rules, fix: _, json, quiet } => cmd_lint(&paths, all_rules, json, quiet),
-        Command::Parse { file, pretty, format } => cmd_parse(&file, pretty, &format),
+        Command::Lint {
+            paths,
+            all_rules,
+            fix: _,
+            json,
+            quiet,
+        } => cmd_lint(&paths, all_rules, json, quiet),
+        Command::Parse {
+            file,
+            pretty,
+            format,
+        } => cmd_parse(&file, pretty, &format),
         Command::Check { paths } => cmd_lint(&paths, false, false, false),
         Command::Rules => cmd_rules(),
         Command::Migrate { file, write } => cmd_convert_config(&file, write),
@@ -86,13 +100,24 @@ fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool, quiet: bool) 
     use rayon::prelude::*;
 
     // Load config (walks up from the first path, or cwd).
-    let config_dir = paths.first()
-        .and_then(|p| if p.is_dir() { Some(p.clone()) } else { p.parent().map(|p| p.to_path_buf()) })
+    let config_dir = paths
+        .first()
+        .and_then(|p| {
+            if p.is_dir() {
+                Some(p.clone())
+            } else {
+                p.parent().map(|p| p.to_path_buf())
+            }
+        })
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
     let config = oxvelte::config::OxvelteConfig::load(&config_dir);
 
     #[allow(unused_mut)]
-    let mut lint = if all_rules { linter::Linter::all() } else { linter::Linter::recommended() };
+    let mut lint = if all_rules {
+        linter::Linter::all()
+    } else {
+        linter::Linter::recommended()
+    };
 
     // Drop rules disabled in config.
     lint.remove_disabled_rules(&config);
@@ -101,7 +126,8 @@ fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool, quiet: bool) 
     #[cfg(feature = "custom-rules")]
     {
         if !config.custom_rules.is_empty() {
-            let custom = oxvelte::custom_rules::load_custom_rules(&config.custom_rules, &config_dir);
+            let custom =
+                oxvelte::custom_rules::load_custom_rules(&config.custom_rules, &config_dir);
             lint = lint.with_custom_rules(custom);
         }
     }
@@ -111,40 +137,64 @@ fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool, quiet: bool) 
     let use_color = !json_output && atty::is(atty::Stream::Stderr);
     let start = std::time::Instant::now();
 
-    let mut file_results: Vec<FileResult> = files.par_iter().filter_map(|path| {
-        let source = std::fs::read_to_string(path).ok()?;
-        let path_str = path.to_string_lossy();
-        let is_svelte = path.extension().is_some_and(|e| e == "svelte");
-        let is_svelte_module = path_str.ends_with(".svelte.js") || path_str.ends_with(".svelte.ts");
-        let file_path_owned = path_str.to_string();
-        let diags = if is_svelte {
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let alloc = oxc::allocator::Allocator::default();
-                let result = parser::parse(&source, &alloc);
-                lint.lint_with_config_and_path(&result.ast, &source, oxvelte::linter::RuleConfig::default(), &file_path_owned)
-            })) {
-                Ok(d) => d,
-                Err(_) => {
-                    eprintln!("oxvelte: internal error parsing {}", path.display());
-                    return None;
+    let mut file_results: Vec<FileResult> = files
+        .par_iter()
+        .filter_map(|path| {
+            let source = std::fs::read_to_string(path).ok()?;
+            let path_str = path.to_string_lossy();
+            let is_svelte = path.extension().is_some_and(|e| e == "svelte");
+            let is_svelte_module =
+                path_str.ends_with(".svelte.js") || path_str.ends_with(".svelte.ts");
+            let file_path_owned = path_str.to_string();
+            let diags = if is_svelte {
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let alloc = oxc::allocator::Allocator::default();
+                    let result = parser::parse(&source, &alloc);
+                    lint.lint_with_config_and_path(
+                        &result.ast,
+                        &source,
+                        oxvelte::linter::RuleConfig::default(),
+                        &file_path_owned,
+                    )
+                })) {
+                    Ok(d) => d,
+                    Err(_) => {
+                        eprintln!("oxvelte: internal error parsing {}", path.display());
+                        return None;
+                    }
                 }
+            } else if is_svelte_module {
+                let is_ts = path_str.ends_with(".ts");
+                lint.lint_svelte_script(&source, is_ts)
+            } else {
+                lint.lint_script(&source)
+            };
+            if diags.is_empty() {
+                return None;
             }
-        } else if is_svelte_module {
-            let is_ts = path_str.ends_with(".ts");
-            lint.lint_svelte_script(&source, is_ts)
-        } else {
-            lint.lint_script(&source)
-        };
-        if diags.is_empty() { return None; }
-        let abs_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
-        let path_str = abs_path.display().to_string();
-        let diagnostics: Vec<FileDiagnostic> = diags.iter().map(|d| {
-            let (line, col) = offset_to_line_col(&source, d.span.start as usize);
-            let (end_line, end_col) = offset_to_line_col(&source, d.span.end as usize);
-            FileDiagnostic { line, col, end_line, end_col, message: d.message.clone(), rule_name: d.rule_name }
-        }).collect();
-        Some(FileResult { path: path_str, diagnostics })
-    }).collect();
+            let abs_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+            let path_str = abs_path.display().to_string();
+            let diagnostics: Vec<FileDiagnostic> = diags
+                .iter()
+                .map(|d| {
+                    let (line, col) = offset_to_line_col(&source, d.span.start as usize);
+                    let (end_line, end_col) = offset_to_line_col(&source, d.span.end as usize);
+                    FileDiagnostic {
+                        line,
+                        col,
+                        end_line,
+                        end_col,
+                        message: d.message.clone(),
+                        rule_name: d.rule_name,
+                    }
+                })
+                .collect();
+            Some(FileResult {
+                path: path_str,
+                diagnostics,
+            })
+        })
+        .collect();
 
     file_results.sort_by(|a, b| a.path.cmp(&b.path));
 
@@ -153,18 +203,26 @@ fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool, quiet: bool) 
 
     if !quiet {
         if json_output {
-            let json_results: Vec<serde_json::Value> = file_results.iter().flat_map(|f| {
-                f.diagnostics.iter().map(|d| serde_json::json!({
-                    "file": &f.path,
-                    "rule": d.rule_name,
-                    "message": &d.message,
-                    "line": d.line,
-                    "column": d.col,
-                    "endLine": d.end_line,
-                    "endColumn": d.end_col,
-                }))
-            }).collect();
-            println!("{}", serde_json::to_string_pretty(&json_results).unwrap_or_default());
+            let json_results: Vec<serde_json::Value> = file_results
+                .iter()
+                .flat_map(|f| {
+                    f.diagnostics.iter().map(|d| {
+                        serde_json::json!({
+                            "file": &f.path,
+                            "rule": d.rule_name,
+                            "message": &d.message,
+                            "line": d.line,
+                            "column": d.col,
+                            "endLine": d.end_line,
+                            "endColumn": d.end_col,
+                        })
+                    })
+                })
+                .collect();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json_results).unwrap_or_default()
+            );
         } else {
             for file_result in &file_results {
                 // File header — underlined, clickable in VS Code
@@ -175,9 +233,12 @@ fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool, quiet: bool) 
                 }
 
                 // Find max widths for alignment
-                let max_loc_width = file_result.diagnostics.iter()
+                let max_loc_width = file_result
+                    .diagnostics
+                    .iter()
                     .map(|d| format!("{}:{}", d.line, d.col).len())
-                    .max().unwrap_or(0);
+                    .max()
+                    .unwrap_or(0);
 
                 for d in &file_result.diagnostics {
                     let loc = format!("{}:{}", d.line, d.col);
@@ -189,7 +250,10 @@ fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool, quiet: bool) 
                     } else {
                         eprintln!(
                             "  {:<width$}  warning  {}  {}",
-                            loc, d.message, d.rule_name, width = max_loc_width
+                            loc,
+                            d.message,
+                            d.rule_name,
+                            width = max_loc_width
                         );
                     }
                 }
@@ -197,9 +261,15 @@ fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool, quiet: bool) 
 
             if total_diags > 0 {
                 if use_color {
-                    eprintln!("\n\x1b[1;31m\u{2716} {} problem(s) in {} file(s).\x1b[0m", total_diags, files_with_diags);
+                    eprintln!(
+                        "\n\x1b[1;31m\u{2716} {} problem(s) in {} file(s).\x1b[0m",
+                        total_diags, files_with_diags
+                    );
                 } else {
-                    eprintln!("\n{} problem(s) in {} file(s).", total_diags, files_with_diags);
+                    eprintln!(
+                        "\n{} problem(s) in {} file(s).",
+                        total_diags, files_with_diags
+                    );
                 }
             }
         }
@@ -213,10 +283,17 @@ fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool, quiet: bool) 
                 eprintln!("\x1b[1m{}\x1b[0m file(s) scanned in \x1b[1m{:.0?}\x1b[0m, \x1b[1;32m0 problems\x1b[0m found.", file_count, elapsed);
             }
         } else {
-            eprintln!("{} file(s) scanned in {:.0?}, {} problem(s) found.", file_count, elapsed, total_diags);
+            eprintln!(
+                "{} file(s) scanned in {:.0?}, {} problem(s) found.",
+                file_count, elapsed, total_diags
+            );
         }
     }
-    if total_diags > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS }
+    if total_diags > 0 {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 fn cmd_parse(file: &PathBuf, pretty: bool, format: &str) -> ExitCode {
@@ -224,7 +301,10 @@ fn cmd_parse(file: &PathBuf, pretty: bool, format: &str) -> ExitCode {
 
     let source = match std::fs::read_to_string(file) {
         Ok(s) => s,
-        Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); return ExitCode::from(1); }
+        Err(e) => {
+            eprintln!("Error reading {}: {}", file.display(), e);
+            return ExitCode::from(1);
+        }
     };
     let alloc = oxc::allocator::Allocator::default();
     let result = parser::parse(&source, &alloc);
@@ -243,25 +323,40 @@ fn cmd_parse(file: &PathBuf, pretty: bool, format: &str) -> ExitCode {
         serde_json::to_string(&json_value)
     };
     match output {
-        Ok(j) => { println!("{}", j); ExitCode::SUCCESS }
-        Err(e) => { eprintln!("JSON error: {}", e); ExitCode::from(1) }
+        Ok(j) => {
+            println!("{}", j);
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("JSON error: {}", e);
+            ExitCode::from(1)
+        }
     }
 }
 
 fn cmd_rules() -> ExitCode {
     let rules = linter::rules::all_rules();
     let recommended = linter::rules::recommended_rules();
-    let rec_names: std::collections::HashSet<String> = recommended.iter().map(|r| r.name().to_string()).collect();
+    let rec_names: std::collections::HashSet<String> =
+        recommended.iter().map(|r| r.name().to_string()).collect();
 
     println!("{:<50} {:>5}  {:>5}", "Rule", "Rec", "Fix");
     println!("{}", "-".repeat(65));
     for rule in &rules {
         let name = rule.name();
-        let is_rec = if rec_names.contains(name) { "  *  " } else { "     " };
+        let is_rec = if rec_names.contains(name) {
+            "  *  "
+        } else {
+            "     "
+        };
         let is_fix = if rule.is_fixable() { "  *  " } else { "     " };
         println!("{:<50} {:>5}  {:>5}", name, is_rec, is_fix);
     }
-    println!("\n{} rules total ({} recommended)", rules.len(), recommended.len());
+    println!(
+        "\n{} rules total ({} recommended)",
+        rules.len(),
+        recommended.len()
+    );
     ExitCode::SUCCESS
 }
 
@@ -275,7 +370,10 @@ fn cmd_convert_config(file: &PathBuf, write: bool) -> ExitCode {
     };
 
     // Try to extract JSON from JS/MJS config files (common flat config pattern)
-    let json_str = if file.extension().is_some_and(|e| e == "mjs" || e == "js" || e == "cjs") {
+    let json_str = if file
+        .extension()
+        .is_some_and(|e| e == "mjs" || e == "js" || e == "cjs")
+    {
         eprintln!("Note: JS config files are partially supported. Only inline JSON objects with svelte rules will be extracted.");
         eprintln!("For best results, export your ESLint config as JSON first:");
         eprintln!("  npx eslint --print-config yourfile.svelte > eslint-resolved.json");
@@ -465,12 +563,24 @@ fn extract_rules_from_js(content: &str) -> String {
                         let val = rest.trim().trim_end_matches(',');
                         // Try to parse as JSON
                         if let Ok(v) = serde_json::from_str::<serde_json::Value>(val) {
-                            rules.insert(format!("svelte/{}", rule_name.strip_prefix("svelte/").unwrap_or(rule_name)), v);
+                            rules.insert(
+                                format!(
+                                    "svelte/{}",
+                                    rule_name.strip_prefix("svelte/").unwrap_or(rule_name)
+                                ),
+                                v,
+                            );
                         } else {
                             // Try with quotes normalized
                             let normalized = val.replace('\'', "\"");
                             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&normalized) {
-                                rules.insert(format!("svelte/{}", rule_name.strip_prefix("svelte/").unwrap_or(rule_name)), v);
+                                rules.insert(
+                                    format!(
+                                        "svelte/{}",
+                                        rule_name.strip_prefix("svelte/").unwrap_or(rule_name)
+                                    ),
+                                    v,
+                                );
                             }
                         }
                     }
@@ -486,8 +596,15 @@ fn offset_to_line_col(source: &str, offset: usize) -> (usize, usize) {
     let mut line = 1;
     let mut col = 1;
     for (i, ch) in source.char_indices() {
-        if i >= offset { break; }
-        if ch == '\n' { line += 1; col = 1; } else { col += 1; }
+        if i >= offset {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
     }
     (line, col)
 }
@@ -505,7 +622,10 @@ fn collect_lint_files(paths: &[PathBuf]) -> Vec<PathBuf> {
             }
         } else if path.is_dir() {
             let dirname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if matches!(dirname, "node_modules" | ".svelte-kit" | "build" | "dist" | ".git") {
+            if matches!(
+                dirname,
+                "node_modules" | ".svelte-kit" | "build" | "dist" | ".git"
+            ) {
                 continue;
             }
             if let Ok(entries) = std::fs::read_dir(&path) {

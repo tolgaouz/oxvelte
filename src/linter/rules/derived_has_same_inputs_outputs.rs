@@ -19,12 +19,18 @@ impl Rule for DerivedHasSameInputsOutputs {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let Some(semantic) = ctx.instance_semantic else { return };
+        let Some(semantic) = ctx.instance_semantic else {
+            return;
+        };
         let content_offset = ctx.instance_content_offset;
 
         for node in semantic.nodes().iter() {
-            let AstKind::CallExpression(ce) = node.kind() else { continue };
-            let Expression::Identifier(callee) = &ce.callee else { continue };
+            let AstKind::CallExpression(ce) = node.kind() else {
+                continue;
+            };
+            let Expression::Identifier(callee) = &ce.callee else {
+                continue;
+            };
             if callee.name != "derived" {
                 continue;
             }
@@ -33,13 +39,17 @@ impl Rule for DerivedHasSameInputsOutputs {
                 Argument::Identifier(id) => Some(id.name.as_str()),
                 _ => None,
             });
-            let Some(store_name) = store_name else { continue };
+            let Some(store_name) = store_name else {
+                continue;
+            };
             let param_name = ce.arguments.get(1).and_then(|a| match a {
                 Argument::ArrowFunctionExpression(arr) => param_binding_name(&arr.params.items),
                 Argument::FunctionExpression(f) => param_binding_name(&f.params.items),
                 _ => None,
             });
-            let Some(param_name) = param_name else { continue };
+            let Some(param_name) = param_name else {
+                continue;
+            };
             let expected = format!("${}", store_name);
             // If the param matches the expected $-prefixed name OR the store's
             // own name, accept.

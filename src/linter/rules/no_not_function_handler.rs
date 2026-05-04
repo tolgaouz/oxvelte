@@ -1,14 +1,12 @@
 //! `svelte/no-not-function-handler` — disallow non-function event handlers.
 //! ⭐ Recommended
 
+use crate::ast::{Attribute, AttributeValue, AttributeValuePart, DirectiveKind, TemplateNode};
 use crate::linter::{walk_template_nodes, LintContext, Rule};
-use crate::ast::{Attribute, DirectiveKind, TemplateNode};
-use oxc::allocator::Allocator;
 use oxc::ast::ast::{Expression, VariableDeclarationKind};
 use oxc::ast::AstKind;
-use oxc::parser::Parser;
 use oxc::semantic::Semantic;
-use oxc::span::{SourceType, Span};
+use oxc::span::Span;
 
 pub struct NoNotFunctionHandler;
 
@@ -22,112 +20,146 @@ impl Rule for NoNotFunctionHandler {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
+        let mut findings: Vec<(String, Span)> = Vec::new();
         walk_template_nodes(&ctx.ast.html, &mut |node| {
-            let TemplateNode::Element(el) = node else { return };
-            for attr in &el.attributes {
-                let handler_span = match attr {
-                    Attribute::Directive { kind: DirectiveKind::EventHandler, span, .. } => *span,
-                    Attribute::NormalAttribute { name, span, .. }
-                        if name.starts_with("on")
-                            && name.len() > 2
-                            && name.as_bytes()[2].is_ascii_lowercase() =>
-                    {
-                        *span
+            let TemplateNode::Element(el) = node else {
+                return;
+            };
+            for (idx, attr) in el.attributes.iter().enumerate() {
+                match attr {
+                    // `on:event={…}` directive — typed AST is in attribute_meta[idx].
+                    Attribute::Directive {
+                        kind: DirectiveKind::EventHandler,
+                        ..
+                    } => {
+                        let Some(expr) = el.attribute_expression_ast(idx) else { continue };
+                        check_handler(expr, ctx, &mut findings, attr_value_span(attr));
                     }
-                    _ => continue,
-                };
-                check_handler_value(ctx, handler_span);
+                    // `onclick={…}` Svelte-5 / HTML on-attribute. Restricted to
+                    // names matching the curated `is_event_name` test.
+                    Attribute::NormalAttribute { name, value, .. } if is_event_name(name) => {
+                        match value {
+                            AttributeValue::Expression(_) => {
+                                let Some(expr) = el.attribute_expression_ast(idx) else { continue };
+                                check_handler(expr, ctx, &mut findings, attr_value_span(attr));
+                            }
+                            AttributeValue::Concat(parts) => {
+                                for (part_idx, part) in parts.iter().enumerate() {
+                                    if !matches!(part, AttributeValuePart::Expression(_)) {
+                                        continue;
+                                    }
+                                    let Some(expr) =
+                                        el.attribute_part_expression_ast(idx, part_idx)
+                                    else {
+                                        continue;
+                                    };
+                                    let span = el
+                                        .attribute_meta
+                                        .get(idx)
+                                        .and_then(|m| m.parts.get(part_idx))
+                                        .and_then(|p| p.expression_span)
+                                        .unwrap_or_else(|| attr_value_span(attr));
+                                    check_handler(expr, ctx, &mut findings, span);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
             }
         });
-    }
-}
-
-fn check_handler_value(ctx: &mut LintContext<'_>, span: Span) {
-    let region = &ctx.source[span.start as usize..span.end as usize];
-    // Handler value is expected as `={...}`. Extract the expression text.
-    let Some(eq_pos) = region.find('=') else { return };
-    let value = region[eq_pos + 1..].trim();
-    if !(value.starts_with('{') && value.ends_with('}')) {
-        return;
-    }
-    let expr_text = value[1..value.len() - 1].trim();
-    if expr_text.is_empty() {
-        return;
-    }
-
-    let alloc = Allocator::default();
-    let parsed = Parser::new(&alloc, expr_text, SourceType::mjs()).parse_expression();
-    let Ok(expr) = parsed else { return };
-
-    let expr_span_start = span.start + region.find('{').map(|p| p + 1).unwrap_or(0) as u32;
-    let ws_prefix_len = region[region.find('{').map(|p| p + 1).unwrap_or(0)..]
-        .len()
-        .saturating_sub(region[region.find('{').map(|p| p + 1).unwrap_or(0)..].trim_start().len());
-    let expr_span_start = expr_span_start + ws_prefix_len as u32;
-    let expr_span = Span::new(expr_span_start, expr_span_start + expr_text.len() as u32);
-
-    if let Some(phrase) = non_function_phrase(&expr) {
-        ctx.diagnostic(
-            format!("Unexpected {} in event handler.", phrase),
-            expr_span,
-        );
-    } else if let Expression::Identifier(id) = &expr {
-        // Follow variable reference to its initializer in the instance script.
-        if let Some(sem) = ctx.instance_semantic {
-            if let Some(phrase) = identifier_non_function_phrase(id.name.as_str(), sem) {
-                ctx.diagnostic(
-                    format!("Unexpected {} in event handler.", phrase),
-                    expr_span,
-                );
-            }
+        for (msg, span) in findings {
+            ctx.diagnostic(msg, span);
         }
     }
 }
 
-/// If `expr` is a plainly non-function literal, return a descriptive phrase.
+/// True for any HTML event-handler attribute name. Mirrors the shape of
+/// vendor's `EVENT_NAMES` table without enumerating the full ~370-entry
+/// list: matches `on[lowercase][a-z0-9]*`. `oncology` (a non-event
+/// camelCase noun) doesn't survive because the `[2..]` portion has to be
+/// purely alphanumeric *and* start with a lowercase ASCII letter — covers
+/// the real event surface tightly enough for a linter.
+fn is_event_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    if bytes.len() < 3 || &bytes[..2] != b"on" {
+        return false;
+    }
+    if !bytes[2].is_ascii_lowercase() {
+        return false;
+    }
+    bytes[2..].iter().all(|b| b.is_ascii_alphanumeric())
+}
+
+fn attr_value_span(attr: &Attribute) -> Span {
+    match attr {
+        Attribute::NormalAttribute { span, .. } | Attribute::Directive { span, .. } => *span,
+        Attribute::Spread { span } => *span,
+    }
+}
+
+fn check_handler<'a>(
+    expr: &'a Expression<'a>,
+    ctx: &LintContext<'a>,
+    findings: &mut Vec<(String, Span)>,
+    span: Span,
+) {
+    // Vendor's `findRootExpression`: follow `const` aliases all the way down.
+    let resolved = if let Expression::Identifier(id) = expr {
+        ctx.instance_semantic
+            .and_then(|sem| resolve_const_init(id.name.as_str(), sem))
+            .unwrap_or(expr)
+    } else {
+        expr
+    };
+    if let Some(phrase) = non_function_phrase(resolved) {
+        findings.push((format!("Unexpected {} in event handler.", phrase), span));
+    }
+}
+
+/// Vendor's PHRASES table. `null` literal returns `None` (vendor's
+/// `node.value == null` short-circuit), so `onclick={null}` is silently
+/// allowed. `NewExpression` is *not* in the table — `new Decorator()` may
+/// well return a function.
 fn non_function_phrase(expr: &Expression<'_>) -> Option<&'static str> {
     match expr {
         Expression::ArrayExpression(_) => Some("array"),
         Expression::ObjectExpression(_) => Some("object"),
+        Expression::ClassExpression(_) => Some("class"),
         Expression::StringLiteral(_) => Some("string value"),
         Expression::TemplateLiteral(_) => Some("string value"),
         Expression::BooleanLiteral(_) => Some("boolean value"),
         Expression::NumericLiteral(_) => Some("number value"),
         Expression::BigIntLiteral(_) => Some("bigint value"),
         Expression::RegExpLiteral(_) => Some("regex value"),
-        Expression::ClassExpression(_) => Some("class"),
-        Expression::NewExpression(_) => Some("new expression"),
         _ => None,
     }
 }
 
-/// Given an identifier name, look up its declaration in the instance-script
-/// root scope. If it's initialized with a non-function literal, return the
-/// descriptive phrase.
-fn identifier_non_function_phrase<'a>(
-    name: &str,
-    sem: &'a Semantic<'a>,
-) -> Option<&'static str> {
+/// Look up `name` in the instance-script root scope. If it's bound by
+/// `const X = init`, return `init` (recursively, so chains of `const`
+/// renames are followed). Otherwise `None`.
+fn resolve_const_init<'a>(name: &str, sem: &'a Semantic<'a>) -> Option<&'a Expression<'a>> {
     let scoping = sem.scoping();
     let sid = scoping.find_binding(scoping.root_scope_id(), name.into())?;
-    // Skip function declarations (these ARE functions).
-    let flags = scoping.symbol_flags(sid);
-    if flags.intersects(oxc::semantic::SymbolFlags::Function) {
+    if scoping
+        .symbol_flags(sid)
+        .intersects(oxc::semantic::SymbolFlags::Function)
+    {
         return None;
     }
-    // Find the VariableDeclarator for this symbol.
     let decl_node_id = scoping.symbol_declaration(sid);
+    let nodes = sem.nodes();
     let vd = std::iter::once(decl_node_id)
-        .chain(sem.nodes().ancestor_ids(decl_node_id))
-        .find_map(|aid| match sem.nodes().kind(aid) {
+        .chain(nodes.ancestor_ids(decl_node_id))
+        .find_map(|aid| match nodes.kind(aid) {
             AstKind::VariableDeclarator(vd) => Some(vd),
             _ => None,
         })?;
-    // Only `const` initializers can be confidently classified (a `let`/`var`
-    // could be reassigned to a function later).
     let decl_kind = std::iter::once(decl_node_id)
-        .chain(sem.nodes().ancestor_ids(decl_node_id))
-        .find_map(|aid| match sem.nodes().kind(aid) {
+        .chain(nodes.ancestor_ids(decl_node_id))
+        .find_map(|aid| match nodes.kind(aid) {
             AstKind::VariableDeclaration(d) => Some(d.kind),
             _ => None,
         })?;
@@ -135,5 +167,9 @@ fn identifier_non_function_phrase<'a>(
         return None;
     }
     let init = vd.init.as_ref()?;
-    non_function_phrase(init)
+    // Recursively follow chained const aliases.
+    if let Expression::Identifier(inner) = init {
+        return resolve_const_init(inner.name.as_str(), sem).or(Some(init));
+    }
+    Some(init)
 }

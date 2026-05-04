@@ -26,11 +26,11 @@
 //! lightweight textual classifier for the test expression because Svelte
 //! template expressions aren't pre-parsed into oxc AST here.
 
-use crate::linter::{LintContext, Rule};
 use crate::ast::TemplateNode;
+use crate::linter::{LintContext, Rule};
 use oxc::ast::ast::{
-    Declaration, Expression, ImportDeclarationSpecifier, ModuleExportName, Statement, Argument,
-    IdentifierReference,
+    Argument, Declaration, Expression, IdentifierReference, ImportDeclarationSpecifier,
+    ModuleExportName, Statement,
 };
 use oxc::ast::AstKind;
 use oxc::semantic::{AstNodes, NodeId, Semantic};
@@ -39,12 +39,30 @@ use oxc::syntax::operator::{BinaryOperator, LogicalOperator, UnaryOperator};
 use std::collections::HashSet;
 
 const BROWSER_GLOBALS: &[&str] = &[
-    "window", "document", "navigator", "localStorage", "sessionStorage",
-    "location", "history", "alert", "confirm", "prompt", "fetch",
-    "XMLHttpRequest", "requestAnimationFrame", "cancelAnimationFrame",
-    "setTimeout", "setInterval", "clearTimeout", "clearInterval",
-    "customElements", "getComputedStyle", "matchMedia",
-    "IntersectionObserver", "MutationObserver", "ResizeObserver",
+    "window",
+    "document",
+    "navigator",
+    "localStorage",
+    "sessionStorage",
+    "location",
+    "history",
+    "alert",
+    "confirm",
+    "prompt",
+    "fetch",
+    "XMLHttpRequest",
+    "requestAnimationFrame",
+    "cancelAnimationFrame",
+    "setTimeout",
+    "setInterval",
+    "clearTimeout",
+    "clearInterval",
+    "customElements",
+    "getComputedStyle",
+    "matchMedia",
+    "IntersectionObserver",
+    "MutationObserver",
+    "ResizeObserver",
 ];
 
 pub struct NoTopLevelBrowserGlobals;
@@ -79,12 +97,18 @@ struct GuardCtx {
 fn collect_guard_ctx(sem: &Semantic<'_>) -> GuardCtx {
     let mut ctx = GuardCtx::default();
     for stmt in &sem.nodes().program().body {
-        let Statement::ImportDeclaration(imp) = stmt else { continue };
+        let Statement::ImportDeclaration(imp) = stmt else {
+            continue;
+        };
         let src = imp.source.value.as_str();
         let is_app = src == "$app/environment";
         let is_esm = src == "esm-env";
-        if !is_app && !is_esm { continue; }
-        let Some(specs) = &imp.specifiers else { continue };
+        if !is_app && !is_esm {
+            continue;
+        }
+        let Some(specs) = &imp.specifiers else {
+            continue;
+        };
         for spec in specs {
             match spec {
                 ImportDeclarationSpecifier::ImportSpecifier(s) => {
@@ -114,17 +138,22 @@ fn analyze_test(expr: &Expression<'_>, ctx: &GuardCtx) -> (Vec<Protect>, Vec<Pro
         Expression::Identifier(id) => {
             if ctx.env_names.contains(id.name.as_str()) {
                 (vec![Protect::All], vec![])
-            } else { (vec![], vec![]) }
+            } else {
+                (vec![], vec![])
+            }
         }
         Expression::UnaryExpression(u) if u.operator == UnaryOperator::LogicalNot => {
             let (p, n) = analyze_test(&u.argument, ctx);
             (n, p)
         }
-        Expression::StaticMemberExpression(m) => analyze_member_test(&m.object, m.property.name.as_str(), ctx),
+        Expression::StaticMemberExpression(m) => {
+            analyze_member_test(&m.object, m.property.name.as_str(), ctx)
+        }
         Expression::ComputedMemberExpression(_) => (vec![], vec![]),
         Expression::ChainExpression(c) => match &c.expression {
-            oxc::ast::ast::ChainElement::StaticMemberExpression(m) =>
-                analyze_member_test(&m.object, m.property.name.as_str(), ctx),
+            oxc::ast::ast::ChainElement::StaticMemberExpression(m) => {
+                analyze_member_test(&m.object, m.property.name.as_str(), ctx)
+            }
             _ => (vec![], vec![]),
         },
         Expression::BinaryExpression(b) => analyze_binary_test(b, ctx),
@@ -197,20 +226,31 @@ fn analyze_binary_test(
 ) -> (Vec<Protect>, Vec<Protect>) {
     // typeof X (!)=== 'undefined' | 'object'
     let (typeof_arg, other) = match (&b.left, &b.right) {
-        (Expression::UnaryExpression(u), _) if u.operator == UnaryOperator::Typeof =>
-            (&u.argument, &b.right),
-        (_, Expression::UnaryExpression(u)) if u.operator == UnaryOperator::Typeof =>
-            (&u.argument, &b.left),
+        (Expression::UnaryExpression(u), _) if u.operator == UnaryOperator::Typeof => {
+            (&u.argument, &b.right)
+        }
+        (_, Expression::UnaryExpression(u)) if u.operator == UnaryOperator::Typeof => {
+            (&u.argument, &b.left)
+        }
         _ => return analyze_binary_non_typeof(b, ctx),
     };
-    let Expression::Identifier(id) = typeof_arg else { return (vec![], vec![]) };
+    let Expression::Identifier(id) = typeof_arg else {
+        return (vec![], vec![]);
+    };
     let name = id.name.as_str();
-    let Expression::StringLiteral(sl) = other else { return (vec![], vec![]) };
+    let Expression::StringLiteral(sl) = other else {
+        return (vec![], vec![]);
+    };
     let val = sl.value.as_str();
     let positive_when_truthy = match (&b.operator, val) {
-        (BinaryOperator::Inequality, "undefined") | (BinaryOperator::StrictInequality, "undefined") => true,
-        (BinaryOperator::Equality, "undefined") | (BinaryOperator::StrictEquality, "undefined") => false,
-        (BinaryOperator::Inequality, "object") | (BinaryOperator::StrictInequality, "object") => false,
+        (BinaryOperator::Inequality, "undefined")
+        | (BinaryOperator::StrictInequality, "undefined") => true,
+        (BinaryOperator::Equality, "undefined") | (BinaryOperator::StrictEquality, "undefined") => {
+            false
+        }
+        (BinaryOperator::Inequality, "object") | (BinaryOperator::StrictInequality, "object") => {
+            false
+        }
         (BinaryOperator::Equality, "object") | (BinaryOperator::StrictEquality, "object") => true,
         _ => return (vec![], vec![]),
     };
@@ -258,11 +298,19 @@ fn analyze_binary_non_typeof(
         (_, Expression::StaticMemberExpression(_)) => (&b.right, &b.left),
         _ => return (vec![], vec![]),
     };
-    let Expression::StaticMemberExpression(m) = member_side else { return (vec![], vec![]) };
-    let Expression::Identifier(obj) = &m.object else { return (vec![], vec![]) };
-    if obj.name != "globalThis" { return (vec![], vec![]) }
+    let Expression::StaticMemberExpression(m) = member_side else {
+        return (vec![], vec![]);
+    };
+    let Expression::Identifier(obj) = &m.object else {
+        return (vec![], vec![]);
+    };
+    if obj.name != "globalThis" {
+        return (vec![], vec![]);
+    }
     let prop = m.property.name.as_str();
-    if !BROWSER_GLOBALS.contains(&prop) { return (vec![], vec![]) }
+    if !BROWSER_GLOBALS.contains(&prop) {
+        return (vec![], vec![]);
+    }
 
     // Match literal `undefined` identifier or `null` literal.
     let other_kind = match other_side {
@@ -294,17 +342,14 @@ fn analyze_binary_non_typeof(
 
 /// Walk the ancestor chain of `node_id`. Return true if any enclosing
 /// control-flow branch protects `global`.
-fn is_inside_guard(
-    nodes: &AstNodes<'_>,
-    node_id: NodeId,
-    ctx: &GuardCtx,
-    global: &str,
-) -> bool {
+fn is_inside_guard(nodes: &AstNodes<'_>, node_id: NodeId, ctx: &GuardCtx, global: &str) -> bool {
     let ref_span = nodes.kind(node_id).span();
     let mut id = node_id;
     loop {
         let parent = nodes.parent_id(id);
-        if parent == id { return false; }
+        if parent == id {
+            return false;
+        }
         let kind = nodes.kind(parent);
         match kind {
             AstKind::IfStatement(ifs) => {
@@ -332,11 +377,15 @@ fn is_inside_guard(
                     match le.operator {
                         LogicalOperator::And => {
                             let (pos, _) = analyze_test(&le.left, ctx);
-                            if protects_global(&pos, global) { return true; }
+                            if protects_global(&pos, global) {
+                                return true;
+                            }
                         }
                         LogicalOperator::Or => {
                             let (_, neg) = analyze_test(&le.left, ctx);
-                            if protects_global(&neg, global) { return true; }
+                            if protects_global(&neg, global) {
+                                return true;
+                            }
                         }
                         _ => {}
                     }
@@ -352,50 +401,63 @@ fn is_inside_guard(
 /// `BlockStatement` / `Program`. If a preceding `IfStatement`'s consequent
 /// jumps on every path and its test is analyzable, reaching this statement
 /// means the falsy branch's protections apply.
-fn after_exit_guard(
-    nodes: &AstNodes<'_>,
-    node_id: NodeId,
-    ctx: &GuardCtx,
-    global: &str,
-) -> bool {
+fn after_exit_guard(nodes: &AstNodes<'_>, node_id: NodeId, ctx: &GuardCtx, global: &str) -> bool {
     // Walk up to find the enclosing Statement whose parent is a
     // BlockStatement / Program. Then scan preceding sibling statements.
     let mut id = node_id;
     loop {
         let parent = nodes.parent_id(id);
-        if parent == id { return false; }
+        if parent == id {
+            return false;
+        }
         let parent_kind = nodes.kind(parent);
         let siblings: &[Statement] = match parent_kind {
             AstKind::BlockStatement(b) => b.body.as_slice(),
             AstKind::Program(p) => p.body.as_slice(),
-            _ => { id = parent; continue; }
+            _ => {
+                id = parent;
+                continue;
+            }
         };
         // Find the Statement in `siblings` that contains `id`.
         let id_span = nodes.kind(id).span();
         let mut prev_iter = Vec::<&Statement>::new();
         for stmt in siblings {
-            if span_contains(stmt.span(), id_span) { break; }
+            if span_contains(stmt.span(), id_span) {
+                break;
+            }
             prev_iter.push(stmt);
         }
         for stmt in prev_iter.iter().rev() {
-            let Statement::IfStatement(ifs) = stmt else { continue };
+            let Statement::IfStatement(ifs) = stmt else {
+                continue;
+            };
             // Only a guard if consequent jumps unconditionally AND no alternate
             // (if there's an alternate, control flow isn't "skip-past-if").
-            if ifs.alternate.is_some() { continue; }
-            if !has_jump_in_all_paths(&ifs.consequent) { continue; }
+            if ifs.alternate.is_some() {
+                continue;
+            }
+            if !has_jump_in_all_paths(&ifs.consequent) {
+                continue;
+            }
             let (_, neg) = analyze_test(&ifs.test, ctx);
-            if protects_global(&neg, global) { return true; }
+            if protects_global(&neg, global) {
+                return true;
+            }
         }
         return false;
     }
 }
 
 fn has_jump_in_all_paths(stmt: &Statement<'_>) -> bool {
-    if is_jump_statement(stmt) { return true; }
+    if is_jump_statement(stmt) {
+        return true;
+    }
     match stmt {
         Statement::BlockStatement(b) => b.body.iter().any(has_jump_in_all_paths),
         Statement::IfStatement(ifs) => {
-            ifs.alternate.as_ref()
+            ifs.alternate
+                .as_ref()
                 .is_some_and(|a| has_jump_in_all_paths(a))
                 && has_jump_in_all_paths(&ifs.consequent)
         }
@@ -404,11 +466,12 @@ fn has_jump_in_all_paths(stmt: &Statement<'_>) -> bool {
 }
 
 fn is_jump_statement(stmt: &Statement<'_>) -> bool {
-    matches!(stmt,
+    matches!(
+        stmt,
         Statement::ReturnStatement(_)
-        | Statement::ContinueStatement(_)
-        | Statement::BreakStatement(_)
-        | Statement::ThrowStatement(_)
+            | Statement::ContinueStatement(_)
+            | Statement::BreakStatement(_)
+            | Statement::ThrowStatement(_)
     )
 }
 
@@ -430,8 +493,12 @@ fn is_typeof_argument(nodes: &AstNodes<'_>, ref_id: NodeId) -> bool {
 fn is_globalthis_of(nodes: &AstNodes<'_>, ref_id: NodeId, name: &str) -> bool {
     let _ = name;
     let parent = nodes.parent_id(ref_id);
-    let AstKind::StaticMemberExpression(m) = nodes.kind(parent) else { return false };
-    let Expression::Identifier(obj) = &m.object else { return false };
+    let AstKind::StaticMemberExpression(m) = nodes.kind(parent) else {
+        return false;
+    };
+    let Expression::Identifier(obj) = &m.object else {
+        return false;
+    };
     obj.name == "globalThis"
 }
 
@@ -463,7 +530,9 @@ fn collect_type_annotation_spans(sem: &Semantic<'_>) -> Vec<(u32, u32)> {
 }
 
 fn is_inside_any(span: Span, ranges: &[(u32, u32)]) -> bool {
-    ranges.iter().any(|(s, e)| *s <= span.start && span.end <= *e)
+    ranges
+        .iter()
+        .any(|(s, e)| *s <= span.start && span.end <= *e)
 }
 
 impl Rule for NoTopLevelBrowserGlobals {
@@ -472,8 +541,12 @@ impl Rule for NoTopLevelBrowserGlobals {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let Some(script) = &ctx.ast.instance else { return };
-        if script.module { return; }
+        let Some(script) = &ctx.ast.instance else {
+            return;
+        };
+        if script.module {
+            return;
+        }
         let Some(sem) = ctx.instance_semantic else {
             check_template_nodes(&ctx.ast.html.nodes, ctx, false);
             return;
@@ -491,42 +564,69 @@ impl Rule for NoTopLevelBrowserGlobals {
         let type_annotation_spans = collect_type_annotation_spans(sem);
 
         for node in nodes.iter() {
-            let AstKind::IdentifierReference(id) = node.kind() else { continue };
+            let AstKind::IdentifierReference(id) = node.kind() else {
+                continue;
+            };
             let name = id.name.as_str();
-            let Some(&global) = BROWSER_GLOBALS.iter().find(|g| **g == name) else { continue };
+            let Some(&global) = BROWSER_GLOBALS.iter().find(|g| **g == name) else {
+                continue;
+            };
             // Locally-shadowed reference (`let window = ...`) → skip.
-            if scoping.get_reference(id.reference_id()).symbol_id().is_some() { continue; }
+            if scoping
+                .get_reference(id.reference_id())
+                .symbol_id()
+                .is_some()
+            {
+                continue;
+            }
             // Type-level use: `let x: Window` → skip.
-            if is_inside_any(id.span, &type_annotation_spans) { continue; }
+            if is_inside_any(id.span, &type_annotation_spans) {
+                continue;
+            }
             // `typeof window` alone — never a read, skip.
-            if is_typeof_argument(nodes, node.id()) { continue; }
+            if is_typeof_argument(nodes, node.id()) {
+                continue;
+            }
             // `globalThis.window` — the identifier is `globalThis`, not `window`,
             // so we'd only get here if someone wrote `window` as the property of
             // `globalThis`... which oxc models as IdentifierName, not
             // IdentifierReference. This branch is defensive.
-            if is_globalthis_of(nodes, node.id(), global) { continue; }
+            if is_globalthis_of(nodes, node.id(), global) {
+                continue;
+            }
 
             // Top-level check: inside any function / arrow expression → not
             // top-level. Inside-function references can still be browser-
             // unsafe if an earlier exit-guard applies, but for now the rule
             // scope matches vendor (only top-level).
-            if is_inside_any(id.span, &function_spans) { continue; }
+            if is_inside_any(id.span, &function_spans) {
+                continue;
+            }
 
             // Ancestor guard: `if (browser) { ref }`, `browser ? ref : x`,
             // `browser && ref`, `typeof x !== 'undefined' && ref.href`, etc.
-            if is_inside_guard(nodes, node.id(), &guard_ctx, global) { continue; }
+            if is_inside_guard(nodes, node.id(), &guard_ctx, global) {
+                continue;
+            }
 
             // Preceding `if (!browser) return;` guard-exit in the enclosing block.
-            if after_exit_guard(nodes, node.id(), &guard_ctx, global) { continue; }
+            if after_exit_guard(nodes, node.id(), &guard_ctx, global) {
+                continue;
+            }
 
             // `globalThis.location?.href` — optional chain through the
             // globalThis access is treated as guarded (it's nullish-safe).
-            if is_in_optional_chain_of_globalthis(nodes, node.id(), global) { continue; }
+            if is_in_optional_chain_of_globalthis(nodes, node.id(), global) {
+                continue;
+            }
 
             let byte_offset = id.span.start as usize;
             let s = (content_offset + byte_offset) as u32;
             ctx.diagnostic(
-                format!("Unexpected top-level browser global variable \"{}\".", global),
+                format!(
+                    "Unexpected top-level browser global variable \"{}\".",
+                    global
+                ),
                 Span::new(s, s + global.len() as u32),
             );
         }
@@ -538,17 +638,19 @@ impl Rule for NoTopLevelBrowserGlobals {
 /// True iff `ref_id` is a descendant of an optional-chain access through
 /// `globalThis.<global>`. E.g. in `globalThis.location?.href`, the
 /// `globalThis.location` read is guarded.
-fn is_in_optional_chain_of_globalthis(
-    nodes: &AstNodes<'_>,
-    ref_id: NodeId,
-    _global: &str,
-) -> bool {
+fn is_in_optional_chain_of_globalthis(nodes: &AstNodes<'_>, ref_id: NodeId, _global: &str) -> bool {
     // Walk up a few levels: IdentifierReference → StaticMemberExpression (globalThis.X)
     // → ChainExpression? optional access makes this whole chain guarded.
     let parent = nodes.parent_id(ref_id);
-    let AstKind::StaticMemberExpression(m) = nodes.kind(parent) else { return false };
-    let Expression::Identifier(obj) = &m.object else { return false };
-    if obj.name != "globalThis" { return false; }
+    let AstKind::StaticMemberExpression(m) = nodes.kind(parent) else {
+        return false;
+    };
+    let Expression::Identifier(obj) = &m.object else {
+        return false;
+    };
+    if obj.name != "globalThis" {
+        return false;
+    }
     let grand = nodes.parent_id(parent);
     match nodes.kind(grand) {
         AstKind::ChainExpression(_) => true,
@@ -571,14 +673,20 @@ fn check_template_nodes(nodes: &[TemplateNode], ctx: &mut LintContext<'_>, in_br
             TemplateNode::IfBlock(block) => {
                 let cond = block.test.trim();
 
-                let is_browser_guard = cond.contains("browser") || cond.contains("BROWSER")
-                    || cond.starts_with("typeof window") || cond.starts_with("typeof document")
+                let is_browser_guard = cond.contains("browser")
+                    || cond.contains("BROWSER")
+                    || cond.starts_with("typeof window")
+                    || cond.starts_with("typeof document")
                     || cond.starts_with("globalThis.");
                 let is_negated = cond.starts_with('!');
 
                 let cons_browser = in_browser_ctx || (is_browser_guard && !is_negated);
                 let cons_server = is_browser_guard && is_negated;
-                check_template_nodes(&block.consequent.nodes, ctx, cons_browser || (!cons_server && in_browser_ctx));
+                check_template_nodes(
+                    &block.consequent.nodes,
+                    ctx,
+                    cons_browser || (!cons_server && in_browser_ctx),
+                );
 
                 if let Some(alt) = &block.alternate {
                     let alt_browser = in_browser_ctx || (is_browser_guard && is_negated);
@@ -587,7 +695,8 @@ fn check_template_nodes(nodes: &[TemplateNode], ctx: &mut LintContext<'_>, in_br
                         if else_test.is_empty() {
                             check_template_nodes(&else_if.consequent.nodes, ctx, alt_browser);
                         } else {
-                            let ebc = else_test == "browser" || else_test == "BROWSER"
+                            let ebc = else_test == "browser"
+                                || else_test == "BROWSER"
                                 || else_test.contains("globalThis.");
                             let eng = else_test.starts_with('!');
                             let eb = alt_browser || (ebc && !eng);
@@ -624,15 +733,25 @@ fn check_template_nodes(nodes: &[TemplateNode], ctx: &mut LintContext<'_>, in_br
 
 fn is_word_boundary(text: &str, pos: usize, len: usize) -> bool {
     let bytes = text.as_bytes();
-    (pos == 0 || !matches!(bytes[pos - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$' | b'.'))
-        && (pos + len >= bytes.len() || !matches!(bytes[pos + len], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$'))
+    (pos == 0
+        || !matches!(bytes[pos - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$' | b'.'))
+        && (pos + len >= bytes.len()
+            || !matches!(bytes[pos + len], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$'))
 }
 
 fn check_expr_for_globals(expr: &str, span: Span, ctx: &mut LintContext<'_>) {
     for global in BROWSER_GLOBALS {
         if let Some(pos) = expr.find(global) {
-            if !is_word_boundary(expr, pos, global.len()) { continue; }
-            ctx.diagnostic(format!("Unexpected top-level browser global variable \"{}\".", global), span);
+            if !is_word_boundary(expr, pos, global.len()) {
+                continue;
+            }
+            ctx.diagnostic(
+                format!(
+                    "Unexpected top-level browser global variable \"{}\".",
+                    global
+                ),
+                span,
+            );
         }
     }
 }

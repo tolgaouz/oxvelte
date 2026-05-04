@@ -1,8 +1,8 @@
 //! `svelte/no-dupe-style-properties` — disallow duplicate style properties.
 //! ⭐ Recommended
 
-use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::{Attribute, AttributeValue, AttributeValuePart, DirectiveKind, TemplateNode};
+use crate::linter::{walk_template_nodes, LintContext, Rule};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 pub struct NoDupeStyleProperties;
@@ -32,12 +32,16 @@ impl Rule for NoDupeStyleProperties {
                         } => {
                             if let Some(first_span) = first_seen.get(name) {
                                 if reported.insert(first_span.start) {
-                                    ctx.diagnostic(format!("Duplicate property '{}'.", name),
-                                        *first_span);
+                                    ctx.diagnostic(
+                                        format!("Duplicate property '{}'.", name),
+                                        *first_span,
+                                    );
                                 }
                                 if reported.insert(span.start) {
-                                    ctx.diagnostic(format!("Duplicate property '{}'.", name),
-                                        *span);
+                                    ctx.diagnostic(
+                                        format!("Duplicate property '{}'.", name),
+                                        *span,
+                                    );
                                 }
                             } else {
                                 first_seen.insert(name.clone(), *span);
@@ -65,12 +69,18 @@ fn check_style_value(
     let mut all_props: Vec<String> = Vec::new();
     match value {
         AttributeValue::Static(s) => all_props.extend(collect_props_from_css_text(s)),
-        AttributeValue::Concat(parts) => for part in parts {
-            match part {
-                AttributeValuePart::Static(s) => all_props.extend(collect_props_from_css_text(s)),
-                AttributeValuePart::Expression(e) => all_props.extend(extract_props_from_expression(e)),
+        AttributeValue::Concat(parts) => {
+            for part in parts {
+                match part {
+                    AttributeValuePart::Static(s) => {
+                        all_props.extend(collect_props_from_css_text(s))
+                    }
+                    AttributeValuePart::Expression(e) => {
+                        all_props.extend(extract_props_from_expression(e))
+                    }
+                }
             }
-        },
+        }
         AttributeValue::Expression(e) => all_props.extend(extract_props_from_expression(e)),
         _ => {}
     }
@@ -91,8 +101,8 @@ fn report_or_record(
         if reported.insert(first_span.start) {
             ctx.diagnostic(format!("Duplicate property '{}'.", prop), *first_span);
         }
-        let diag_span = find_prop_in_attr(attr_text, &prop, attr_span.start, reported)
-            .unwrap_or(attr_span);
+        let diag_span =
+            find_prop_in_attr(attr_text, &prop, attr_span.start, reported).unwrap_or(attr_span);
         if reported.insert(diag_span.start) {
             ctx.diagnostic(format!("Duplicate property '{}'.", prop), diag_span);
         }
@@ -115,7 +125,8 @@ fn find_prop_in_attr(
     while let Some(pos) = attr_text[search_start..].find(prop) {
         let abs = search_start + pos;
         if attr_text[abs + prop.len()..].trim_start().starts_with(':')
-            && (abs == 0 || !matches!(bytes[abs - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'-' | b'_'))
+            && (abs == 0
+                || !matches!(bytes[abs - 1], b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'-' | b'_'))
         {
             let ss = attr_start + abs as u32;
             if !already_reported.contains(&ss) {
@@ -128,10 +139,13 @@ fn find_prop_in_attr(
 }
 
 fn collect_props_from_css_text(text: &str) -> Vec<String> {
-    text.split(';').filter_map(|decl| {
-        let prop = decl.trim().split_once(':')?.0.trim().to_lowercase();
-        (!prop.is_empty() && prop.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).then_some(prop)
-    }).collect()
+    text.split(';')
+        .filter_map(|decl| {
+            let prop = decl.trim().split_once(':')?.0.trim().to_lowercase();
+            (!prop.is_empty() && prop.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+                .then_some(prop)
+        })
+        .collect()
 }
 
 fn extract_props_from_expression(expr: &str) -> FxHashSet<String> {
@@ -152,8 +166,12 @@ fn extract_props_from_expression(expr: &str) -> FxHashSet<String> {
                     let mut depth = 1;
                     i += 2;
                     while i < bytes.len() && depth > 0 {
-                        if bytes[i] == b'{' { depth += 1; }
-                        if bytes[i] == b'}' { depth -= 1; }
+                        if bytes[i] == b'{' {
+                            depth += 1;
+                        }
+                        if bytes[i] == b'}' {
+                            depth -= 1;
+                        }
                         i += 1;
                     }
                     continue;

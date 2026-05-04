@@ -13,7 +13,9 @@ impl Rule for NoGotoWithoutBase {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let Some(semantic) = ctx.instance_semantic else { return };
+        let Some(semantic) = ctx.instance_semantic else {
+            return;
+        };
         let content_offset = ctx.instance_content_offset;
         let program = semantic.nodes().program();
 
@@ -23,9 +25,13 @@ impl Rule for NoGotoWithoutBase {
         let mut goto_names: Vec<String> = Vec::new();
         let mut base_name: Option<String> = None;
         for stmt in &program.body {
-            let Statement::ImportDeclaration(imp) = stmt else { continue };
+            let Statement::ImportDeclaration(imp) = stmt else {
+                continue;
+            };
             let src = imp.source.value.as_str();
-            let Some(specifiers) = &imp.specifiers else { continue };
+            let Some(specifiers) = &imp.specifiers else {
+                continue;
+            };
             for spec in specifiers {
                 match spec {
                     ImportDeclarationSpecifier::ImportSpecifier(s) => {
@@ -58,9 +64,13 @@ impl Rule for NoGotoWithoutBase {
         }
 
         for node in semantic.nodes().iter() {
-            let AstKind::CallExpression(ce) = node.kind() else { continue };
+            let AstKind::CallExpression(ce) = node.kind() else {
+                continue;
+            };
             let callee_text = callee_static_name(&ce.callee);
-            let Some(callee_text) = callee_text else { continue };
+            let Some(callee_text) = callee_text else {
+                continue;
+            };
             if !goto_names.iter().any(|g| g == &callee_text) {
                 continue;
             }
@@ -98,11 +108,16 @@ impl Rule for NoGotoWithoutBase {
 fn leading_string_prefix(expr: &Expression<'_>) -> Option<String> {
     match expr {
         Expression::StringLiteral(l) => Some(l.value.to_string()),
-        Expression::TemplateLiteral(t) => t
-            .quasis
-            .first()
-            .map(|q| q.value.cooked.as_deref().unwrap_or(q.value.raw.as_str()).to_string()),
-        Expression::BinaryExpression(b) if b.operator == oxc::syntax::operator::BinaryOperator::Addition => {
+        Expression::TemplateLiteral(t) => t.quasis.first().map(|q| {
+            q.value
+                .cooked
+                .as_deref()
+                .unwrap_or(q.value.raw.as_str())
+                .to_string()
+        }),
+        Expression::BinaryExpression(b)
+            if b.operator == oxc::syntax::operator::BinaryOperator::Addition =>
+        {
             leading_string_prefix(&b.left)
         }
         _ => None,
@@ -140,15 +155,22 @@ fn arg_uses_base(expr: &Expression<'_>, base_name: &str) -> bool {
     match expr {
         Expression::TemplateLiteral(t) => {
             // Base-prefixed template: first quasi is empty and first interpolation is base.
-            if let (Some(first_quasi), Some(first_expr)) = (t.quasis.first(), t.expressions.first()) {
-                let first_text = first_quasi.value.cooked.as_deref().unwrap_or(first_quasi.value.raw.as_str());
+            if let (Some(first_quasi), Some(first_expr)) = (t.quasis.first(), t.expressions.first())
+            {
+                let first_text = first_quasi
+                    .value
+                    .cooked
+                    .as_deref()
+                    .unwrap_or(first_quasi.value.raw.as_str());
                 if first_text.is_empty() && is_base_ref(first_expr, base_name) {
                     return true;
                 }
             }
             false
         }
-        Expression::BinaryExpression(b) if b.operator == oxc::syntax::operator::BinaryOperator::Addition => {
+        Expression::BinaryExpression(b)
+            if b.operator == oxc::syntax::operator::BinaryOperator::Addition =>
+        {
             // Base-prefixed concat: leftmost operand is base (recursively).
             arg_uses_base(&b.left, base_name) || is_base_ref(&b.left, base_name)
         }

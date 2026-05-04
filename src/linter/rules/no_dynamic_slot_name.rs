@@ -1,7 +1,7 @@
 //! `svelte/no-dynamic-slot-name` — disallow dynamic slot names.
 
-use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::{Attribute, AttributeValue, TemplateNode};
+use crate::linter::{walk_template_nodes, LintContext, Rule};
 
 pub struct NoDynamicSlotName;
 
@@ -12,14 +12,22 @@ impl Rule for NoDynamicSlotName {
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         walk_template_nodes(&ctx.ast.html, &mut |node| {
-            let TemplateNode::Element(el) = node else { return };
-            if el.name != "slot" { return; }
+            let TemplateNode::Element(el) = node else {
+                return;
+            };
+            if el.name != "slot" {
+                return;
+            }
             for attr in &el.attributes {
                 if let Attribute::NormalAttribute { name, value, span } = attr {
-                    if name != "name" { continue; }
+                    if name != "name" {
+                        continue;
+                    }
                     match value {
                         AttributeValue::Static(_) => {}
-                        AttributeValue::True => ctx.diagnostic("`<slot>` name requires a value.", *span),
+                        AttributeValue::True => {
+                            ctx.diagnostic("`<slot>` name requires a value.", *span)
+                        }
                         _ => ctx.diagnostic("`<slot>` name cannot be dynamic.", *span),
                     }
                 }

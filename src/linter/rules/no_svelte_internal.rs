@@ -40,15 +40,13 @@ impl Rule for NoSvelteInternal {
                             None
                         }
                     }
-                    Statement::ExportNamedDeclaration(exp) => {
-                        exp.source.as_ref().and_then(|s| {
-                            if is_svelte_internal(s.value.as_str()) {
-                                Some(s.span)
-                            } else {
-                                None
-                            }
-                        })
-                    }
+                    Statement::ExportNamedDeclaration(exp) => exp.source.as_ref().and_then(|s| {
+                        if is_svelte_internal(s.value.as_str()) {
+                            Some(s.span)
+                        } else {
+                            None
+                        }
+                    }),
                     // `await import('svelte/internal')` etc.
                     Statement::ExpressionStatement(es) => {
                         if let Expression::ImportExpression(ie) = &es.expression {

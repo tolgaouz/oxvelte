@@ -9,19 +9,27 @@ use oxc::span::Span;
 pub struct NoAddEventListener;
 
 impl Rule for NoAddEventListener {
-    fn name(&self) -> &'static str { "svelte/no-add-event-listener" }
+    fn name(&self) -> &'static str {
+        "svelte/no-add-event-listener"
+    }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let Some(semantic) = ctx.instance_semantic else { return };
+        let Some(semantic) = ctx.instance_semantic else {
+            return;
+        };
         let content_offset = ctx.instance_content_offset;
 
         for node in semantic.nodes().iter() {
-            let AstKind::CallExpression(ce) = node.kind() else { continue };
+            let AstKind::CallExpression(ce) = node.kind() else {
+                continue;
+            };
             let callee_span = match &ce.callee {
                 // Bare call: `addEventListener('msg', handler)`
                 Expression::Identifier(id) if id.name == "addEventListener" => id.span,
                 // Member call: `window.addEventListener(...)`, `foo.bar.addEventListener(...)`
-                Expression::StaticMemberExpression(mem) if mem.property.name == "addEventListener" => {
+                Expression::StaticMemberExpression(mem)
+                    if mem.property.name == "addEventListener" =>
+                {
                     mem.property.span
                 }
                 _ => continue,

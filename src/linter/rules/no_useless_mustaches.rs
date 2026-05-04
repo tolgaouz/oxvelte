@@ -18,8 +18,8 @@
 //! once per mustache to get `ParserReturn.program.comments` — oxc's
 //! `parse_expression` alone doesn't surface comment trivia.
 
-use crate::linter::{walk_template_nodes, Fix, LintContext, Rule};
 use crate::ast::{Attribute, AttributeValue, AttributeValuePart, DirectiveKind, TemplateNode};
+use crate::linter::{walk_template_nodes, Fix, LintContext, Rule};
 use crate::parser::expression::{parse_template_expression, unwrap_template_expression};
 use oxc::allocator::Allocator;
 use oxc::ast::ast::Expression;
@@ -41,10 +41,17 @@ impl Rule for NoUselessMustaches {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let opts = ctx.config.options.as_ref()
+        let opts = ctx
+            .config
+            .options
+            .as_ref()
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first());
-        let get_bool = |key| opts.and_then(|v| v.get(key)).and_then(|v| v.as_bool()).unwrap_or(false);
+        let get_bool = |key| {
+            opts.and_then(|v| v.get(key))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        };
         let ignore_comment = get_bool("ignoreIncludesComment");
         let ignore_escape = get_bool("ignoreStringEscape");
 
@@ -55,11 +62,22 @@ impl Rule for NoUselessMustaches {
             if let TemplateNode::Element(el) = node {
                 for attr in &el.attributes {
                     match attr {
-                        Attribute::NormalAttribute { value, span, name, .. } => {
-                            if name == "this" && el.name.starts_with("svelte:") { continue; }
+                        Attribute::NormalAttribute {
+                            value, span, name, ..
+                        } => {
+                            // `this={…}` on a `<svelte:component>` / `<svelte:element>` /
+                            // similar carries semantic meaning — don't suggest collapsing.
+                            if name == "this" && el.kind().is_svelte_special() {
+                                continue;
+                            }
                             check_attribute_value(value, *span, ctx, ignore_comment, ignore_escape);
                         }
-                        Attribute::Directive { kind: DirectiveKind::StyleDirective, value, span, .. } => {
+                        Attribute::Directive {
+                            kind: DirectiveKind::StyleDirective,
+                            value,
+                            span,
+                            ..
+                        } => {
                             check_attribute_value(value, *span, ctx, ignore_comment, ignore_escape);
                         }
                         _ => {}
@@ -86,23 +104,34 @@ fn check_mustache_tag<'a>(
         None => return,
     };
     // `{'{foo'}` / `` {`foo\nbar`} `` cases (vendor lines 83, 87).
-    if raw.contains('{') { return; }
-    if is_template_literal(expr) && raw.contains('\n') { return; }
+    if raw.contains('{') {
+        return;
+    }
+    if is_template_literal(expr) && raw.contains('\n') {
+        return;
+    }
 
     // Comment detection needs a second parse (through the void(...) wrapper)
     // because `parse_expression` alone doesn't surface comments.
     if ignore_comment {
         let alloc = Allocator::default();
         let result = parse_template_expression(&tag.expression, &alloc);
-        if !result.program.comments.is_empty() { return; }
+        if !result.program.comments.is_empty() {
+            return;
+        }
     }
 
-    if ignore_escape && has_useful_escape(raw) { return; }
+    if ignore_escape && has_useful_escape(raw) {
+        return;
+    }
 
     ctx.diagnostic_with_fix(
         "Unexpected mustache interpolation with a string literal value.",
         tag.span,
-        Fix { span: tag.span, replacement: raw.to_string() },
+        Fix {
+            span: tag.span,
+            replacement: raw.to_string(),
+        },
     );
 }
 
@@ -114,8 +143,9 @@ fn check_attribute_value(
     ignore_escape: bool,
 ) {
     match value {
-        AttributeValue::Expression(expr) =>
-            check_attribute_expression(expr, span, ctx, ignore_comment, ignore_escape),
+        AttributeValue::Expression(expr) => {
+            check_attribute_expression(expr, span, ctx, ignore_comment, ignore_escape)
+        }
         AttributeValue::Concat(parts) => {
             for part in parts {
                 if let AttributeValuePart::Expression(expr) = part {
@@ -139,20 +169,37 @@ fn check_attribute_expression(
 ) {
     let alloc = Allocator::default();
     let result = parse_template_expression(expr_text, &alloc);
-    if !result.errors.is_empty() { return; }
-    let Some(expr) = unwrap_template_expression(&result) else { return };
+    if !result.errors.is_empty() {
+        return;
+    }
+    let Some(expr) = unwrap_template_expression(&result) else {
+        return;
+    };
 
-    if ignore_comment && !result.program.comments.is_empty() { return; }
+    if ignore_comment && !result.program.comments.is_empty() {
+        return;
+    }
 
-    let Some(raw) = trivial_string_raw(expr) else { return };
-    if raw.contains('{') { return; }
-    if is_template_literal(expr) && raw.contains('\n') { return; }
-    if ignore_escape && has_useful_escape(raw) { return; }
+    let Some(raw) = trivial_string_raw(expr) else {
+        return;
+    };
+    if raw.contains('{') {
+        return;
+    }
+    if is_template_literal(expr) && raw.contains('\n') {
+        return;
+    }
+    if ignore_escape && has_useful_escape(raw) {
+        return;
+    }
 
     ctx.diagnostic_with_fix(
         "Unexpected mustache interpolation with a string literal value.",
         diag_span,
-        Fix { span: diag_span, replacement: raw.to_string() },
+        Fix {
+            span: diag_span,
+            replacement: raw.to_string(),
+        },
     );
 }
 
@@ -163,11 +210,15 @@ fn trivial_string_raw<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
     match expr {
         Expression::StringLiteral(lit) => {
             let raw_with_quotes = lit.raw.as_ref().map(|a| a.as_str()).unwrap_or("");
-            if raw_with_quotes.len() < 2 { return None; }
+            if raw_with_quotes.len() < 2 {
+                return None;
+            }
             Some(&raw_with_quotes[1..raw_with_quotes.len() - 1])
         }
         Expression::TemplateLiteral(tl) => {
-            if !tl.expressions.is_empty() { return None; }
+            if !tl.expressions.is_empty() {
+                return None;
+            }
             let quasi = tl.quasis.first()?;
             Some(quasi.value.raw.as_str())
         }
@@ -186,7 +237,10 @@ fn has_useful_escape(raw: &str) -> bool {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'\\' && i + 1 < bytes.len() {
-            if matches!(bytes[i + 1], b'n' | b'r' | b'v' | b't' | b'b' | b'f' | b'u' | b'x') {
+            if matches!(
+                bytes[i + 1],
+                b'n' | b'r' | b'v' | b't' | b'b' | b'f' | b'u' | b'x'
+            ) {
                 return true;
             }
             i += 2;

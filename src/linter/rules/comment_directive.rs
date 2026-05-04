@@ -4,8 +4,8 @@
 //! This is a system rule that processes `svelte-ignore` comments. In a full
 //! implementation it would suppress diagnostics for the next sibling node.
 
-use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::TemplateNode;
+use crate::linter::{walk_template_nodes, LintContext, Rule};
 
 pub struct CommentDirective;
 
@@ -26,8 +26,10 @@ impl Rule for CommentDirective {
                 if let Some(rest) = text.strip_prefix("svelte-ignore") {
                     let rest = rest.trim();
                     if rest.is_empty() {
-                        ctx.diagnostic("`svelte-ignore` comment must specify at least one rule name.",
-                            comment.span);
+                        ctx.diagnostic(
+                            "`svelte-ignore` comment must specify at least one rule name.",
+                            comment.span,
+                        );
                     }
                 }
             }

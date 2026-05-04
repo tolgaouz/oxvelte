@@ -51,6 +51,18 @@ impl Rule for NoUnusedClassName {
 
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
+                // Components and `<svelte:*>` specials that don't render a DOM
+                // node accept a `class` *prop* rather than a class attribute —
+                // matching them against this component's CSS would produce
+                // false positives. Only inspect HTML elements and
+                // `<svelte:element>`.
+                match el.kind() {
+                    crate::ast::ElementKind::Html => {}
+                    crate::ast::ElementKind::SvelteSpecial(
+                        crate::ast::SvelteSpecial::Element,
+                    ) => {}
+                    _ => return,
+                }
                 let mut element_classes = Vec::new();
 
                 for attr in &el.attributes {

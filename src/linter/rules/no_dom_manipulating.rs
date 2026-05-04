@@ -1,8 +1,8 @@
 //! `svelte/no-dom-manipulating` — disallow DOM manipulating.
 //! ⭐ Recommended
 
-use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::{Attribute, AttributeValue, AttributeValuePart, DirectiveKind, TemplateNode};
+use crate::linter::{walk_template_nodes, LintContext, Rule};
 use oxc::ast::ast::{AssignmentTarget, Expression, MemberExpression, SimpleAssignmentTarget};
 use oxc::ast::AstKind;
 use oxc::semantic::SymbolId;
@@ -10,14 +10,29 @@ use oxc::span::Span;
 use rustc_hash::FxHashSet;
 
 const DOM_METHODS: &[&str] = &[
-    "appendChild", "removeChild", "insertBefore", "replaceChild",
-    "normalize", "after", "append", "before",
-    "insertAdjacentElement", "insertAdjacentHTML", "insertAdjacentText",
-    "prepend", "remove", "replaceChildren", "replaceWith",
+    "appendChild",
+    "removeChild",
+    "insertBefore",
+    "replaceChild",
+    "normalize",
+    "after",
+    "append",
+    "before",
+    "insertAdjacentElement",
+    "insertAdjacentHTML",
+    "insertAdjacentText",
+    "prepend",
+    "remove",
+    "replaceChildren",
+    "replaceWith",
 ];
 
 const DOM_PROPS: &[&str] = &[
-    "textContent", "innerHTML", "outerHTML", "innerText", "outerText",
+    "textContent",
+    "innerHTML",
+    "outerHTML",
+    "innerText",
+    "outerText",
 ];
 
 pub struct NoDomManipulating;
@@ -35,17 +50,35 @@ impl Rule for NoDomManipulating {
         // 1. Collect variable NAMES bound via `bind:this={var}` on native elements.
         let mut bound_names = FxHashSet::default();
         walk_template_nodes(&ctx.ast.html, &mut |node| {
-            let TemplateNode::Element(el) = node else { return };
-            let is_native = el.name == "svelte:element"
-                || (el.name.as_bytes().first().map_or(false, |c| c.is_ascii_lowercase())
-                    && !el.name.starts_with("svelte:component")
-                    && !el.name.starts_with("svelte:self"));
+            let TemplateNode::Element(el) = node else {
+                return;
+            };
+            // "Native" = anything that renders a real DOM element. Rules out
+            // user components and `<svelte:component>` / `<svelte:self>`
+            // (which render arbitrary components, not native DOM nodes).
+            // Other `<svelte:*>` (head, body, element, …) are treated as
+            // native — they bind to actual DOM nodes.
+            let is_native = match el.kind() {
+                crate::ast::ElementKind::Html => true,
+                crate::ast::ElementKind::Component => false,
+                crate::ast::ElementKind::SvelteSpecial(s) => !matches!(
+                    s,
+                    crate::ast::SvelteSpecial::Component | crate::ast::SvelteSpecial::Self_
+                ),
+            };
             if !is_native {
                 return;
             }
             for attr in &el.attributes {
-                let Attribute::Directive { kind: DirectiveKind::Binding, name, value, .. } = attr
-                else { continue };
+                let Attribute::Directive {
+                    kind: DirectiveKind::Binding,
+                    name,
+                    value,
+                    ..
+                } = attr
+                else {
+                    continue;
+                };
                 if name != "this" {
                     continue;
                 }
@@ -76,7 +109,9 @@ impl Rule for NoDomManipulating {
             return;
         }
 
-        let Some(semantic) = ctx.instance_semantic else { return };
+        let Some(semantic) = ctx.instance_semantic else {
+            return;
+        };
         let content_offset = ctx.instance_content_offset;
         let scoping = semantic.scoping();
 
@@ -108,7 +143,9 @@ impl Rule for NoDomManipulating {
 
         // 3. DOM method calls: `foo.remove()`, `foo?.remove()`, `(foo?.remove)()`.
         for node in nodes.iter() {
-            let AstKind::CallExpression(ce) = node.kind() else { continue };
+            let AstKind::CallExpression(ce) = node.kind() else {
+                continue;
+            };
             // Unwrap the callee: parens, chain expression.
             let callee = strip_wrappers(&ce.callee);
             let Some((base_sym, method, end_span)) =
@@ -129,8 +166,11 @@ impl Rule for NoDomManipulating {
 
         // 4. DOM property assignments: `foo.textContent = 'x'`, `foo.innerHTML += 'x'`.
         for node in nodes.iter() {
-            let AstKind::AssignmentExpression(ae) = node.kind() else { continue };
-            let Some((base_sym, prop, end_span)) = assignment_target_tail(&ae.left, scoping, semantic)
+            let AstKind::AssignmentExpression(ae) = node.kind() else {
+                continue;
+            };
+            let Some((base_sym, prop, end_span)) =
+                assignment_target_tail(&ae.left, scoping, semantic)
             else {
                 continue;
             };
@@ -184,7 +224,9 @@ fn base_symbol_and_tail<'a>(
                 (&m.object, m.property.name.as_str(), m.span)
             }
             oxc::ast::ast::ChainElement::CallExpression(ce) => match &ce.callee {
-                Expression::StaticMemberExpression(m) => (&m.object, m.property.name.as_str(), m.span),
+                Expression::StaticMemberExpression(m) => {
+                    (&m.object, m.property.name.as_str(), m.span)
+                }
                 _ => return None,
             },
             _ => return None,
@@ -208,7 +250,9 @@ fn assignment_target_tail<'a>(
     scoping: &oxc::semantic::Scoping,
     semantic: &'a oxc::semantic::Semantic<'a>,
 ) -> Option<(SymbolId, &'a str, Span)> {
-    let AssignmentTarget::StaticMemberExpression(m) = target else { return None };
+    let AssignmentTarget::StaticMemberExpression(m) = target else {
+        return None;
+    };
     let base_id = match &m.object {
         Expression::Identifier(id) => id,
         _ => return None,

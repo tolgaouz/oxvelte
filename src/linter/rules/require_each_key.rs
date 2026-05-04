@@ -1,8 +1,8 @@
 //! `svelte/require-each-key` — require keyed `{#each}` block.
 //! ⭐ Recommended
 
-use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::TemplateNode;
+use crate::linter::{walk_template_nodes, LintContext, Rule};
 
 pub struct RequireEachKey;
 
@@ -25,8 +25,7 @@ impl Rule for RequireEachKey {
                     if block.context.trim().is_empty() {
                         return;
                     }
-                    ctx.diagnostic("Each block should have a key",
-                        block.span);
+                    ctx.diagnostic("Each block should have a key", block.span);
                 }
             }
         });

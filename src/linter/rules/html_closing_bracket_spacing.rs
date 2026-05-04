@@ -14,8 +14,8 @@
 //! so snapshots are byte-identical). We slice the tag's own source out of
 //! `ctx.source` and run the vendor-equivalent trim check.
 
-use crate::linter::{walk_template_nodes, Fix, LintContext, Rule};
 use crate::ast::TemplateNode;
+use crate::linter::{walk_template_nodes, Fix, LintContext, Rule};
 use oxc::span::Span;
 
 pub struct HtmlClosingBracketSpacing;
@@ -30,23 +30,37 @@ impl Rule for HtmlClosingBracketSpacing {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let opts = ctx.config.options.as_ref().and_then(|v| v.as_array()).and_then(|arr| arr.first());
+        let opts = ctx
+            .config
+            .options
+            .as_ref()
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first());
         let mode = |key: &str, default: &str| {
-            opts.and_then(|o| o.get(key)).and_then(|v| v.as_str()).unwrap_or(default).to_string()
+            opts.and_then(|o| o.get(key))
+                .and_then(|v| v.as_str())
+                .unwrap_or(default)
+                .to_string()
         };
         let start_mode = mode("startTag", "never");
         let end_mode = mode("endTag", "never");
         let sc_mode = mode("selfClosingTag", "always");
 
         walk_template_nodes(&ctx.ast.html, &mut |node| {
-            let TemplateNode::Element(el) = node else { return };
+            let TemplateNode::Element(el) = node else {
+                return;
+            };
 
             // Start tag (or self-closing). `start_tag_end` is the byte offset of
             // the `>` character; the tag's source therefore ends one past it.
             let start_src_end = (el.start_tag_end + 1) as usize;
             if start_src_end <= ctx.source.len() {
                 let tag_src = &ctx.source[el.span.start as usize..start_src_end];
-                let tag_mode: &str = if el.self_closing { &sc_mode } else { &start_mode };
+                let tag_mode: &str = if el.self_closing {
+                    &sc_mode
+                } else {
+                    &start_mode
+                };
                 check_tag(tag_mode, tag_src, el.span.start, ctx);
             }
 
@@ -68,7 +82,9 @@ impl Rule for HtmlClosingBracketSpacing {
 /// vendor's `fixer.insertTextBeforeRange([start, end], ' ')` /
 /// `fixer.removeRange([start, start + spaces.length])` exactly.
 fn check_tag(mode: &str, tag_src: &str, tag_src_start: u32, ctx: &mut LintContext) {
-    if mode == "ignore" { return; }
+    if mode == "ignore" {
+        return;
+    }
     let close_len = if tag_src.ends_with("/>") {
         2
     } else if tag_src.ends_with('>') {
@@ -79,7 +95,9 @@ fn check_tag(mode: &str, tag_src: &str, tag_src_start: u32, ctx: &mut LintContex
     let body = &tag_src[..tag_src.len() - close_len];
     let trimmed = body.trim_end_matches([' ', '\t', '\n', '\r']);
     let spaces = &body[trimmed.len()..];
-    if spaces.contains('\n') { return; }
+    if spaces.contains('\n') {
+        return;
+    }
 
     let bracket_end = tag_src_start + tag_src.len() as u32;
     let bracket_start = bracket_end - close_len as u32;

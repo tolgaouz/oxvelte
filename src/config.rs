@@ -76,8 +76,8 @@ impl OxvelteConfig {
 
     /// Parse config from a JSON string.
     pub fn parse(json_str: &str) -> Result<Self, String> {
-        let value: Value = serde_json::from_str(json_str)
-            .map_err(|e| format!("Invalid JSON: {}", e))?;
+        let value: Value =
+            serde_json::from_str(json_str).map_err(|e| format!("Invalid JSON: {}", e))?;
 
         let mut config = Self::default();
 
@@ -107,7 +107,10 @@ impl OxvelteConfig {
     pub fn rule_config(&self, rule_name: &str) -> RuleConfig {
         if let Some(entry) = self.rules.get(rule_name) {
             RuleConfig {
-                options: entry.options.as_ref().map(|o| Value::Array(vec![o.clone()])),
+                options: entry
+                    .options
+                    .as_ref()
+                    .map(|o| Value::Array(vec![o.clone()])),
                 settings: self.settings.clone(),
             }
         } else {
@@ -125,8 +128,8 @@ impl OxvelteConfig {
 
     /// Convert from an ESLint-style config (flat or legacy).
     pub fn from_eslint(json_str: &str) -> Result<Self, String> {
-        let value: Value = serde_json::from_str(json_str)
-            .map_err(|e| format!("Invalid JSON: {}", e))?;
+        let value: Value =
+            serde_json::from_str(json_str).map_err(|e| format!("Invalid JSON: {}", e))?;
 
         let mut config = Self::default();
 
@@ -188,7 +191,8 @@ fn parse_rule_entry(val: &Value) -> RuleEntry {
         },
         // ["error", { ...options }]
         Value::Array(arr) => {
-            let severity = arr.first()
+            let severity = arr
+                .first()
                 .map(|v| match v {
                     Value::String(s) => normalize_severity(s),
                     Value::Number(n) => match n.as_u64() {
@@ -202,7 +206,10 @@ fn parse_rule_entry(val: &Value) -> RuleEntry {
             let options = arr.get(1).cloned();
             RuleEntry { severity, options }
         }
-        _ => RuleEntry { severity: "error".to_string(), options: None },
+        _ => RuleEntry {
+            severity: "error".to_string(),
+            options: None,
+        },
     }
 }
 
@@ -233,11 +240,14 @@ fn merge_eslint_object(obj: &Value, config: &mut OxvelteConfig) {
     if let Some(overrides) = obj.get("overrides").and_then(|v| v.as_array()) {
         for override_obj in overrides {
             // Check if this override applies to *.svelte files
-            let applies_to_svelte = override_obj.get("files")
+            let applies_to_svelte = override_obj
+                .get("files")
                 .and_then(|f| f.as_array())
-                .is_some_and(|files| files.iter().any(|f| {
-                    f.as_str().is_some_and(|s| s.contains(".svelte"))
-                }));
+                .is_some_and(|files| {
+                    files
+                        .iter()
+                        .any(|f| f.as_str().is_some_and(|s| s.contains(".svelte")))
+                });
             if applies_to_svelte {
                 merge_eslint_object(override_obj, config);
             }

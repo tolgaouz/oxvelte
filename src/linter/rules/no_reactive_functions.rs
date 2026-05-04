@@ -17,17 +17,30 @@ impl Rule for NoReactiveFunctions {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let Some(semantic) = ctx.instance_semantic else { return };
+        // Vendor's `meta.conditions` excludes Svelte 5 runes mode — `$:` has
+        // different semantics there.
+        if ctx.is_runes {
+            return;
+        }
+        let Some(semantic) = ctx.instance_semantic else {
+            return;
+        };
         let content_offset = ctx.instance_content_offset;
 
         for stmt in &semantic.nodes().program().body {
-            let Statement::LabeledStatement(ls) = stmt else { continue };
+            let Statement::LabeledStatement(ls) = stmt else {
+                continue;
+            };
             if ls.label.name != "$" {
                 continue;
             }
             // `$: name = <function expression>`
-            let Statement::ExpressionStatement(es) = &ls.body else { continue };
-            let Expression::AssignmentExpression(ae) = &es.expression else { continue };
+            let Statement::ExpressionStatement(es) = &ls.body else {
+                continue;
+            };
+            let Expression::AssignmentExpression(ae) = &es.expression else {
+                continue;
+            };
             let is_fn = matches!(
                 &ae.right,
                 Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_)
@@ -35,8 +48,10 @@ impl Rule for NoReactiveFunctions {
             if !is_fn {
                 continue;
             }
-            let s = content_offset + ls.label.span.start;
-            let e = content_offset + ls.label.span.end + 1; // include `:`
+            // Vendor reports on the whole `SvelteReactiveStatement`, i.e. the
+            // entire `$: name = (...) => {...};`.
+            let s = content_offset + ls.span.start;
+            let e = content_offset + ls.span.end;
             ctx.diagnostic(
                 "Do not create functions inside reactive statements unless absolutely necessary.",
                 Span::new(s, e),

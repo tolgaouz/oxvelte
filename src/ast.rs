@@ -68,7 +68,7 @@ pub struct Element<'a> {
     pub name_span: Span,
     pub attributes: Vec<Attribute>,
     #[serde(skip)]
-    pub attribute_meta: Vec<AttributeMeta>,
+    pub attribute_meta: Vec<AttributeMeta<'a>>,
     pub children: Vec<TemplateNode<'a>>,
     pub self_closing: bool,
     /// Full element span: from `<` of the opening tag through `>` of the
@@ -92,6 +92,114 @@ pub struct Element<'a> {
     /// and emit `end: -1` to match.
     #[serde(skip)]
     pub unclosed_at_eof_outer: bool,
+}
+
+/// Structural classification of a template element.
+///
+/// Mirrors `svelte-eslint-parser`'s `SvelteElement.kind` discriminator: every
+/// element falls into one of three buckets, and the `SvelteSpecial` bucket
+/// further distinguishes which `<svelte:*>` tag we're looking at. Linter
+/// rules that need to filter "is this a real HTML element?" should use
+/// [`Element::kind`] / [`ElementKind`] rather than re-deriving the answer
+/// from `el.name` patterns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ElementKind {
+    /// Regular HTML element — lowercase first letter, no `:`, no `.`.
+    /// (e.g. `<div>`, `<span>`, `<slot>`.)
+    Html,
+    /// Component reference — PascalCase first letter or dotted member access.
+    /// (e.g. `<MyComp>`, `<foo.Bar>`.)
+    Component,
+    /// `<svelte:*>` special tag.
+    SvelteSpecial(SvelteSpecial),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SvelteSpecial {
+    Component, // <svelte:component>
+    Self_,     // <svelte:self>
+    Element,   // <svelte:element>
+    Fragment,  // <svelte:fragment>
+    Head,      // <svelte:head>
+    Body,      // <svelte:body>
+    Window,    // <svelte:window>
+    Document,  // <svelte:document>
+    Options,   // <svelte:options>
+    Boundary,  // <svelte:boundary>
+    /// Catch-all for `svelte:foo` tags the parser produces but we don't
+    /// model explicitly. Rules that want to be conservative can treat
+    /// `Unknown` like `Component` (i.e. don't apply HTML-only logic).
+    Unknown,
+}
+
+impl ElementKind {
+    /// Classify a template element by its tag name.
+    pub fn classify(name: &str) -> Self {
+        if let Some(suffix) = name.strip_prefix("svelte:") {
+            return ElementKind::SvelteSpecial(match suffix {
+                "component" => SvelteSpecial::Component,
+                "self" => SvelteSpecial::Self_,
+                "element" => SvelteSpecial::Element,
+                "fragment" => SvelteSpecial::Fragment,
+                "head" => SvelteSpecial::Head,
+                "body" => SvelteSpecial::Body,
+                "window" => SvelteSpecial::Window,
+                "document" => SvelteSpecial::Document,
+                "options" => SvelteSpecial::Options,
+                "boundary" => SvelteSpecial::Boundary,
+                _ => SvelteSpecial::Unknown,
+            });
+        }
+        match name.chars().next() {
+            Some(c) if c.is_ascii_uppercase() => ElementKind::Component,
+            _ if name.contains('.') => ElementKind::Component,
+            _ => ElementKind::Html,
+        }
+    }
+
+    pub fn is_html(self) -> bool {
+        matches!(self, ElementKind::Html)
+    }
+    pub fn is_component(self) -> bool {
+        matches!(self, ElementKind::Component)
+    }
+    pub fn is_svelte_special(self) -> bool {
+        matches!(self, ElementKind::SvelteSpecial(_))
+    }
+}
+
+impl<'a> Element<'a> {
+    /// Returns the structural kind of this element. See [`ElementKind`].
+    pub fn kind(&self) -> ElementKind {
+        ElementKind::classify(&self.name)
+    }
+
+    /// Typed expression AST for the attribute at index `idx`, when the
+    /// attribute's value is a single expression mustache (`name={expr}`,
+    /// shorthand `{name}`, or a directive expression). Returns `None` for
+    /// literal values, `Concat` values, and parse failures. Use
+    /// [`Element::attribute_part_expression_ast`] for `Concat` parts.
+    pub fn attribute_expression_ast(
+        &self,
+        idx: usize,
+    ) -> Option<&'a oxc::ast::ast::Expression<'a>> {
+        self.attribute_meta.get(idx).and_then(|m| m.expression_ast)
+    }
+
+    /// Typed expression AST for a single mustache `{expr}` inside the
+    /// `Concat` value of attribute `attr_idx`, where `part_idx` is the index
+    /// into `AttributeValuePart`s. Returns `None` for static parts and parse
+    /// failures.
+    pub fn attribute_part_expression_ast(
+        &self,
+        attr_idx: usize,
+        part_idx: usize,
+    ) -> Option<&'a oxc::ast::ast::Expression<'a>> {
+        self.attribute_meta
+            .get(attr_idx)
+            .and_then(|m| m.parts.get(part_idx))
+            .and_then(|p| p.expression_ast)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -143,20 +251,29 @@ pub enum AttributeValuePart {
 }
 
 #[derive(Debug, Clone)]
-pub struct AttributeMeta {
+pub struct AttributeMeta<'a> {
     pub name_span: Span,
     pub directive_subject_span: Option<Span>,
     pub value_span: Option<Span>,
     pub expression_span: Option<Span>,
     pub mustache_span: Option<Span>,
-    pub parts: Vec<AttributePartMeta>,
+    /// Typed AST for the attribute's expression value. Populated when the
+    /// attribute is `name={expr}`, shorthand `{name}`, or a directive whose
+    /// value is a single expression. `None` when the value is a literal,
+    /// `Concat`, or the expression text failed to parse as JS. Mirrors
+    /// `MustacheTag::expression_ast`.
+    pub expression_ast: Option<&'a oxc::ast::ast::Expression<'a>>,
+    pub parts: Vec<AttributePartMeta<'a>>,
 }
 
 #[derive(Debug, Clone)]
-pub struct AttributePartMeta {
+pub struct AttributePartMeta<'a> {
     pub span: Span,
     pub expression_span: Option<Span>,
     pub mustache_span: Option<Span>,
+    /// Typed AST for this part of a `Concat` value, when the part is an
+    /// expression mustache. `None` for static-text parts and parse failures.
+    pub expression_ast: Option<&'a oxc::ast::ast::Expression<'a>>,
 }
 
 #[derive(Debug, Clone, Serialize)]

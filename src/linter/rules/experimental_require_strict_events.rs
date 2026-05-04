@@ -11,18 +11,28 @@ impl Rule for ExperimentalRequireStrictEvents {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let is_ts = |s: &crate::ast::Script| {
-            matches!(s.lang.as_deref(), Some("ts" | "typescript" | "TS" | "Typescript" | "TypeScript"))
-        };
-        let scripts = [&ctx.ast.instance, &ctx.ast.module];
-        if !scripts.iter().any(|s| s.as_ref().map_or(false, |s| is_ts(s))) {
+        // Vendor's `meta.conditions` restricts this rule to Svelte 3/4.
+        if ctx.is_runes {
             return;
         }
-        let Some(script) = ctx.ast.instance.as_ref() else { return };
-        // `<script strictEvents>` opt-out — read from the parsed Script node.
-        if script.strict_events
-            || ctx.ast.module.as_ref().is_some_and(|m| m.strict_events)
+        let is_ts = |s: &crate::ast::Script| {
+            matches!(
+                s.lang.as_deref(),
+                Some("ts" | "typescript" | "TS" | "Typescript" | "TypeScript")
+            )
+        };
+        let scripts = [&ctx.ast.instance, &ctx.ast.module];
+        if !scripts
+            .iter()
+            .any(|s| s.as_ref().map_or(false, |s| is_ts(s)))
         {
+            return;
+        }
+        let Some(script) = ctx.ast.instance.as_ref() else {
+            return;
+        };
+        // `<script strictEvents>` opt-out — read from the parsed Script node.
+        if script.strict_events || ctx.ast.module.as_ref().is_some_and(|m| m.strict_events) {
             return;
         }
         // AST check: a top-level `interface $$Events` or `type $$Events` in

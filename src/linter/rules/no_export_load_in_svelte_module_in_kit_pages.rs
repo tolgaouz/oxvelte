@@ -40,11 +40,17 @@ impl Rule for NoExportLoadInSvelteModuleInKitPages {
                 }
             }
         }
-        let Some(module_sem) = ctx.module_semantic else { return };
+        let Some(module_sem) = ctx.module_semantic else {
+            return;
+        };
         let module_offset = ctx.module_content_offset;
         for stmt in &module_sem.nodes().program().body {
-            let Statement::ExportNamedDeclaration(exp) = stmt else { continue };
-            let Some(decl) = &exp.declaration else { continue };
+            let Statement::ExportNamedDeclaration(exp) = stmt else {
+                continue;
+            };
+            let Some(decl) = &exp.declaration else {
+                continue;
+            };
             let load_span = match decl {
                 Declaration::FunctionDeclaration(f) => {
                     if f.id.as_ref().map_or(false, |id| id.name == "load") {

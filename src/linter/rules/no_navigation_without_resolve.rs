@@ -2,12 +2,10 @@
 //! (`goto`, `pushState`, etc.) without using `$app/paths` `resolveRoute`.
 //! ⭐ Recommended
 
-use crate::linter::{walk_template_nodes, LintContext, Rule};
 use crate::ast::{Attribute, AttributeValue, TemplateNode};
+use crate::linter::{walk_template_nodes, LintContext, Rule};
 use oxc::allocator::Allocator;
-use oxc::ast::ast::{
-    Expression, ImportDeclarationSpecifier, ModuleExportName, Statement,
-};
+use oxc::ast::ast::{Expression, ImportDeclarationSpecifier, ModuleExportName, Statement};
 use oxc::ast::AstKind;
 use oxc::parser::Parser;
 use oxc::semantic::Semantic;
@@ -28,8 +26,17 @@ impl Rule for NoNavigationWithoutResolve {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let opts = ctx.config.options.as_ref().and_then(|v| v.as_array()).and_then(|arr| arr.first());
-        let get_bool = |key: &str| opts.and_then(|v| v.get(key)).and_then(|v| v.as_bool()).unwrap_or(false);
+        let opts = ctx
+            .config
+            .options
+            .as_ref()
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first());
+        let get_bool = |key: &str| {
+            opts.and_then(|v| v.get(key))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        };
         let ignore_goto = get_bool("ignoreGoto");
         let ignore_push_state = get_bool("ignorePushState");
         let ignore_replace_state = get_bool("ignoreReplaceState");
@@ -43,7 +50,9 @@ impl Rule for NoNavigationWithoutResolve {
 
         if let Some(sem) = ctx.instance_semantic {
             for stmt in &sem.nodes().program().body {
-                let Statement::ImportDeclaration(imp) = stmt else { continue };
+                let Statement::ImportDeclaration(imp) = stmt else {
+                    continue;
+                };
                 has_any_imports = true;
                 let src = imp.source.value.as_str();
                 let is_nav_mod = src == "$app/navigation";
@@ -51,7 +60,9 @@ impl Rule for NoNavigationWithoutResolve {
                 if is_paths_mod {
                     has_sveltekit_paths = true;
                 }
-                let Some(specifiers) = &imp.specifiers else { continue };
+                let Some(specifiers) = &imp.specifiers else {
+                    continue;
+                };
                 for spec in specifiers {
                     match spec {
                         ImportDeclarationSpecifier::ImportSpecifier(s) => {
@@ -62,7 +73,12 @@ impl Rule for NoNavigationWithoutResolve {
                             };
                             if is_nav_mod {
                                 if let Some(nav) = NAV_FUNCTIONS.iter().find(|f| **f == imported) {
-                                    if !is_nav_ignored(nav, ignore_goto, ignore_push_state, ignore_replace_state) {
+                                    if !is_nav_ignored(
+                                        nav,
+                                        ignore_goto,
+                                        ignore_push_state,
+                                        ignore_replace_state,
+                                    ) {
                                         nav_locals.push((s.local.name.to_string(), nav));
                                     }
                                 }
@@ -74,7 +90,12 @@ impl Rule for NoNavigationWithoutResolve {
                         ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => {
                             if is_nav_mod {
                                 for nav in NAV_FUNCTIONS {
-                                    if is_nav_ignored(nav, ignore_goto, ignore_push_state, ignore_replace_state) {
+                                    if is_nav_ignored(
+                                        nav,
+                                        ignore_goto,
+                                        ignore_push_state,
+                                        ignore_replace_state,
+                                    ) {
                                         continue;
                                     }
                                     nav_locals.push((format!("{}.{}", s.local.name, nav), nav));
@@ -96,12 +117,23 @@ impl Rule for NoNavigationWithoutResolve {
             if let Some(sem) = ctx.instance_semantic {
                 let content_offset = ctx.instance_content_offset;
                 for node in sem.nodes().iter() {
-                    let AstKind::CallExpression(ce) = node.kind() else { continue };
-                    let Some(callee_text) = callee_static_name(&ce.callee) else { continue };
-                    let Some((_, orig_name)) = nav_locals.iter().find(|(l, _)| l == &callee_text) else { continue };
-                    let Some(first_arg) = ce.arguments.first().and_then(|a| a.as_expression()) else { continue };
+                    let AstKind::CallExpression(ce) = node.kind() else {
+                        continue;
+                    };
+                    let Some(callee_text) = callee_static_name(&ce.callee) else {
+                        continue;
+                    };
+                    let Some((_, orig_name)) = nav_locals.iter().find(|(l, _)| l == &callee_text)
+                    else {
+                        continue;
+                    };
+                    let Some(first_arg) = ce.arguments.first().and_then(|a| a.as_expression())
+                    else {
+                        continue;
+                    };
 
-                    let safe = is_safe_nav_arg(first_arg, &resolve_locals, sem, &mut FxHashSet::default());
+                    let safe =
+                        is_safe_nav_arg(first_arg, &resolve_locals, sem, &mut FxHashSet::default());
                     if !safe {
                         let callee_span = ce.callee.span();
                         let s = content_offset + callee_span.start;
@@ -146,7 +178,12 @@ impl Rule for NoNavigationWithoutResolve {
                 }
 
                 for attr in &el.attributes {
-                    let Attribute::NormalAttribute { name, value, span, .. } = attr else { continue };
+                    let Attribute::NormalAttribute {
+                        name, value, span, ..
+                    } = attr
+                    else {
+                        continue;
+                    };
                     if name != "href" {
                         continue;
                     }
@@ -168,7 +205,12 @@ impl Rule for NoNavigationWithoutResolve {
     }
 }
 
-fn is_nav_ignored(name: &str, ignore_goto: bool, ignore_push_state: bool, ignore_replace_state: bool) -> bool {
+fn is_nav_ignored(
+    name: &str,
+    ignore_goto: bool,
+    ignore_push_state: bool,
+    ignore_replace_state: bool,
+) -> bool {
     match name {
         "goto" => ignore_goto,
         "pushState" => ignore_push_state,
@@ -195,7 +237,14 @@ fn static_string_prefix(expr: &Expression<'_>) -> Option<String> {
         Expression::StringLiteral(l) => Some(l.value.to_string()),
         Expression::TemplateLiteral(t) => {
             let first = t.quasis.first()?;
-            Some(first.value.cooked.as_deref().unwrap_or(first.value.raw.as_str()).to_string())
+            Some(
+                first
+                    .value
+                    .cooked
+                    .as_deref()
+                    .unwrap_or(first.value.raw.as_str())
+                    .to_string(),
+            )
         }
         Expression::BinaryExpression(b) => {
             let left = static_string_prefix(&b.left)?;
@@ -237,15 +286,26 @@ fn expr_contains_literal<'a>(
         match expr {
             Expression::StringLiteral(l) => token_match(l.value.as_str(), needle),
             Expression::TemplateLiteral(t) => t.quasis.iter().any(|q| {
-                token_match(q.value.cooked.as_deref().unwrap_or(q.value.raw.as_str()), needle)
+                token_match(
+                    q.value.cooked.as_deref().unwrap_or(q.value.raw.as_str()),
+                    needle,
+                )
             }),
-            Expression::BinaryExpression(b) => walk(&b.left, needle, sem, seen) || walk(&b.right, needle, sem, seen),
-            Expression::ConditionalExpression(c) => walk(&c.consequent, needle, sem, seen) || walk(&c.alternate, needle, sem, seen),
-            Expression::LogicalExpression(l) => walk(&l.left, needle, sem, seen) || walk(&l.right, needle, sem, seen),
+            Expression::BinaryExpression(b) => {
+                walk(&b.left, needle, sem, seen) || walk(&b.right, needle, sem, seen)
+            }
+            Expression::ConditionalExpression(c) => {
+                walk(&c.consequent, needle, sem, seen) || walk(&c.alternate, needle, sem, seen)
+            }
+            Expression::LogicalExpression(l) => {
+                walk(&l.left, needle, sem, seen) || walk(&l.right, needle, sem, seen)
+            }
             Expression::Identifier(id) => {
                 let Some(sem) = sem else { return false };
                 let name = id.name.as_str();
-                if !seen.insert(name.to_string()) { return false; }
+                if !seen.insert(name.to_string()) {
+                    return false;
+                }
                 let scoping = sem.scoping();
                 let Some(sid) = scoping.find_binding(scoping.root_scope_id(), name.into()) else {
                     return false;
@@ -281,8 +341,12 @@ fn callee_static_name(callee: &Expression<'_>) -> Option<String> {
 
 /// Is this a call to resolve/asset (or aliased/namespaced variant)?
 fn is_resolve_call(expr: &Expression<'_>, resolve_locals: &[String]) -> bool {
-    let Expression::CallExpression(ce) = expr else { return false };
-    let Some(text) = callee_static_name(&ce.callee) else { return false };
+    let Expression::CallExpression(ce) = expr else {
+        return false;
+    };
+    let Some(text) = callee_static_name(&ce.callee) else {
+        return false;
+    };
     resolve_locals.iter().any(|r| r == &text)
 }
 
@@ -293,7 +357,9 @@ fn is_safe_nav_arg<'a>(
     semantic: &'a Semantic<'a>,
     seen: &mut FxHashSet<oxc::semantic::SymbolId>,
 ) -> bool {
-    if static_string_prefix(expr).is_some_and(|p| is_exempt_href(&p)) { return true; }
+    if static_string_prefix(expr).is_some_and(|p| is_exempt_href(&p)) {
+        return true;
+    }
     match expr {
         Expression::CallExpression(_) => is_resolve_call(expr, resolve_locals),
         Expression::NullLiteral(_) => true,
@@ -302,7 +368,9 @@ fn is_safe_nav_arg<'a>(
                 return true;
             }
             let reference = semantic.scoping().get_reference(id.reference_id());
-            let Some(sid) = reference.symbol_id() else { return false };
+            let Some(sid) = reference.symbol_id() else {
+                return false;
+            };
             if !seen.insert(sid) {
                 return false; // recursion guard
             }
@@ -348,7 +416,9 @@ fn is_safe_template_root<'a>(
     instance_sem: Option<&'a Semantic<'a>>,
     seen: &mut FxHashSet<String>,
 ) -> bool {
-    if static_string_prefix(expr).is_some_and(|p| is_exempt_href(&p)) { return true; }
+    if static_string_prefix(expr).is_some_and(|p| is_exempt_href(&p)) {
+        return true;
+    }
     match expr {
         Expression::CallExpression(_) => is_resolve_call(expr, resolve_locals),
         Expression::NullLiteral(_) => true,
@@ -362,7 +432,9 @@ fn is_safe_template_root<'a>(
             if !seen.insert(name.to_string()) {
                 return false;
             }
-            let Some(sem) = instance_sem else { return false };
+            let Some(sem) = instance_sem else {
+                return false;
+            };
             let scoping = sem.scoping();
             let Some(sid) = scoping.find_binding(scoping.root_scope_id(), name.into()) else {
                 return false;
@@ -392,7 +464,9 @@ fn is_safe_instance_expr<'a>(
     sem: &'a Semantic<'a>,
     seen: &mut FxHashSet<String>,
 ) -> bool {
-    if static_string_prefix(expr).is_some_and(|p| is_exempt_href(&p)) { return true; }
+    if static_string_prefix(expr).is_some_and(|p| is_exempt_href(&p)) {
+        return true;
+    }
     match expr {
         Expression::CallExpression(_) => is_resolve_call(expr, resolve_locals),
         Expression::NullLiteral(_) => true,
@@ -405,7 +479,9 @@ fn is_safe_instance_expr<'a>(
                 return false;
             }
             let reference = sem.scoping().get_reference(id.reference_id());
-            let Some(sid) = reference.symbol_id() else { return false };
+            let Some(sid) = reference.symbol_id() else {
+                return false;
+            };
             let decl_node_id = sem.scoping().symbol_declaration(sid);
             let init = std::iter::once(decl_node_id)
                 .chain(sem.nodes().ancestor_ids(decl_node_id))

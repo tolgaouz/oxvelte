@@ -14,28 +14,40 @@ impl Rule for RequireEventDispatcherTypes {
     }
 
     fn is_recommended(&self) -> bool {
-        // The vendor rule is gated to svelteVersions: ['3/4'].
-        // createEventDispatcher is deprecated in Svelte 5, so this rule adds noise
-        // in Svelte 5 projects. Disable by default (opt-in).
-        false
+        // Vendor's meta declares `recommended: true` (gated to Svelte 3/4
+        // via `meta.conditions`). The runes early-return below is what keeps
+        // the rule quiet on Svelte 5 projects, not the recommended flag.
+        true
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let Some(script) = &ctx.ast.instance else { return };
-        if script.lang.as_deref() != Some("ts") {
+        // Vendor's `meta.conditions` restricts this rule to Svelte 3/4.
+        if ctx.is_runes {
             return;
         }
-        let Some(semantic) = ctx.instance_semantic else { return };
+        let Some(script) = &ctx.ast.instance else {
+            return;
+        };
+        if !matches!(script.lang.as_deref(), Some("ts" | "typescript")) {
+            return;
+        }
+        let Some(semantic) = ctx.instance_semantic else {
+            return;
+        };
 
         // Collect local names bound to `createEventDispatcher` from `svelte`.
         let mut names: Vec<String> = Vec::new();
         let program = semantic.nodes().program();
         for stmt in &program.body {
-            let Statement::ImportDeclaration(imp) = stmt else { continue };
+            let Statement::ImportDeclaration(imp) = stmt else {
+                continue;
+            };
             if imp.source.value != "svelte" {
                 continue;
             }
-            let Some(specifiers) = &imp.specifiers else { continue };
+            let Some(specifiers) = &imp.specifiers else {
+                continue;
+            };
             for spec in specifiers {
                 match spec {
                     ImportDeclarationSpecifier::ImportSpecifier(s) => {
@@ -61,12 +73,16 @@ impl Rule for RequireEventDispatcherTypes {
 
         let content_offset = ctx.instance_content_offset;
         for node in semantic.nodes().iter() {
-            let AstKind::CallExpression(ce) = node.kind() else { continue };
+            let AstKind::CallExpression(ce) = node.kind() else {
+                continue;
+            };
             // Missing type parameters → `.type_arguments` is None.
             if ce.type_arguments.is_some() {
                 continue;
             }
-            let Some(callee_text) = callee_static_name(&ce.callee) else { continue };
+            let Some(callee_text) = callee_static_name(&ce.callee) else {
+                continue;
+            };
             if !names.iter().any(|n| n == &callee_text) {
                 continue;
             }
