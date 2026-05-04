@@ -8,7 +8,7 @@ use oxc::ast::ast::{Expression, VariableDeclarationKind};
 use oxc::ast::AstKind;
 use oxc::parser::Parser;
 use oxc::semantic::Semantic;
-use oxc::span::{Ident, SourceType, Span};
+use oxc::span::{SourceType, Span};
 
 pub struct NoNotFunctionHandler;
 
@@ -109,7 +109,7 @@ fn identifier_non_function_phrase<'a>(
     sem: &'a Semantic<'a>,
 ) -> Option<&'static str> {
     let scoping = sem.scoping();
-    let sid = scoping.find_binding(scoping.root_scope_id(), Ident::new_const(name))?;
+    let sid = scoping.find_binding(scoping.root_scope_id(), name.into())?;
     // Skip function declarations (these ARE functions).
     let flags = scoping.symbol_flags(sid);
     if flags.intersects(oxc::semantic::SymbolFlags::Function) {

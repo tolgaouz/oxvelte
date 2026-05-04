@@ -17,7 +17,7 @@ use oxc::ast::ast::*;
 use oxc::ast::AstKind;
 use oxc::ast_visit::Visit;
 use oxc::semantic::{NodeId, Semantic, SymbolId};
-use oxc::span::{GetSpan, Ident, Span};
+use oxc::span::{GetSpan, Span};
 use rustc_hash::FxHashSet;
 
 pub struct InfiniteReactiveLoop;
@@ -262,7 +262,7 @@ fn collect_tracked<'a>(
         }
         if name.starts_with('$') && name.len() > 1 {
             let base = &name[1..];
-            if scoping.find_binding(root_scope, Ident::new_const(base)).is_some()
+            if scoping.find_binding(root_scope, base.into()).is_some()
                 || module_top_names.contains(base)
             {
                 tracked_names_module.insert(name.to_string());
@@ -679,4 +679,3 @@ impl<'a, 'ctx> Visit<'a> for MicrotaskVisitor<'a, 'ctx> {
         self.node_stack.pop();
     }
 }
-

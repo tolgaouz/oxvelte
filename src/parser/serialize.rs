@@ -4,8 +4,8 @@
 //! matching the expected output from the Svelte 4 compiler's parser, so we can
 //! compare against the test fixtures in `fixtures/parser/legacy/`.
 
-use serde_json::{json, Value};
 use crate::ast::*;
+use serde_json::{json, Value};
 
 /// Convert a byte offset to a UTF-16 code unit offset (JavaScript string position).
 fn byte_to_char_offset(source: &str, byte_offset: usize) -> usize {
@@ -19,6 +19,36 @@ fn byte_to_char_offset(source: &str, byte_offset: usize) -> usize {
 /// Check if source contains multi-byte characters.
 fn has_multibyte(source: &str) -> bool {
     source.len() != source.chars().count()
+}
+
+fn trimmed_span_start(span: oxc::span::Span, raw: &str) -> u32 {
+    span.start + (raw.len() - raw.trim_start().len()) as u32
+}
+
+fn index_after_next_closing_brace(source: &str, offset: u32) -> u32 {
+    let start = (offset as usize).min(source.len());
+    source[start..]
+        .find('}')
+        .map(|idx| (start + idx + 1) as u32)
+        .unwrap_or(offset)
+}
+
+fn index_after_last_closing_brace_at_or_before(source: &str, offset: u32) -> u32 {
+    if source.is_empty() {
+        return 0;
+    }
+
+    let end = (offset as usize).min(source.len().saturating_sub(1));
+    source[..=end]
+        .rfind('}')
+        .map(|idx| (idx + 1) as u32)
+        .unwrap_or(0)
+}
+
+fn source_for_span<'a>(source: &'a str, span: oxc::span::Span) -> &'a str {
+    source
+        .get(span.start as usize..span.end as usize)
+        .unwrap_or("")
 }
 
 /// Compute line/column location info from a byte offset in source text.
@@ -45,6 +75,207 @@ fn offset_to_loc(source: &str, offset: usize) -> (usize, usize) {
     } else {
         let col = offset.saturating_sub(line_start_byte);
         (line, col)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn top_level_script_braced_attribute_value_stays_static_text() {
+        let source = "<script lang={ts}>\n</script>";
+        let alloc = oxc::allocator::Allocator::default();
+        let result = crate::parser::parse(source, &alloc);
+        let actual = to_modern_json(&result.ast, source);
+
+        let value = &actual["instance"]["attributes"][0]["value"][0];
+        assert_eq!(value["type"], "Text");
+        assert_eq!(value["raw"], "{ts}");
+        assert_eq!(value["data"], "{ts}");
+    }
+
+    #[test]
+    fn each_context_and_key_offsets_come_from_header_spans() {
+        let source = r#"{#each labels.includes(" as ") as label (label.id)}{/each}"#;
+        let alloc = oxc::allocator::Allocator::default();
+        let result = crate::parser::parse(source, &alloc);
+        let actual = to_modern_json(&result.ast, source);
+        let each = &actual["fragment"]["nodes"][0];
+
+        let context_start = source.rfind("as label").unwrap() + "as ".len();
+        let key_start = source.rfind("(label.id)").unwrap() + 1;
+        assert_eq!(each["context"]["start"], context_start as u32);
+        assert_eq!(each["key"]["start"], key_start as u32);
+    }
+
+    #[test]
+    fn modern_each_block_serializes_fallback_fragment() {
+        let source = "{#each items as item}<p>{item}</p>{:else}<p>empty</p>{/each}";
+        let alloc = oxc::allocator::Allocator::default();
+        let result = crate::parser::parse(source, &alloc);
+        let actual = to_modern_json(&result.ast, source);
+        let fallback = &actual["fragment"]["nodes"][0]["fallback"];
+
+        assert_eq!(fallback["type"], "Fragment");
+        assert_eq!(fallback["nodes"][0]["type"], "RegularElement");
+        assert_eq!(fallback["nodes"][0]["start"], 41);
+    }
+
+    #[test]
+    fn head_title_uses_dedicated_modern_and_legacy_types() {
+        let source = "<svelte:head>{#if show}<title>Hello</title>{/if}</svelte:head>";
+        let alloc = oxc::allocator::Allocator::default();
+        let result = crate::parser::parse(source, &alloc);
+
+        let modern = to_modern_json(&result.ast, source);
+        let modern_title =
+            &modern["fragment"]["nodes"][0]["fragment"]["nodes"][0]["consequent"]["nodes"][0];
+        assert_eq!(modern_title["type"], "TitleElement");
+
+        let legacy = to_legacy_json(&result.ast, source);
+        let legacy_title = &legacy["html"]["children"][0]["children"][0]["children"][0];
+        assert_eq!(legacy_title["type"], "Title");
+    }
+
+    #[test]
+    fn await_shorthand_binding_offset_ignores_keyword_inside_expression() {
+        let source = r#"{#await message.includes(" then ") then message}{/await}"#;
+        let alloc = oxc::allocator::Allocator::default();
+        let result = crate::parser::parse(source, &alloc);
+        let actual = to_modern_json(&result.ast, source);
+        let await_block = &actual["fragment"]["nodes"][0];
+
+        let binding_start = source.rfind("then message").unwrap() + "then ".len();
+        assert_eq!(await_block["value"]["start"], binding_start as u32);
+    }
+
+    #[test]
+    fn legacy_await_catch_before_then_spans_follow_svelte_adapter() {
+        let source = "{#await p}<p>pending</p>{:catch e}<p>err</p>{:then v}<p>ok</p>{/await}";
+        let alloc = oxc::allocator::Allocator::default();
+        let result = crate::parser::parse(source, &alloc);
+        let actual = to_legacy_json(&result.ast, source);
+        let await_block = &actual["html"]["children"][0];
+
+        assert_eq!(await_block["then"]["start"], 24);
+        assert_eq!(await_block["then"]["end"], 62);
+        assert_eq!(await_block["catch"]["start"], 62);
+        assert_eq!(await_block["catch"]["end"], 44);
+    }
+
+    #[test]
+    fn legacy_await_empty_then_before_catch_uses_previous_clause_end() {
+        let source = "{#await p}<p>pending</p>{:then v}{:catch e}<p>err</p>{/await}";
+        let alloc = oxc::allocator::Allocator::default();
+        let result = crate::parser::parse(source, &alloc);
+        let actual = to_legacy_json(&result.ast, source);
+        let await_block = &actual["html"]["children"][0];
+
+        assert_eq!(await_block["then"]["start"], 24);
+        assert_eq!(await_block["then"]["end"], 10);
+        assert_eq!(await_block["catch"]["start"], 10);
+    }
+
+    #[test]
+    fn concat_attribute_value_offsets_skip_spaces_after_equal() {
+        let source = r#"<div class = "x{foo}y"></div>"#;
+        let alloc = oxc::allocator::Allocator::default();
+        let result = crate::parser::parse(source, &alloc);
+        let actual = to_modern_json(&result.ast, source);
+        let value = &actual["fragment"]["nodes"][0]["attributes"][0]["value"];
+
+        assert_eq!(value[0]["start"], 14);
+        assert_eq!(value[1]["type"], "ExpressionTag");
+        assert_eq!(value[1]["start"], 15);
+        assert_eq!(value[1]["expression"]["start"], 16);
+        assert_eq!(value[2]["start"], 20);
+    }
+
+    #[test]
+    fn html_comment_markers_inside_earlier_script_are_not_script_leading_comments() {
+        let source = r#"<script module>
+const marker = "<!--not html-->";
+</script>
+<script>
+let value;
+</script>"#;
+        let alloc = oxc::allocator::Allocator::default();
+        let result = crate::parser::parse(source, &alloc);
+        let actual = to_modern_json(&result.ast, source);
+
+        assert!(actual["instance"]["content"]["leadingComments"].is_null());
+    }
+
+    #[test]
+    fn script_leading_html_comment_does_not_cross_prior_script() {
+        let source = r#"<!--module only-->
+<script module>
+export const value = 1;
+</script>
+<script>
+let value = 2;
+</script>"#;
+        let alloc = oxc::allocator::Allocator::default();
+        let result = crate::parser::parse(source, &alloc);
+        let actual = to_modern_json(&result.ast, source);
+
+        assert_eq!(
+            actual["module"]["content"]["leadingComments"][0]["value"],
+            "module only"
+        );
+        assert!(actual["instance"]["content"]["leadingComments"].is_null());
+    }
+
+    #[test]
+    fn nested_html_comment_before_script_is_not_script_leading_comment() {
+        let source = r#"<div><!--nested--></div>
+<script>
+let value;
+</script>"#;
+        let alloc = oxc::allocator::Allocator::default();
+        let result = crate::parser::parse(source, &alloc);
+        let actual = to_modern_json(&result.ast, source);
+
+        assert!(actual["instance"]["content"]["leadingComments"].is_null());
+    }
+
+    #[test]
+    fn debug_tag_serializes_identifier_locations() {
+        let source = "{@debug value, other}";
+        let alloc = oxc::allocator::Allocator::default();
+        let result = crate::parser::parse(source, &alloc);
+        let actual = to_modern_json(&result.ast, source);
+        let identifiers = &actual["fragment"]["nodes"][0]["identifiers"];
+
+        assert_eq!(identifiers[0]["name"], "value");
+        assert_eq!(identifiers[0]["start"], 8);
+        assert_eq!(identifiers[0]["end"], 13);
+        assert_eq!(identifiers[1]["name"], "other");
+        assert_eq!(identifiers[1]["start"], 15);
+        assert_eq!(identifiers[1]["end"], 20);
+    }
+
+    #[test]
+    fn const_tag_serializes_estree_declaration() {
+        let source = "{@const foo = bar}";
+        let alloc = oxc::allocator::Allocator::default();
+        let result = crate::parser::parse(source, &alloc);
+        let modern = to_modern_json(&result.ast, source);
+        let legacy = to_legacy_json(&result.ast, source);
+
+        assert_eq!(
+            modern["fragment"]["nodes"][0]["declaration"]["type"],
+            "VariableDeclaration"
+        );
+        assert_eq!(
+            modern["fragment"]["nodes"][0]["declaration"]["declarations"][0]["id"]["start"],
+            8
+        );
+        assert_eq!(
+            legacy["html"]["children"][0]["expression"]["type"],
+            "AssignmentExpression"
+        );
     }
 }
 
@@ -83,9 +314,13 @@ fn expression_to_estree(source: &str, expr_str: &str, expr_start: u32) -> Value 
         let parse_result = Parser::new(&alloc, &wrapper, SourceType::mjs()).parse();
 
         if !parse_result.program.body.is_empty() && parse_result.errors.is_empty() {
-            if let Some(oxc::ast::ast::Statement::ExpressionStatement(es)) = parse_result.program.body.first() {
+            if let Some(oxc::ast::ast::Statement::ExpressionStatement(es)) =
+                parse_result.program.body.first()
+            {
                 if let oxc::ast::ast::Expression::UnaryExpression(unary) = &es.expression {
-                    if let oxc::ast::ast::Expression::ParenthesizedExpression(paren) = &unary.argument {
+                    if let oxc::ast::ast::Expression::ParenthesizedExpression(paren) =
+                        &unary.argument
+                    {
                         let inner_expr = &paren.expression;
                         let wrapper_prefix_len = 7u32; // "void (\n"
                         let offset = expr_start - wrapper_prefix_len;
@@ -93,7 +328,14 @@ fn expression_to_estree(source: &str, expr_str: &str, expr_start: u32) -> Value 
 
                         let comments = &parse_result.program.comments;
                         if !comments.is_empty() {
-                            attach_expression_comments(&mut result, comments, expr_str, expr_start, wrapper_prefix_len, source);
+                            attach_expression_comments(
+                                &mut result,
+                                comments,
+                                expr_str,
+                                expr_start,
+                                wrapper_prefix_len,
+                                source,
+                            );
                         }
 
                         return result;
@@ -122,7 +364,9 @@ fn expression_to_estree(source: &str, expr_str: &str, expr_start: u32) -> Value 
     let ts_result = Parser::new(&alloc_ts, expr_str, SourceType::ts()).parse_expression();
 
     match ts_result {
-        Ok(expr) if !expr_str.ends_with('.') => { return estree_expr(&expr, source, expr_start); }
+        Ok(expr) if !expr_str.ends_with('.') => {
+            return estree_expr(&expr, source, expr_start);
+        }
         _ => {}
     }
 
@@ -146,12 +390,15 @@ fn add_leading_comment_from_text(result: &mut Value, expr_str: &str, expr_start:
             let comment_start = expr_start + ws_offset;
             let comment_end = comment_start + end_pos as u32 + 2;
             if let Some(obj) = result.as_object_mut() {
-                obj.insert("leadingComments".to_string(), json!([{
-                    "type": "Block",
-                    "value": comment_text,
-                    "start": comment_start,
-                    "end": comment_end
-                }]));
+                obj.insert(
+                    "leadingComments".to_string(),
+                    json!([{
+                        "type": "Block",
+                        "value": comment_text,
+                        "start": comment_start,
+                        "end": comment_end
+                    }]),
+                );
             }
         }
     } else if trimmed.starts_with("//") {
@@ -161,12 +408,15 @@ fn add_leading_comment_from_text(result: &mut Value, expr_str: &str, expr_start:
             let comment_start = expr_start + ws_offset;
             let comment_end = comment_start + nl_pos as u32;
             if let Some(obj) = result.as_object_mut() {
-                obj.insert("leadingComments".to_string(), json!([{
-                    "type": "Line",
-                    "value": comment_text,
-                    "start": comment_start,
-                    "end": comment_end
-                }]));
+                obj.insert(
+                    "leadingComments".to_string(),
+                    json!([{
+                        "type": "Line",
+                        "value": comment_text,
+                        "start": comment_start,
+                        "end": comment_end
+                    }]),
+                );
             }
         }
     }
@@ -187,17 +437,22 @@ fn attach_expression_comments(
         let c_end_in_expr = c.span.end.saturating_sub(wrapper_prefix_len);
 
         // Skip comments that are outside the expression range
-        if c_start_in_expr > expr_str.len() as u32 { continue; }
+        if c_start_in_expr > expr_str.len() as u32 {
+            continue;
+        }
 
         let c_start = expr_start + c_start_in_expr;
         let c_end = expr_start + c_end_in_expr;
 
         let comment_type = if c.is_line() { "Line" } else { "Block" };
-        let raw = &expr_str[c_start_in_expr as usize..std::cmp::min(c_end_in_expr as usize, expr_str.len())];
+        let raw = &expr_str
+            [c_start_in_expr as usize..std::cmp::min(c_end_in_expr as usize, expr_str.len())];
         let value = if c.is_line() {
             raw.strip_prefix("//").unwrap_or(raw)
         } else {
-            raw.strip_prefix("/*").and_then(|v| v.strip_suffix("*/")).unwrap_or(raw)
+            raw.strip_prefix("/*")
+                .and_then(|v| v.strip_suffix("*/"))
+                .unwrap_or(raw)
         };
 
         let comment_json = json!({
@@ -217,7 +472,9 @@ fn attach_expression_comments(
             if c_start >= root_end {
                 if let Some(obj) = result.as_object_mut() {
                     let arr = obj.entry("trailingComments").or_insert(json!([]));
-                    if let Some(a) = arr.as_array_mut() { a.push(comment_json); }
+                    if let Some(a) = arr.as_array_mut() {
+                        a.push(comment_json);
+                    }
                 }
             }
         }
@@ -297,24 +554,28 @@ fn estree_expr(expr: &oxc::ast::ast::Expression<'_>, source: &str, offset: u32) 
             let start = offset + call.span.start;
             let end = offset + call.span.end;
             let callee = estree_expr_from_callee(&call.callee, source, offset);
-            let args: Vec<Value> = call.arguments.iter().map(|a| {
-                match a {
-                    oxc::ast::ast::Argument::SpreadElement(s) => {
-                        let s_start = offset + s.span.start;
-                        let s_end = offset + s.span.end;
-                        json!({
-                            "type": "SpreadElement",
-                            "start": s_start,
-                            "end": s_end,
-                            "argument": estree_expr(&s.argument, source, offset)
-                        })
+            let args: Vec<Value> = call
+                .arguments
+                .iter()
+                .map(|a| {
+                    match a {
+                        oxc::ast::ast::Argument::SpreadElement(s) => {
+                            let s_start = offset + s.span.start;
+                            let s_end = offset + s.span.end;
+                            json!({
+                                "type": "SpreadElement",
+                                "start": s_start,
+                                "end": s_end,
+                                "argument": estree_expr(&s.argument, source, offset)
+                            })
+                        }
+                        _ => {
+                            // Argument is an Expression
+                            estree_expr(a.as_expression().unwrap(), source, offset)
+                        }
                     }
-                    _ => {
-                        // Argument is an Expression
-                        estree_expr(a.as_expression().unwrap(), source, offset)
-                    }
-                }
-            }).collect();
+                })
+                .collect();
             json!({
                 "type": "CallExpression",
                 "start": start,
@@ -419,24 +680,30 @@ fn estree_expr(expr: &oxc::ast::ast::Expression<'_>, source: &str, offset: u32) 
         Expression::TemplateLiteral(tl) => {
             let start = offset + tl.span.start;
             let end = offset + tl.span.end;
-            let quasis: Vec<Value> = tl.quasis.iter().map(|q| {
-                let q_start = offset + q.span.start;
-                let q_end = offset + q.span.end;
-                json!({
-                    "type": "TemplateElement",
-                    "start": q_start,
-                    "end": q_end,
-                    "loc": loc_json(source, q_start, q_end),
-                    "value": {
-                        "raw": q.value.raw.as_str(),
-                        "cooked": q.value.cooked.as_ref().map(|c| c.as_str())
-                    },
-                    "tail": q.tail
+            let quasis: Vec<Value> = tl
+                .quasis
+                .iter()
+                .map(|q| {
+                    let q_start = offset + q.span.start;
+                    let q_end = offset + q.span.end;
+                    json!({
+                        "type": "TemplateElement",
+                        "start": q_start,
+                        "end": q_end,
+                        "loc": loc_json(source, q_start, q_end),
+                        "value": {
+                            "raw": q.value.raw.as_str(),
+                            "cooked": q.value.cooked.as_ref().map(|c| c.as_str())
+                        },
+                        "tail": q.tail
+                    })
                 })
-            }).collect();
-            let exprs: Vec<Value> = tl.expressions.iter().map(|e| {
-                estree_expr(e, source, offset)
-            }).collect();
+                .collect();
+            let exprs: Vec<Value> = tl
+                .expressions
+                .iter()
+                .map(|e| estree_expr(e, source, offset))
+                .collect();
             json!({
                 "type": "TemplateLiteral",
                 "start": start,
@@ -449,8 +716,10 @@ fn estree_expr(expr: &oxc::ast::ast::Expression<'_>, source: &str, offset: u32) 
         Expression::ArrayExpression(arr) => {
             let start = offset + arr.span.start;
             let end = offset + arr.span.end;
-            let elements: Vec<Value> = arr.elements.iter().map(|el| {
-                match el {
+            let elements: Vec<Value> = arr
+                .elements
+                .iter()
+                .map(|el| match el {
                     oxc::ast::ast::ArrayExpressionElement::SpreadElement(s) => {
                         let s_start = offset + s.span.start;
                         let s_end = offset + s.span.end;
@@ -461,14 +730,10 @@ fn estree_expr(expr: &oxc::ast::ast::Expression<'_>, source: &str, offset: u32) 
                             "argument": estree_expr(&s.argument, source, offset)
                         })
                     }
-                    oxc::ast::ast::ArrayExpressionElement::Elision(_e) => {
-                        Value::Null
-                    }
-                    _ => {
-                        estree_expr(el.as_expression().unwrap(), source, offset)
-                    }
-                }
-            }).collect();
+                    oxc::ast::ast::ArrayExpressionElement::Elision(_e) => Value::Null,
+                    _ => estree_expr(el.as_expression().unwrap(), source, offset),
+                })
+                .collect();
             json!({
                 "type": "ArrayExpression",
                 "start": start,
@@ -480,8 +745,10 @@ fn estree_expr(expr: &oxc::ast::ast::Expression<'_>, source: &str, offset: u32) 
         Expression::ObjectExpression(obj) => {
             let start = offset + obj.span.start;
             let end = offset + obj.span.end;
-            let properties: Vec<Value> = obj.properties.iter().map(|prop| {
-                match prop {
+            let properties: Vec<Value> = obj
+                .properties
+                .iter()
+                .map(|prop| match prop {
                     oxc::ast::ast::ObjectPropertyKind::ObjectProperty(p) => {
                         let p_start = offset + p.span.start;
                         let p_end = offset + p.span.end;
@@ -514,8 +781,8 @@ fn estree_expr(expr: &oxc::ast::ast::Expression<'_>, source: &str, offset: u32) 
                             "argument": estree_expr(&s.argument, source, offset)
                         })
                     }
-                }
-            }).collect();
+                })
+                .collect();
             json!({
                 "type": "ObjectExpression",
                 "start": start,
@@ -527,9 +794,12 @@ fn estree_expr(expr: &oxc::ast::ast::Expression<'_>, source: &str, offset: u32) 
         Expression::ArrowFunctionExpression(arrow) => {
             let start = offset + arrow.span.start;
             let end = offset + arrow.span.end;
-            let params: Vec<Value> = arrow.params.items.iter().map(|p| {
-                estree_binding_pattern(p, source, offset)
-            }).collect();
+            let params: Vec<Value> = arrow
+                .params
+                .items
+                .iter()
+                .map(|p| estree_binding_pattern(p, source, offset))
+                .collect();
             let body = if arrow.expression {
                 let stmts = &arrow.body.statements;
                 if let Some(stmt) = stmts.first() {
@@ -544,9 +814,12 @@ fn estree_expr(expr: &oxc::ast::ast::Expression<'_>, source: &str, offset: u32) 
             } else {
                 let body_start = offset + arrow.body.span.start;
                 let body_end = offset + arrow.body.span.end;
-                let stmts: Vec<Value> = arrow.body.statements.iter().map(|s| {
-                    serialize_statement_legacy(s, source, offset)
-                }).collect();
+                let stmts: Vec<Value> = arrow
+                    .body
+                    .statements
+                    .iter()
+                    .map(|s| serialize_statement_legacy(s, source, offset))
+                    .collect();
                 json!({
                     "type": "BlockStatement",
                     "start": body_start,
@@ -597,7 +870,11 @@ fn estree_expr(expr: &oxc::ast::ast::Expression<'_>, source: &str, offset: u32) 
         Expression::SequenceExpression(seq) => {
             let start = offset + seq.span.start;
             let end = offset + seq.span.end;
-            let exprs: Vec<Value> = seq.expressions.iter().map(|e| estree_expr(e, source, offset)).collect();
+            let exprs: Vec<Value> = seq
+                .expressions
+                .iter()
+                .map(|e| estree_expr(e, source, offset))
+                .collect();
             json!({
                 "type": "SequenceExpression",
                 "start": start,
@@ -671,24 +948,30 @@ fn estree_expr(expr: &oxc::ast::ast::Expression<'_>, source: &str, offset: u32) 
             let tl = &tte.quasi;
             let tl_start = offset + tl.span.start;
             let tl_end = offset + tl.span.end;
-            let quasis: Vec<Value> = tl.quasis.iter().map(|q| {
-                let q_start = offset + q.span.start;
-                let q_end = offset + q.span.end;
-                json!({
-                    "type": "TemplateElement",
-                    "start": q_start,
-                    "end": q_end,
-                    "loc": loc_json(source, q_start, q_end),
-                    "value": {
-                        "raw": q.value.raw.as_str(),
-                        "cooked": q.value.cooked.as_ref().map(|c| c.as_str())
-                    },
-                    "tail": q.tail
+            let quasis: Vec<Value> = tl
+                .quasis
+                .iter()
+                .map(|q| {
+                    let q_start = offset + q.span.start;
+                    let q_end = offset + q.span.end;
+                    json!({
+                        "type": "TemplateElement",
+                        "start": q_start,
+                        "end": q_end,
+                        "loc": loc_json(source, q_start, q_end),
+                        "value": {
+                            "raw": q.value.raw.as_str(),
+                            "cooked": q.value.cooked.as_ref().map(|c| c.as_str())
+                        },
+                        "tail": q.tail
+                    })
                 })
-            }).collect();
-            let exprs: Vec<Value> = tl.expressions.iter().map(|e| {
-                estree_expr(e, source, offset)
-            }).collect();
+                .collect();
+            let exprs: Vec<Value> = tl
+                .expressions
+                .iter()
+                .map(|e| estree_expr(e, source, offset))
+                .collect();
             json!({
                 "type": "TaggedTemplateExpression",
                 "start": start,
@@ -719,9 +1002,12 @@ fn estree_expr(expr: &oxc::ast::ast::Expression<'_>, source: &str, offset: u32) 
         Expression::FunctionExpression(func) => {
             let start = offset + func.span.start;
             let end = offset + func.span.end;
-            let params: Vec<Value> = func.params.items.iter().map(|p| {
-                estree_binding_pattern(p, source, offset)
-            }).collect();
+            let params: Vec<Value> = func
+                .params
+                .items
+                .iter()
+                .map(|p| estree_binding_pattern(p, source, offset))
+                .collect();
             json!({
                 "type": "FunctionExpression",
                 "start": start,
@@ -758,7 +1044,11 @@ fn estree_expr(expr: &oxc::ast::ast::Expression<'_>, source: &str, offset: u32) 
     }
 }
 
-fn estree_expr_from_callee(callee: &oxc::ast::ast::Expression<'_>, source: &str, offset: u32) -> Value {
+fn estree_expr_from_callee(
+    callee: &oxc::ast::ast::Expression<'_>,
+    source: &str,
+    offset: u32,
+) -> Value {
     estree_expr(callee, source, offset)
 }
 
@@ -799,13 +1089,15 @@ fn estree_property_key(key: &oxc::ast::ast::PropertyKey<'_>, source: &str, offse
                 "raw": &source[start as usize..end as usize]
             })
         }
-        _ => {
-            estree_expr(key.as_expression().unwrap(), source, offset)
-        }
+        _ => estree_expr(key.as_expression().unwrap(), source, offset),
     }
 }
 
-fn estree_binding_pattern(pattern: &oxc::ast::ast::FormalParameter<'_>, source: &str, offset: u32) -> Value {
+fn estree_binding_pattern(
+    pattern: &oxc::ast::ast::FormalParameter<'_>,
+    source: &str,
+    offset: u32,
+) -> Value {
     let mut result = estree_binding_pat(&pattern.pattern, source, offset);
     // If the FormalParameter has a type annotation, use the FormalParameter's span
     // and add typeAnnotation field
@@ -818,7 +1110,10 @@ fn estree_binding_pattern(pattern: &oxc::ast::ast::FormalParameter<'_>, source: 
             if let Some(loc) = obj.get_mut("loc") {
                 if let Some(loc_obj) = loc.as_object_mut() {
                     let (end_line, end_col) = offset_to_loc(source, param_end as usize);
-                    loc_obj.insert("end".to_string(), json!({"line": end_line, "column": end_col}));
+                    loc_obj.insert(
+                        "end".to_string(),
+                        json!({"line": end_line, "column": end_col}),
+                    );
                 }
             }
             // Add typeAnnotation with nested type
@@ -826,22 +1121,34 @@ fn estree_binding_pattern(pattern: &oxc::ast::ast::FormalParameter<'_>, source: 
             let ann_end = offset + type_ann.span.end;
             // Get the type keyword from the annotation
             let type_node = serialize_ts_type(&type_ann.type_annotation, source, offset);
-            obj.insert("typeAnnotation".to_string(), json!({
-                "type": "TSTypeAnnotation",
-                "start": ann_start,
-                "end": ann_end,
-                "loc": loc_json(source, ann_start, ann_end),
-                "typeAnnotation": type_node
-            }));
+            obj.insert(
+                "typeAnnotation".to_string(),
+                json!({
+                    "type": "TSTypeAnnotation",
+                    "start": ann_start,
+                    "end": ann_end,
+                    "loc": loc_json(source, ann_start, ann_end),
+                    "typeAnnotation": type_node
+                }),
+            );
         }
     }
     result
 }
 
 /// Recursively try to attach a comment to a node whose start matches attached_to.
-fn attach_comment_recursive(node: &mut Value, comment: &Value, attached_to: u32, comment_start: u32, source: &str) -> bool {
+fn attach_comment_recursive(
+    node: &mut Value,
+    comment: &Value,
+    attached_to: u32,
+    comment_start: u32,
+    source: &str,
+) -> bool {
     if let Some(obj) = node.as_object_mut() {
-        let node_start = obj.get("start").and_then(|v| v.as_u64()).unwrap_or(u64::MAX) as u32;
+        let node_start = obj
+            .get("start")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(u64::MAX) as u32;
         let node_end = obj.get("end").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
 
         // Check if this node is the leading target (attached_to matches node start)
@@ -854,7 +1161,9 @@ fn attach_comment_recursive(node: &mut Value, comment: &Value, attached_to: u32,
                 "leadingComments"
             };
             let arr = obj.entry(field).or_insert(json!([]));
-            if let Some(a) = arr.as_array_mut() { a.push(comment.clone()); }
+            if let Some(a) = arr.as_array_mut() {
+                a.push(comment.clone());
+            }
             return true;
         }
 
@@ -863,10 +1172,13 @@ fn attach_comment_recursive(node: &mut Value, comment: &Value, attached_to: u32,
             // First, try to find exact match in children
             for (key, v) in obj.iter_mut() {
                 // Skip comment-related fields
-                if key == "leadingComments" || key == "trailingComments" { continue; }
+                if key == "leadingComments" || key == "trailingComments" {
+                    continue;
+                }
                 match v {
                     Value::Object(_) => {
-                        if attach_comment_recursive(v, comment, attached_to, comment_start, source) {
+                        if attach_comment_recursive(v, comment, attached_to, comment_start, source)
+                        {
                             return true;
                         }
                     }
@@ -874,7 +1186,13 @@ fn attach_comment_recursive(node: &mut Value, comment: &Value, attached_to: u32,
                         // For array children (like body, elements, properties),
                         // also check if the comment trails a specific element
                         for item in arr.iter_mut() {
-                            if attach_comment_recursive(item, comment, attached_to, comment_start, source) {
+                            if attach_comment_recursive(
+                                item,
+                                comment,
+                                attached_to,
+                                comment_start,
+                                source,
+                            ) {
                                 return true;
                             }
                         }
@@ -889,7 +1207,9 @@ fn attach_comment_recursive(node: &mut Value, comment: &Value, attached_to: u32,
             //    /* trailing comment 2 */]
             // where comment 2 is on a different line but still trails element 1.
             for (key, v) in obj.iter_mut() {
-                if key == "leadingComments" || key == "trailingComments" { continue; }
+                if key == "leadingComments" || key == "trailingComments" {
+                    continue;
+                }
                 if let Value::Array(arr) = v {
                     // Find the last element whose end is before the comment
                     let mut last_before_idx: Option<usize> = None;
@@ -901,7 +1221,8 @@ fn attach_comment_recursive(node: &mut Value, comment: &Value, attached_to: u32,
                     }
                     if let Some(idx) = last_before_idx {
                         // Check that no other element starts between this element's end and the comment
-                        let item_end = arr[idx].get("end").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        let item_end =
+                            arr[idx].get("end").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                         let no_other_after = arr.iter().skip(idx + 1).all(|item| {
                             let s = item.get("start").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                             s > comment_start
@@ -909,7 +1230,9 @@ fn attach_comment_recursive(node: &mut Value, comment: &Value, attached_to: u32,
                         if no_other_after && item_end <= comment_start {
                             if let Some(item_obj) = arr[idx].as_object_mut() {
                                 let entry = item_obj.entry("trailingComments").or_insert(json!([]));
-                                if let Some(a) = entry.as_array_mut() { a.push(comment.clone()); }
+                                if let Some(a) = entry.as_array_mut() {
+                                    a.push(comment.clone());
+                                }
                                 return true;
                             }
                         }
@@ -989,24 +1312,28 @@ fn estree_binding_pat(pat: &oxc::ast::ast::BindingPattern<'_>, source: &str, off
         oxc::ast::ast::BindingPattern::ObjectPattern(obj) => {
             let start = offset + obj.span.start;
             let end = offset + obj.span.end;
-            let properties: Vec<Value> = obj.properties.iter().map(|p| {
-                let p_start = offset + p.span.start;
-                let p_end = offset + p.span.end;
-                let key = estree_property_key(&p.key, source, offset);
-                let value = estree_binding_pat(&p.value, source, offset);
-                json!({
-                    "type": "Property",
-                    "start": p_start,
-                    "end": p_end,
-                    "loc": loc_json(source, p_start, p_end),
-                    "method": false,
-                    "shorthand": p.shorthand,
-                    "computed": p.computed,
-                    "key": key,
-                    "value": value,
-                    "kind": "init"
+            let properties: Vec<Value> = obj
+                .properties
+                .iter()
+                .map(|p| {
+                    let p_start = offset + p.span.start;
+                    let p_end = offset + p.span.end;
+                    let key = estree_property_key(&p.key, source, offset);
+                    let value = estree_binding_pat(&p.value, source, offset);
+                    json!({
+                        "type": "Property",
+                        "start": p_start,
+                        "end": p_end,
+                        "loc": loc_json(source, p_start, p_end),
+                        "method": false,
+                        "shorthand": p.shorthand,
+                        "computed": p.computed,
+                        "key": key,
+                        "value": value,
+                        "kind": "init"
+                    })
                 })
-            }).collect();
+                .collect();
             json!({
                 "type": "ObjectPattern",
                 "start": start,
@@ -1018,12 +1345,14 @@ fn estree_binding_pat(pat: &oxc::ast::ast::BindingPattern<'_>, source: &str, off
         oxc::ast::ast::BindingPattern::ArrayPattern(arr) => {
             let start = offset + arr.span.start;
             let end = offset + arr.span.end;
-            let mut elements: Vec<Value> = arr.elements.iter().map(|el| {
-                match el {
+            let mut elements: Vec<Value> = arr
+                .elements
+                .iter()
+                .map(|el| match el {
                     Some(pat) => estree_binding_pat(pat, source, offset),
                     None => Value::Null,
-                }
-            }).collect();
+                })
+                .collect();
             // Include rest element (...rest)
             if let Some(rest) = &arr.rest {
                 let r_start = offset + rest.span.start;
@@ -1121,7 +1450,11 @@ fn serialize_ts_type(ts_type: &oxc::ast::ast::TSType<'_>, source: &str, offset: 
     })
 }
 
-fn estree_assignment_target(target: &oxc::ast::ast::AssignmentTarget<'_>, source: &str, offset: u32) -> Value {
+fn estree_assignment_target(
+    target: &oxc::ast::ast::AssignmentTarget<'_>,
+    source: &str,
+    offset: u32,
+) -> Value {
     match target {
         oxc::ast::ast::AssignmentTarget::AssignmentTargetIdentifier(ident) => {
             let start = offset + ident.span.start;
@@ -1134,11 +1467,15 @@ fn estree_assignment_target(target: &oxc::ast::ast::AssignmentTarget<'_>, source
                 "name": ident.name.as_str()
             })
         }
-        _ => json!({ "type": "UnknownTarget" })
+        _ => json!({ "type": "UnknownTarget" }),
     }
 }
 
-fn estree_simple_assign_target(target: &oxc::ast::ast::SimpleAssignmentTarget<'_>, source: &str, offset: u32) -> Value {
+fn estree_simple_assign_target(
+    target: &oxc::ast::ast::SimpleAssignmentTarget<'_>,
+    source: &str,
+    offset: u32,
+) -> Value {
     match target {
         oxc::ast::ast::SimpleAssignmentTarget::AssignmentTargetIdentifier(ident) => {
             let start = offset + ident.span.start;
@@ -1151,13 +1488,14 @@ fn estree_simple_assign_target(target: &oxc::ast::ast::SimpleAssignmentTarget<'_
                 "name": ident.name.as_str()
             })
         }
-        _ => json!({ "type": "UnknownTarget" })
+        _ => json!({ "type": "UnknownTarget" }),
     }
 }
 
 /// Filter out whitespace-only text nodes from block content.
 fn filter_whitespace_nodes<'a, 'b>(nodes: &'b [TemplateNode<'a>]) -> Vec<&'b TemplateNode<'a>> {
-    nodes.iter()
+    nodes
+        .iter()
         .filter(|n| {
             if let TemplateNode::Text(t) = n {
                 !t.data.chars().all(|c| c.is_ascii_whitespace())
@@ -1221,11 +1559,21 @@ fn node_span_end(node: &TemplateNode) -> u32 {
     }
 }
 
-/// Serialize filtered children nodes, returning (children_json, effective_end).
-fn serialize_filtered_children(nodes: &[TemplateNode], source: &str, default_end: u32) -> (Vec<Value>, u32) {
+fn serialize_filtered_children_ctx(
+    nodes: &[TemplateNode],
+    source: &str,
+    default_end: u32,
+    in_svelte_head: bool,
+) -> (Vec<Value>, u32) {
     let filtered = filter_whitespace_nodes(nodes);
-    let children: Vec<Value> = filtered.iter().map(|n| serialize_node_legacy(n, source)).collect();
-    let end = filtered.last().map(|n| node_span_end(n)).unwrap_or(default_end);
+    let children: Vec<Value> = filtered
+        .iter()
+        .map(|n| serialize_node_legacy_ctx(n, source, in_svelte_head))
+        .collect();
+    let end = filtered
+        .last()
+        .map(|n| node_span_end(n))
+        .unwrap_or(default_end);
     (children, end)
 }
 
@@ -1274,24 +1622,24 @@ fn decode_entities(s: &str) -> String {
                 // Decode known named entities if the collected text exactly matches
                 let entity_name = &entity[1..]; // strip leading &
                 match entity_name {
-                    "amp" | "lt" | "gt" | "quot" | "apos" | "nbsp" => {
-                        match entity_name {
-                            "amp" => result.push('&'),
-                            "lt" => result.push('<'),
-                            "gt" => result.push('>'),
-                            "quot" => result.push('"'),
-                            "apos" => result.push('\''),
-                            "nbsp" => result.push('\u{00A0}'),
-                            _ => unreachable!(),
-                        }
-                    }
+                    "amp" | "lt" | "gt" | "quot" | "apos" | "nbsp" => match entity_name {
+                        "amp" => result.push('&'),
+                        "lt" => result.push('<'),
+                        "gt" => result.push('>'),
+                        "quot" => result.push('"'),
+                        "apos" => result.push('\''),
+                        "nbsp" => result.push('\u{00A0}'),
+                        _ => unreachable!(),
+                    },
                     _ => {
                         // Check if entity starts with a known name followed by non-alnum
                         let mut decoded = false;
                         for known in &["amp", "lt", "gt", "quot", "apos", "nbsp"] {
                             if entity_name.starts_with(known) {
                                 let rest = &entity_name[known.len()..];
-                                if !rest.is_empty() && !rest.starts_with(|c: char| c.is_alphanumeric()) {
+                                if !rest.is_empty()
+                                    && !rest.starts_with(|c: char| c.is_alphanumeric())
+                                {
                                     match *known {
                                         "amp" => result.push('&'),
                                         "lt" => result.push('<'),
@@ -1320,15 +1668,16 @@ fn decode_entities(s: &str) -> String {
     result
 }
 
-fn serialize_attribute_modern(attr: &Attribute, source: &str) -> Value {
+fn serialize_attribute_modern(attr: &Attribute, meta: &AttributeMeta, source: &str) -> Value {
     match attr {
         Attribute::NormalAttribute { name, value, span } => {
             if name == "@attach" {
                 // AttachTag
                 if let AttributeValue::Expression(expr) = value {
-                    let region = &source[span.start as usize..span.end as usize];
-                    let brace_pos = region.find(expr.chars().next().unwrap_or('(')).unwrap_or(9);
-                    let expr_start = span.start + brace_pos as u32;
+                    let expr_start = meta
+                        .expression_span
+                        .map(|s| trimmed_span_start(s, expr))
+                        .unwrap_or(span.start);
                     return json!({
                         "type": "AttachTag",
                         "start": span.start,
@@ -1338,33 +1687,29 @@ fn serialize_attribute_modern(attr: &Attribute, source: &str) -> Value {
                 }
             }
             // Regular attribute
-            let tag_region = &source[span.start as usize..span.end as usize];
             let (n_start, n_end) = if name.is_empty() {
-                // Empty shorthand {} — name position inside braces
-                let inner_pos = span.start + tag_region.find('{').map(|p| p + 1).unwrap_or(0) as u32;
-                (inner_pos, inner_pos)
+                (meta.name_span.start, meta.name_span.end)
             } else {
-                let name_offset = tag_region.find(name.as_str()).unwrap_or(0);
-                let ns = span.start + name_offset as u32;
-                (ns, ns + name.len() as u32)
+                (meta.name_span.start, meta.name_span.end)
             };
             // Modern attribute value: Expression → ExpressionTag, not array
             let value_json = match value {
                 AttributeValue::Expression(expr) => {
-                    let region = &source[span.start as usize..span.end as usize];
-                    let brace_pos = region.find('{').unwrap_or(0);
-                    let close_brace = region.rfind('}').map(|p| p + 1).unwrap_or(region.len());
                     let trimmed = expr.trim();
-                    let leading_trim = expr.len() - expr.trim_start().len();
-                    let expr_start = span.start + brace_pos as u32 + 1 + leading_trim as u32;
+                    let expression_span = meta.expression_span.unwrap_or(*span);
+                    let mustache_span = meta.mustache_span.unwrap_or(*span);
+                    let expr_start = trimmed_span_start(expression_span, expr);
                     if trimmed.is_empty() && name.is_empty() {
                         // Empty shorthand {} attribute: position inside braces
-                        let inner_pos = span.start + brace_pos as u32 + 1;
+                        let inner_pos = expression_span.start;
                         let mut expr = expression_to_estree(source, "", inner_pos);
                         // Modern format: add loc to empty expression
                         if let Some(obj) = expr.as_object_mut() {
                             if !obj.contains_key("loc") {
-                                obj.insert("loc".to_string(), loc_json_with_char(source, inner_pos, inner_pos));
+                                obj.insert(
+                                    "loc".to_string(),
+                                    loc_json_with_char(source, inner_pos, inner_pos),
+                                );
                             }
                         }
                         json!({
@@ -1374,18 +1719,16 @@ fn serialize_attribute_modern(attr: &Attribute, source: &str) -> Value {
                             "expression": expr
                         })
                     } else {
-                        let mustache_start = span.start + brace_pos as u32;
-                        let mustache_end = span.start + close_brace as u32;
                         json!({
                             "type": "ExpressionTag",
-                            "start": mustache_start,
-                            "end": mustache_end,
+                            "start": mustache_span.start,
+                            "end": mustache_span.end,
                             "expression": expression_to_estree(source, trimmed, expr_start)
                         })
                     }
                 }
                 AttributeValue::True => json!(true),
-                _ => serialize_attr_value_legacy(value, source, span),
+                _ => serialize_attr_value_modern(value, meta, source),
             };
             json!({
                 "type": "Attribute",
@@ -1397,10 +1740,9 @@ fn serialize_attribute_modern(attr: &Attribute, source: &str) -> Value {
             })
         }
         Attribute::Spread { span } => {
-            let region = &source[span.start as usize..span.end as usize];
-            let expr_str = region.trim_start_matches('{').trim_start_matches("...").trim_end_matches('}');
-            let expr_start_offset = region.find("...").map(|p| p + 3).unwrap_or(1);
-            let expr_start = span.start + expr_start_offset as u32;
+            let expression_span = meta.expression_span.unwrap_or(*span);
+            let expr_str = source_for_span(source, expression_span);
+            let expr_start = trimmed_span_start(expression_span, expr_str);
             json!({
                 "type": "SpreadAttribute",
                 "start": span.start,
@@ -1408,7 +1750,13 @@ fn serialize_attribute_modern(attr: &Attribute, source: &str) -> Value {
                 "expression": expression_to_estree(source, expr_str.trim(), expr_start)
             })
         }
-        Attribute::Directive { kind, name, modifiers, span, .. } => {
+        Attribute::Directive {
+            kind,
+            name,
+            modifiers,
+            value,
+            span,
+        } => {
             let type_name = match kind {
                 DirectiveKind::EventHandler => "OnDirective",
                 DirectiveKind::Binding => "BindDirective",
@@ -1422,51 +1770,22 @@ fn serialize_attribute_modern(attr: &Attribute, source: &str) -> Value {
                 DirectiveKind::Let => "LetDirective",
             };
 
-            let attr_text = &source[span.start as usize..span.end as usize];
-
             // Parse expression from directive value
-            let expression = if let Some(eq_pos) = attr_text.find('=') {
-                let value_part = attr_text[eq_pos + 1..].trim_start();
-                if value_part.starts_with('{') && value_part.ends_with('}') {
-                    let expr_str = &value_part[1..value_part.len()-1];
-                    let brace_pos = attr_text[eq_pos..].find('{').unwrap_or(1);
-                    let trimmed = expr_str.trim();
-                    let leading_trim = expr_str.len() - expr_str.trim_start().len();
-                    let expr_start = span.start + eq_pos as u32 + brace_pos as u32 + 1 + leading_trim as u32;
-                    Some(expression_to_estree(source, trimmed, expr_start))
-                } else if (value_part.starts_with('"') || value_part.starts_with('\'')) && value_part.len() > 2 {
-                    let inner = &value_part[1..value_part.len()-1];
-                    if inner.starts_with('{') && inner.ends_with('}') {
-                        let expr_str = &inner[1..inner.len()-1];
-                        let brace_pos = attr_text[eq_pos..].find('{').unwrap_or(2);
-                        let expr_start = span.start + eq_pos as u32 + brace_pos as u32 + 1;
-                        Some(expression_to_estree(source, expr_str.trim(), expr_start))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+            let expression = directive_expression_modern(value, meta, source);
 
             // Calculate name_loc for directive
-            let name_end_rel = if let Some(eq) = attr_text.find('=') { eq }
-                else if let Some(pipe) = attr_text.find('|') { pipe }
-                else { attr_text.len() };
-            let name_loc_end = span.start + name_end_rel as u32;
-
             let mut obj = json!({
                 "type": type_name,
                 "start": span.start,
                 "end": span.end,
                 "name": name,
-                "name_loc": loc_json_with_char(source, span.start, name_loc_end),
+                "name_loc": loc_json_with_char(source, meta.name_span.start, meta.name_span.end),
                 "modifiers": modifiers
             });
 
-            if let Some(expr) = expression {
+            if matches!(kind, DirectiveKind::StyleDirective) {
+                obj["value"] = style_directive_value_modern(value, meta, source);
+            } else if let Some(expr) = expression {
                 obj["expression"] = expr;
             } else {
                 obj["expression"] = Value::Null;
@@ -1474,9 +1793,18 @@ fn serialize_attribute_modern(attr: &Attribute, source: &str) -> Value {
 
             // Add intro/outro for transitions
             match kind {
-                DirectiveKind::Transition => { obj["intro"] = json!(true); obj["outro"] = json!(true); }
-                DirectiveKind::In => { obj["intro"] = json!(true); obj["outro"] = json!(false); }
-                DirectiveKind::Out => { obj["intro"] = json!(false); obj["outro"] = json!(true); }
+                DirectiveKind::Transition => {
+                    obj["intro"] = json!(true);
+                    obj["outro"] = json!(true);
+                }
+                DirectiveKind::In => {
+                    obj["intro"] = json!(true);
+                    obj["outro"] = json!(false);
+                }
+                DirectiveKind::Out => {
+                    obj["intro"] = json!(false);
+                    obj["outro"] = json!(true);
+                }
                 _ => {}
             }
 
@@ -1485,27 +1813,346 @@ fn serialize_attribute_modern(attr: &Attribute, source: &str) -> Value {
     }
 }
 
+fn directive_expression_modern(
+    value: &AttributeValue,
+    meta: &AttributeMeta,
+    source: &str,
+) -> Option<Value> {
+    match value {
+        AttributeValue::Expression(expr) => {
+            let expression_span = meta.expression_span?;
+            Some(expression_to_estree(
+                source,
+                expr.trim(),
+                trimmed_span_start(expression_span, expr),
+            ))
+        }
+        AttributeValue::Concat(parts) if parts.len() == 1 => {
+            let AttributeValuePart::Expression(expr) = &parts[0] else {
+                return None;
+            };
+            let part_meta = meta.parts.first()?;
+            let expression_span = part_meta.expression_span?;
+            Some(expression_to_estree(
+                source,
+                expr.trim(),
+                trimmed_span_start(expression_span, expr),
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn serialize_attr_value_modern(
+    value: &AttributeValue,
+    meta: &AttributeMeta,
+    source: &str,
+) -> Value {
+    match value {
+        AttributeValue::True => json!(true),
+        AttributeValue::Static(s) => {
+            let value_span = meta.value_span.unwrap_or(meta.name_span);
+            json!([{
+                "start": value_span.start,
+                "end": value_span.end,
+                "type": "Text",
+                "raw": s,
+                "data": decode_entities(s)
+            }])
+        }
+        AttributeValue::Expression(expr) => {
+            let expression_span = meta.expression_span.unwrap_or(meta.name_span);
+            let mustache_span = meta.mustache_span.unwrap_or(expression_span);
+            json!({
+                "type": "ExpressionTag",
+                "start": mustache_span.start,
+                "end": mustache_span.end,
+                "expression": expression_to_estree(
+                    source,
+                    expr.trim(),
+                    trimmed_span_start(expression_span, expr),
+                )
+            })
+        }
+        AttributeValue::Concat(parts) => {
+            let values: Vec<Value> = parts
+                .iter()
+                .zip(meta.parts.iter())
+                .map(|(part, part_meta)| match part {
+                    AttributeValuePart::Static(s) => json!({
+                        "start": part_meta.span.start,
+                        "end": part_meta.span.end,
+                        "type": "Text",
+                        "raw": s,
+                        "data": decode_entities(s)
+                    }),
+                    AttributeValuePart::Expression(expr) => {
+                        let expression_span = part_meta.expression_span.unwrap_or(part_meta.span);
+                        let mustache_span = part_meta.mustache_span.unwrap_or(part_meta.span);
+                        json!({
+                            "type": "ExpressionTag",
+                            "start": mustache_span.start,
+                            "end": mustache_span.end,
+                            "expression": expression_to_estree(
+                                source,
+                                expr.trim(),
+                                trimmed_span_start(expression_span, expr),
+                            )
+                        })
+                    }
+                })
+                .collect();
+            Value::Array(values)
+        }
+    }
+}
+
+fn style_directive_value_modern(
+    value: &AttributeValue,
+    meta: &AttributeMeta,
+    source: &str,
+) -> Value {
+    match value {
+        AttributeValue::True => json!(true),
+        AttributeValue::Expression(expr) => {
+            let expression_span = meta.expression_span.unwrap_or(meta.name_span);
+            let mustache_span = meta.mustache_span.unwrap_or(expression_span);
+            json!({
+                "type": "ExpressionTag",
+                "start": mustache_span.start,
+                "end": mustache_span.end,
+                "expression": expression_to_estree(
+                    source,
+                    expr.trim(),
+                    trimmed_span_start(expression_span, expr),
+                )
+            })
+        }
+        AttributeValue::Concat(parts) if parts.len() == 1 => {
+            if let AttributeValuePart::Expression(expr) = &parts[0] {
+                let part_meta = meta.parts.first();
+                let expression_span = part_meta
+                    .and_then(|meta| meta.expression_span)
+                    .unwrap_or(meta.name_span);
+                let mustache_span = part_meta
+                    .and_then(|meta| meta.mustache_span)
+                    .unwrap_or(expression_span);
+                json!({
+                    "type": "ExpressionTag",
+                    "start": mustache_span.start,
+                    "end": mustache_span.end,
+                    "expression": expression_to_estree(
+                        source,
+                        expr.trim(),
+                        trimmed_span_start(expression_span, expr),
+                    )
+                })
+            } else {
+                serialize_attr_value_modern(value, meta, source)
+            }
+        }
+        AttributeValue::Static(_) | AttributeValue::Concat(_) => {
+            serialize_attr_value_modern(value, meta, source)
+        }
+    }
+}
+
+fn directive_expression_legacy(
+    value: &AttributeValue,
+    meta: &AttributeMeta,
+    source: &str,
+) -> Option<Value> {
+    match value {
+        AttributeValue::True => None,
+        AttributeValue::Expression(expr) => {
+            let expression_span = meta.expression_span?;
+            Some(expression_to_estree(
+                source,
+                expr.trim(),
+                trimmed_span_start(expression_span, expr),
+            ))
+        }
+        AttributeValue::Concat(parts) if parts.len() == 1 => {
+            let AttributeValuePart::Expression(expr) = &parts[0] else {
+                return Some(serialize_attr_value_legacy(value, meta, source));
+            };
+            let part_meta = meta.parts.first()?;
+            let expression_span = part_meta.expression_span?;
+            Some(expression_to_estree(
+                source,
+                expr.trim(),
+                trimmed_span_start(expression_span, expr),
+            ))
+        }
+        AttributeValue::Static(_) | AttributeValue::Concat(_) => {
+            Some(serialize_attr_value_legacy(value, meta, source))
+        }
+    }
+}
+
+fn serialize_raw_tag_attributes(source: &str, attrs_span: oxc::span::Span) -> Vec<Value> {
+    let start = attrs_span.start as usize;
+    let end = attrs_span.end as usize;
+    if start >= end || end > source.len() {
+        return Vec::new();
+    }
+
+    let bytes = source.as_bytes();
+    let mut pos = start;
+    let mut attributes = Vec::new();
+
+    while pos < end {
+        while pos < end && (bytes[pos].is_ascii_whitespace() || bytes[pos] == b'/') {
+            pos += 1;
+        }
+
+        if pos + 1 < end && bytes[pos] == b'/' && bytes[pos + 1] == b'/' {
+            pos += 2;
+            while pos < end && bytes[pos] != b'\n' {
+                pos += 1;
+            }
+            continue;
+        }
+
+        if pos + 1 < end && bytes[pos] == b'/' && bytes[pos + 1] == b'*' {
+            pos += 2;
+            while pos + 1 < end && !(bytes[pos] == b'*' && bytes[pos + 1] == b'/') {
+                pos += 1;
+            }
+            pos = (pos + 2).min(end);
+            continue;
+        }
+
+        if pos >= end {
+            break;
+        }
+
+        let attr_start = pos;
+        while pos < end {
+            let ch = bytes[pos];
+            if ch.is_ascii_whitespace() || matches!(ch, b'=' | b'/' | b'>') {
+                break;
+            }
+            pos += 1;
+        }
+
+        if attr_start == pos {
+            pos += source[pos..]
+                .chars()
+                .next()
+                .map(char::len_utf8)
+                .unwrap_or(1);
+            continue;
+        }
+
+        let name_end = pos;
+        let name = &source[attr_start..name_end];
+        let mut attr_end = name_end;
+
+        while pos < end && bytes[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+
+        let value = if pos < end && bytes[pos] == b'=' {
+            pos += 1;
+            while pos < end && bytes[pos].is_ascii_whitespace() {
+                pos += 1;
+            }
+
+            if pos >= end {
+                json!([])
+            } else if matches!(bytes[pos], b'"' | b'\'') {
+                let quote = bytes[pos];
+                pos += 1;
+                let value_start = pos;
+                while pos < end && bytes[pos] != quote {
+                    if bytes[pos] == b'\\' {
+                        pos = (pos + 2).min(end);
+                    } else {
+                        pos += source[pos..]
+                            .chars()
+                            .next()
+                            .map(char::len_utf8)
+                            .unwrap_or(1);
+                    }
+                }
+                let value_end = pos;
+                if pos < end {
+                    pos += 1;
+                }
+                let raw = &source[value_start..value_end];
+                attr_end = pos;
+                json!([{
+                    "start": value_start as u32,
+                    "end": value_end as u32,
+                    "type": "Text",
+                    "raw": raw,
+                    "data": decode_entities(raw)
+                }])
+            } else {
+                let value_start = pos;
+                while pos < end {
+                    let ch = bytes[pos];
+                    if ch.is_ascii_whitespace() || matches!(ch, b'/' | b'>') {
+                        break;
+                    }
+                    pos += source[pos..]
+                        .chars()
+                        .next()
+                        .map(char::len_utf8)
+                        .unwrap_or(1);
+                }
+                let raw = &source[value_start..pos];
+                attr_end = pos;
+                json!([{
+                    "start": value_start as u32,
+                    "end": pos as u32,
+                    "type": "Text",
+                    "raw": raw,
+                    "data": decode_entities(raw)
+                }])
+            }
+        } else {
+            json!(true)
+        };
+
+        attributes.push(json!({
+            "type": "Attribute",
+            "start": attr_start as u32,
+            "end": attr_end as u32,
+            "name": name,
+            "name_loc": loc_json_with_char(source, attr_start as u32, name_end as u32),
+            "value": value
+        }));
+    }
+
+    attributes
+}
+
 /// Convert legacy CSS AST to modern format (Selector → ComplexSelector/RelativeSelector).
 fn convert_css_to_modern(children: &[Value]) -> Vec<Value> {
-    children.iter().map(|child| {
-        let mut c = child.clone();
-        if let Some(obj) = c.as_object_mut() {
-            // Convert SelectorList children from Selector to ComplexSelector
-            if let Some(prelude) = obj.get_mut("prelude") {
-                convert_selector_list_modern(prelude);
-            }
-            // Convert block children recursively
-            if let Some(block) = obj.get_mut("block") {
-                if let Some(block_children) = block.get_mut("children") {
-                    if let Some(arr) = block_children.as_array_mut() {
-                        let converted = convert_css_to_modern(&arr.clone());
-                        *block_children = json!(converted);
+    children
+        .iter()
+        .map(|child| {
+            let mut c = child.clone();
+            if let Some(obj) = c.as_object_mut() {
+                // Convert SelectorList children from Selector to ComplexSelector
+                if let Some(prelude) = obj.get_mut("prelude") {
+                    convert_selector_list_modern(prelude);
+                }
+                // Convert block children recursively
+                if let Some(block) = obj.get_mut("block") {
+                    if let Some(block_children) = block.get_mut("children") {
+                        if let Some(arr) = block_children.as_array_mut() {
+                            let converted = convert_css_to_modern(&arr.clone());
+                            *block_children = json!(converted);
+                        }
                     }
                 }
             }
-        }
-        c
-    }).collect()
+            c
+        })
+        .collect()
 }
 
 fn convert_selector_list_modern(selector_list: &mut Value) {
@@ -1518,9 +2165,10 @@ fn convert_selector_list_modern(selector_list: &mut Value) {
             obj.remove("_full_end");
             // Convert children and update end
             let new_end = if let Some(children) = obj.get("children").and_then(|c| c.as_array()) {
-                let converted: Vec<Value> = children.iter().map(|selector| {
-                    convert_selector_to_complex(selector)
-                }).collect();
+                let converted: Vec<Value> = children
+                    .iter()
+                    .map(|selector| convert_selector_to_complex(selector))
+                    .collect();
                 let last_end = converted.last().and_then(|l| l.get("end")).cloned();
                 obj.insert("children".to_string(), json!(converted));
                 last_end
@@ -1539,9 +2187,15 @@ fn convert_selector_to_complex(selector: &Value) -> Value {
         if obj.get("type").and_then(|t| t.as_str()) == Some("Selector") {
             let start = obj.get("start").cloned().unwrap_or(json!(0));
             // Use _full_end for modern format (includes pseudo-element parens)
-            let end = obj.get("_full_end").cloned()
+            let end = obj
+                .get("_full_end")
+                .cloned()
                 .unwrap_or_else(|| obj.get("end").cloned().unwrap_or(json!(0)));
-            let children = obj.get("children").and_then(|c| c.as_array()).cloned().unwrap_or_default();
+            let children = obj
+                .get("children")
+                .and_then(|c| c.as_array())
+                .cloned()
+                .unwrap_or_default();
 
             // Group children into RelativeSelectors (split on Combinator)
             let mut relative_selectors = Vec::new();
@@ -1553,8 +2207,11 @@ fn convert_selector_to_complex(selector: &Value) -> Value {
                 let child_type = child.get("type").and_then(|t| t.as_str()).unwrap_or("");
                 if child_type == "Combinator" {
                     if !current_selectors.is_empty() {
-                        let rel_end = current_selectors.last()
-                            .and_then(|s: &Value| s.get("end")).cloned().unwrap_or(json!(0));
+                        let rel_end = current_selectors
+                            .last()
+                            .and_then(|s: &Value| s.get("end"))
+                            .cloned()
+                            .unwrap_or(json!(0));
                         relative_selectors.push(json!({
                             "type": "RelativeSelector",
                             "combinator": current_combinator,
@@ -1633,9 +2290,10 @@ pub fn to_modern_json(ast: &SvelteAst, source: &str) -> Value {
     let mut options_val = Value::Null;
     if let Some(nodes) = fragment.get_mut("nodes") {
         if let Some(arr) = nodes.as_array_mut() {
-            if let Some(idx) = arr.iter().position(|n| {
-                n.get("type").and_then(|t| t.as_str()) == Some("SvelteOptionsRaw")
-            }) {
+            if let Some(idx) = arr
+                .iter()
+                .position(|n| n.get("type").and_then(|t| t.as_str()) == Some("SvelteOptionsRaw"))
+            {
                 let options_node = arr.remove(idx);
                 let attrs = options_node.get("attributes").cloned().unwrap_or(json!([]));
                 let mut opts = json!({
@@ -1652,7 +2310,9 @@ pub fn to_modern_json(ast: &SvelteAst, source: &str) -> Value {
                                 if let Some(val) = attr.get("value") {
                                     if let Some(arr) = val.as_array() {
                                         if let Some(text) = arr.first() {
-                                            if let Some(data) = text.get("data").and_then(|d| d.as_str()) {
+                                            if let Some(data) =
+                                                text.get("data").and_then(|d| d.as_str())
+                                            {
                                                 opts["customElement"] = json!({ "tag": data });
                                             }
                                         }
@@ -1672,24 +2332,19 @@ pub fn to_modern_json(ast: &SvelteAst, source: &str) -> Value {
         }
     }
 
-    // Strip trailing whitespace from fragment nodes
-    let source_len = source.len() as u32;
-    let end = if source.ends_with('\n') { source_len - 1 } else { source_len };
+    let end = source.len() as u32;
 
     // Add CSS as StyleSheet in modern format
     let css_val = if let Some(style) = &ast.css {
-        let tag_text = &source[style.span.start as usize..style.span.end as usize];
-        let content_start_rel = tag_text.find('>').map(|p| p + 1).unwrap_or(0);
-        let content_end_rel = tag_text.find("</style").unwrap_or(tag_text.len());
-        let content_start = style.span.start + content_start_rel as u32;
-        let content_end = style.span.start + content_end_rel as u32;
+        let content_start = style.content_span.start;
+        let content_end = style.content_span.end;
         let legacy_children = crate::parser::css::parse_css_children(&style.content, content_start);
         let children = convert_css_to_modern(&legacy_children);
         json!({
             "type": "StyleSheet",
             "start": style.span.start,
             "end": style.span.end,
-            "attributes": [],
+            "attributes": serialize_raw_tag_attributes(source, style.attrs_span),
             "children": children,
             "content": {
                 "start": content_start,
@@ -1704,63 +2359,9 @@ pub fn to_modern_json(ast: &SvelteAst, source: &str) -> Value {
 
     // Add instance in modern format (with attributes from script tag)
     let instance_val = if let Some(script) = &ast.instance {
-        let mut s = serialize_script_legacy(script, source, "default");
-        // Parse script tag attributes
-        let tag_text = &source[script.span.start as usize..script.span.end as usize];
-        let gt_pos = tag_text.find('>').unwrap_or(tag_text.len());
-        let attrs_text = &tag_text[7..gt_pos]; // after "<script"
-        let mut attrs = Vec::new();
-        // Simple: check for lang attribute
-        if let Some(lang) = &script.lang {
-            if let Some(lang_pos) = attrs_text.find("lang") {
-                let attr_start = script.span.start + 7 + lang_pos as u32;
-                let _attr_end = attrs_text.find('>').map(|p| script.span.start + 7 + p as u32)
-                    .unwrap_or(script.span.start + gt_pos as u32);
-                // Find the value position
-                let eq_pos = attrs_text[lang_pos..].find('=').unwrap_or(4);
-                let val_region = &attrs_text[lang_pos + eq_pos + 1..];
-                let _quote = val_region.chars().next().unwrap_or('"');
-                let val_start = attr_start + eq_pos as u32 + 2;
-                let val_end = val_start + lang.len() as u32;
-                let attr_full_end = val_end + 1; // include closing quote
-                let name_end = attr_start + 4; // "lang" = 4 chars
-                attrs.push(json!({
-                    "start": attr_start,
-                    "end": attr_full_end,
-                    "type": "Attribute",
-                    "name": "lang",
-                    "name_loc": loc_json_with_char(source, attr_start, name_end),
-                    "value": [{
-                        "start": val_start,
-                        "end": val_end,
-                        "type": "Text",
-                        "data": lang,
-                        "raw": lang
-                    }]
-                }));
-            }
-        }
-        // Add generics attribute if present
-        if let Some(gen_pos) = attrs_text.find("generics") {
-            let attr_start = script.span.start + 7 + gen_pos as u32;
-            let eq_pos = attrs_text[gen_pos..].find('=').unwrap_or(8);
-            let after_eq = &attrs_text[gen_pos + eq_pos + 1..];
-            let quote = after_eq.chars().next().unwrap_or('"');
-            if let Some(close) = after_eq[1..].find(quote) {
-                let gen_val = &after_eq[1..1 + close];
-                let val_start = attr_start + eq_pos as u32 + 2;
-                let val_end = val_start + gen_val.len() as u32;
-                let attr_full_end = val_end + 1;
-                let name_end = attr_start + 8;
-                attrs.push(json!({
-                    "start": attr_start, "end": attr_full_end,
-                    "type": "Attribute", "name": "generics",
-                    "name_loc": loc_json_with_char(source, attr_start, name_end),
-                    "value": [{ "start": val_start, "end": val_end, "type": "Text", "data": gen_val, "raw": gen_val }]
-                }));
-            }
-        }
-        s["attributes"] = json!(attrs);
+        let leading_comments = html_comments_before(&ast.html.nodes, script.span.start);
+        let mut s = serialize_script_legacy(script, source, "default", &leading_comments);
+        s["attributes"] = json!(serialize_raw_tag_attributes(source, script.attrs_span));
         s
     } else {
         Value::Null
@@ -1782,102 +2383,141 @@ pub fn to_modern_json(ast: &SvelteAst, source: &str) -> Value {
 
     // Add module script in modern format
     if let Some(module) = &ast.module {
-        let mut m = serialize_script_legacy(module, source, "module");
-        // Parse module script tag attributes
-        let tag_text = &source[module.span.start as usize..module.span.end as usize];
-        let gt_pos = tag_text.find('>').unwrap_or(tag_text.len());
-        let attrs_text = &tag_text[7..gt_pos]; // after "<script"
-        // Parse script tag attributes in source order
-        let mut attr_items: Vec<(usize, Value)> = Vec::new();
-        // module attribute
-        if let Some(mod_pos) = attrs_text.find("module") {
-            if !attrs_text[..mod_pos].ends_with("context=") {
-                let attr_start = module.span.start + 7 + mod_pos as u32;
-                let attr_end = attr_start + 6;
-                attr_items.push((mod_pos, json!({
-                    "start": attr_start, "end": attr_end,
-                    "type": "Attribute", "name": "module",
-                    "name_loc": loc_json_with_char(source, attr_start, attr_end),
-                    "value": true
-                })));
-            }
-        }
-        // lang attribute
-        if let Some(lang) = &module.lang {
-            if let Some(lang_pos) = attrs_text.find("lang") {
-                let attr_start = module.span.start + 7 + lang_pos as u32;
-                let eq_pos = attrs_text[lang_pos..].find('=').unwrap_or(4);
-                let val_start = attr_start + eq_pos as u32 + 2;
-                let val_end = val_start + lang.len() as u32;
-                let attr_full_end = val_end + 1;
-                let name_end = attr_start + 4;
-                attr_items.push((lang_pos, json!({
-                    "start": attr_start, "end": attr_full_end,
-                    "type": "Attribute", "name": "lang",
-                    "name_loc": loc_json_with_char(source, attr_start, name_end),
-                    "value": [{ "start": val_start, "end": val_end, "type": "Text", "data": lang, "raw": lang }]
-                })));
-            }
-        }
-        attr_items.sort_by_key(|(pos, _)| *pos);
-        m["attributes"] = json!(attr_items.into_iter().map(|(_, v)| v).collect::<Vec<_>>());
+        let leading_comments = html_comments_before(&ast.html.nodes, module.span.start);
+        let mut m = serialize_script_legacy(module, source, "module", &leading_comments);
+        m["attributes"] = json!(serialize_raw_tag_attributes(source, module.attrs_span));
         root["module"] = m;
     }
 
-    // Collect JS-style comments from template for modern format
-    // Exclude comments inside <script> and <style> blocks
-    let script_ranges: Vec<(usize, usize)> = [&ast.instance, &ast.module].iter()
+    // Collect JS comments from scripts and template expressions for modern format.
+    let mut js_comments = Vec::new();
+    for script in [&ast.instance, &ast.module].into_iter().flatten() {
+        let content_start = script.content_span.start;
+
+        use oxc::allocator::Allocator;
+        use oxc::parser::Parser;
+        use oxc::span::SourceType;
+        let alloc = Allocator::default();
+        let source_type = if script.lang.as_deref() == Some("ts") {
+            SourceType::ts()
+        } else {
+            SourceType::mjs()
+        };
+        let result = Parser::new(&alloc, &script.content, source_type).parse();
+        for comment in result.program.comments.iter() {
+            let start = content_start + comment.span.start;
+            let end = content_start + comment.span.end;
+            let raw = &script.content[comment.span.start as usize..comment.span.end as usize];
+            let value = if comment.is_line() {
+                raw.strip_prefix("//").unwrap_or(raw)
+            } else {
+                raw.strip_prefix("/*")
+                    .and_then(|value| value.strip_suffix("*/"))
+                    .unwrap_or(raw)
+            };
+            js_comments.push(json!({
+                "type": if comment.is_line() { "Line" } else { "Block" },
+                "value": value,
+                "start": start,
+                "end": end,
+                "loc": loc_json(source, start, end)
+            }));
+        }
+    }
+
+    // Exclude comments inside <script> and <style> blocks while scanning template text.
+    let script_ranges: Vec<(usize, usize)> = [&ast.instance, &ast.module]
+        .iter()
         .filter_map(|s| s.as_ref())
         .map(|s| (s.span.start as usize, s.span.end as usize))
-        .chain(ast.css.as_ref().map(|s| (s.span.start as usize, s.span.end as usize)))
+        .chain(
+            ast.css
+                .as_ref()
+                .map(|s| (s.span.start as usize, s.span.end as usize)),
+        )
         .collect();
-    let in_script_or_style = |pos: usize| -> bool {
-        script_ranges.iter().any(|(s, e)| pos >= *s && pos < *e)
-    };
-    let mut js_comments = Vec::new();
+    let in_script_or_style =
+        |pos: usize| -> bool { script_ranges.iter().any(|(s, e)| pos >= *s && pos < *e) };
     {
         let bytes = source.as_bytes();
         let mut i = 0;
         let mut brace_depth = 0i32; // track { } nesting to skip comments inside expressions
         while i < source.len() {
-            if in_script_or_style(i) { i += 1; continue; }
+            if in_script_or_style(i) {
+                i += 1;
+                continue;
+            }
             // Track brace depth for skipping comments inside {expressions}
-            if bytes[i] == b'{' { brace_depth += 1; i += 1; continue; }
-            if bytes[i] == b'}' { brace_depth -= 1; i += 1; continue; }
-            // Only collect comments at template level (not inside expressions)
-            if brace_depth > 0 { i += 1; continue; }
+            if bytes[i] == b'{' {
+                brace_depth += 1;
+                i += 1;
+                continue;
+            }
+            if bytes[i] == b'}' {
+                brace_depth -= 1;
+                i += 1;
+                continue;
+            }
             if bytes[i] == b'"' || bytes[i] == b'\'' || bytes[i] == b'`' {
-                let q = bytes[i]; i += 1;
+                let q = bytes[i];
+                i += 1;
                 while i < source.len() && bytes[i] != q {
-                    if bytes[i] == b'\\' { i += 1; }
+                    if bytes[i] == b'\\' {
+                        i += 1;
+                    }
                     i += 1;
                 }
-                if i < source.len() { i += 1; }
+                if i < source.len() {
+                    i += 1;
+                }
             } else if i + 1 < source.len() && bytes[i] == b'/' && bytes[i + 1] == b'/' {
-                let start = i as u32; i += 2;
+                let start = i as u32;
+                i += 2;
                 let value_start = i;
-                while i < source.len() && bytes[i] != b'\n' { i += 1; }
+                while i < source.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                let loc = if brace_depth > 0 {
+                    loc_json(source, start, i as u32)
+                } else {
+                    loc_json_with_char(source, start, i as u32)
+                };
                 js_comments.push(json!({
                     "type": "Line", "start": start, "end": i as u32,
                     "value": &source[value_start..i],
-                    "loc": loc_json_with_char(source, start, i as u32)
+                    "loc": loc
                 }));
             } else if i + 1 < source.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
-                let start = i as u32; i += 2;
+                let start = i as u32;
+                i += 2;
                 let value_start = i;
-                while i + 1 < source.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') { i += 1; }
-                let value = &source[value_start..i]; i += 2;
+                while i + 1 < source.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                let value = &source[value_start..i];
+                i += 2;
+                let loc = if brace_depth > 0 {
+                    loc_json(source, start, i as u32)
+                } else {
+                    loc_json_with_char(source, start, i as u32)
+                };
                 js_comments.push(json!({
                     "type": "Block", "start": start, "end": i as u32,
                     "value": value,
-                    "loc": loc_json_with_char(source, start, i as u32)
+                    "loc": loc
                 }));
-            } else { i += 1; }
+            } else {
+                i += 1;
+            }
         }
     }
-    if !js_comments.is_empty() {
-        root["comments"] = json!(js_comments);
-    }
+    js_comments.sort_by_key(|comment| {
+        comment
+            .get("start")
+            .and_then(|start| start.as_u64())
+            .unwrap_or_default()
+    });
+    root["comments"] = json!(js_comments);
 
     if has_multibyte(source) {
         convert_byte_to_char_offsets(&mut root, source);
@@ -1887,20 +2527,29 @@ pub fn to_modern_json(ast: &SvelteAst, source: &str) -> Value {
 }
 
 fn serialize_fragment_modern(fragment: &Fragment, source: &str) -> Value {
-    serialize_fragment_modern_ctx(fragment, source, false)
+    serialize_fragment_modern_ctx(fragment, source, false, false)
 }
 
-fn serialize_fragment_modern_ctx(fragment: &Fragment, source: &str, in_shadow_root: bool) -> Value {
-    let nodes: Vec<Value> = fragment.nodes.iter()
+fn serialize_fragment_modern_ctx(
+    fragment: &Fragment,
+    source: &str,
+    in_shadow_root: bool,
+    in_svelte_head: bool,
+) -> Value {
+    let nodes: Vec<Value> = fragment
+        .nodes
+        .iter()
         .filter(|n| {
             if let TemplateNode::Text(t) = n {
-                if t.data.chars().all(|c| c.is_ascii_whitespace()) && t.span.end as usize >= source.len() - 1 {
+                if t.data.chars().all(|c| c.is_ascii_whitespace())
+                    && t.span.end as usize >= source.len() - 1
+                {
                     return false;
                 }
             }
             true
         })
-        .map(|n| serialize_node_modern_ctx(n, source, in_shadow_root))
+        .map(|n| serialize_node_modern_ctx(n, source, in_shadow_root, in_svelte_head))
         .collect();
     json!({
         "type": "Fragment",
@@ -1910,10 +2559,15 @@ fn serialize_fragment_modern_ctx(fragment: &Fragment, source: &str, in_shadow_ro
 
 #[allow(dead_code)]
 fn serialize_node_modern(node: &TemplateNode, source: &str) -> Value {
-    serialize_node_modern_ctx(node, source, false)
+    serialize_node_modern_ctx(node, source, false, false)
 }
 
-fn serialize_node_modern_ctx(node: &TemplateNode, source: &str, in_shadow_root: bool) -> Value {
+fn serialize_node_modern_ctx(
+    node: &TemplateNode,
+    source: &str,
+    in_shadow_root: bool,
+    in_svelte_head: bool,
+) -> Value {
     match node {
         TemplateNode::Text(t) => {
             json!({
@@ -1938,42 +2592,48 @@ fn serialize_node_modern_ctx(node: &TemplateNode, source: &str, in_shadow_root: 
                 matches!(a, Attribute::NormalAttribute { name, .. } if name == "shadowrootmode")
             });
             let child_shadow = in_shadow_root || is_shadow;
-            let children: Vec<Value> = el.children.iter().map(|n| serialize_node_modern_ctx(n, source, child_shadow)).collect();
-            let attributes: Vec<Value> = el.attributes.iter().map(|a| {
-                serialize_attribute_modern(a, source)
-            }).collect();
-            let el_type = if el.name.starts_with(|c: char| c.is_uppercase()) || el.name.contains('.') {
-                "Component"
-            } else if el.name.starts_with("svelte:") {
-                match el.name.as_str() {
-                    "svelte:self" => "SvelteComponent",
-                    "svelte:component" => "SvelteComponent",
-                    "svelte:element" => "SvelteElement",
-                    "svelte:window" => "SvelteWindow",
-                    "svelte:document" => "SvelteDocument",
-                    "svelte:body" => "SvelteBody",
-                    "svelte:head" => "SvelteHead",
-                    "svelte:options" => "SvelteOptionsRaw",
-                    "svelte:fragment" => "SvelteFragment",
-                    "svelte:boundary" => "SvelteBoundary",
-                    _ => "RegularElement",
-                }
-            } else if el.name == "slot" && !in_shadow_root {
-                "SlotElement"
-            } else {
-                "RegularElement"
-            };
-            // Compute name_loc for the element name
-            let tag_text = &source[el.span.start as usize..];
-            let name_offset = tag_text.find(&el.name[..]).unwrap_or(1);
-            let name_s = el.span.start + name_offset as u32;
-            let name_e = name_s + el.name.len() as u32;
+            let child_in_svelte_head = el.name == "svelte:head";
+            let children: Vec<Value> = el
+                .children
+                .iter()
+                .map(|n| serialize_node_modern_ctx(n, source, child_shadow, child_in_svelte_head))
+                .collect();
+            let attributes: Vec<Value> = el
+                .attributes
+                .iter()
+                .zip(el.attribute_meta.iter())
+                .map(|(a, meta)| serialize_attribute_modern(a, meta, source))
+                .collect();
+            let el_type =
+                if el.name.starts_with(|c: char| c.is_uppercase()) || el.name.contains('.') {
+                    "Component"
+                } else if el.name.starts_with("svelte:") {
+                    match el.name.as_str() {
+                        "svelte:self" => "SvelteComponent",
+                        "svelte:component" => "SvelteComponent",
+                        "svelte:element" => "SvelteElement",
+                        "svelte:window" => "SvelteWindow",
+                        "svelte:document" => "SvelteDocument",
+                        "svelte:body" => "SvelteBody",
+                        "svelte:head" => "SvelteHead",
+                        "svelte:options" => "SvelteOptionsRaw",
+                        "svelte:fragment" => "SvelteFragment",
+                        "svelte:boundary" => "SvelteBoundary",
+                        _ => "RegularElement",
+                    }
+                } else if el.name == "title" && in_svelte_head {
+                    "TitleElement"
+                } else if el.name == "slot" && !in_shadow_root {
+                    "SlotElement"
+                } else {
+                    "RegularElement"
+                };
             json!({
                 "type": el_type,
                 "start": el.span.start,
                 "end": el.span.end,
                 "name": el.name,
-                "name_loc": loc_json_with_char(source, name_s, name_e),
+                "name_loc": loc_json_with_char(source, el.name_span.start, el.name_span.end),
                 "attributes": attributes,
                 "fragment": {
                     "type": "Fragment",
@@ -1982,7 +2642,7 @@ fn serialize_node_modern_ctx(node: &TemplateNode, source: &str, in_shadow_root: 
             })
         }
         TemplateNode::MustacheTag(m) => {
-            let expr_start = m.span.start + 1;
+            let expr_start = trimmed_span_start(m.expression_span, &m.expression);
             json!({
                 "type": "ExpressionTag",
                 "start": m.span.start,
@@ -1991,9 +2651,7 @@ fn serialize_node_modern_ctx(node: &TemplateNode, source: &str, in_shadow_root: 
             })
         }
         TemplateNode::RawMustacheTag(r) => {
-            let tag_text = &source[r.span.start as usize..r.span.end as usize];
-            let expr_offset = tag_text.find(r.expression.trim_start()).unwrap_or(7);
-            let expr_start = r.span.start + expr_offset as u32;
+            let expr_start = trimmed_span_start(r.expression_span, &r.expression);
             json!({
                 "type": "HtmlTag",
                 "start": r.span.start,
@@ -2002,25 +2660,31 @@ fn serialize_node_modern_ctx(node: &TemplateNode, source: &str, in_shadow_root: 
             })
         }
         TemplateNode::IfBlock(block) => {
-            let src_at = &source[block.span.start as usize..];
-            let is_real_if = src_at.starts_with("{#if");
-            let is_else_if = src_at.starts_with("{:else if");
-            let expr_start = if is_real_if {
-                block.span.start + 5 // skip "{#if "
-            } else if is_else_if {
-                block.span.start + 10 // skip "{:else if "
-            } else {
-                block.span.start
-            };
-            let consequent = serialize_fragment_modern_ctx(&block.consequent, source, in_shadow_root);
+            let expr_start = trimmed_span_start(block.test_span, &block.test);
+            let consequent = serialize_fragment_modern_ctx(
+                &block.consequent,
+                source,
+                in_shadow_root,
+                in_svelte_head,
+            );
             let alternate = block.alternate.as_ref().map(|alt| {
                 if let TemplateNode::IfBlock(alt_block) = alt.as_ref() {
-                    if alt_block.test.is_empty() && !source[alt_block.span.start as usize..].starts_with("{:else if") {
+                    if alt_block.test.is_empty() && !alt_block.elseif {
                         // {:else} block → Fragment with children
-                        serialize_fragment_modern_ctx(&alt_block.consequent, source, in_shadow_root)
+                        serialize_fragment_modern_ctx(
+                            &alt_block.consequent,
+                            source,
+                            in_shadow_root,
+                            in_svelte_head,
+                        )
                     } else {
                         // {:else if} → Fragment containing IfBlock with elseif:true
-                        let mut inner = serialize_node_modern_ctx(alt.as_ref(), source, in_shadow_root);
+                        let mut inner = serialize_node_modern_ctx(
+                            alt.as_ref(),
+                            source,
+                            in_shadow_root,
+                            in_svelte_head,
+                        );
                         inner["elseif"] = json!(true);
                         // elseif IfBlock extends to the outer {/if}
                         inner["end"] = json!(block.span.end);
@@ -2044,14 +2708,12 @@ fn serialize_node_modern_ctx(node: &TemplateNode, source: &str, in_shadow_root: 
             })
         }
         TemplateNode::EachBlock(block) => {
-            let expr_start = block.span.start + 7;
-            let body = serialize_fragment_modern_ctx(&block.body, source, in_shadow_root);
-            // Find context position
-            let header = &source[block.span.start as usize..];
-            let as_pos = header.find(" as ").map(|p| p + 4).unwrap_or(0);
-            let ctx_start = block.span.start + as_pos as u32;
+            let expr_start = trimmed_span_start(block.expression_span, &block.expression);
+            let body =
+                serialize_fragment_modern_ctx(&block.body, source, in_shadow_root, in_svelte_head);
+            let ctx_start = block.context_span.start;
             let context_str = &block.context;
-            let ctx_end = ctx_start + context_str.len() as u32;
+            let ctx_end = block.context_span.end;
             let context = if context_str.is_empty() {
                 Value::Null
             } else if context_str.starts_with('[') || context_str.starts_with('{') {
@@ -2068,7 +2730,8 @@ fn serialize_node_modern_ctx(node: &TemplateNode, source: &str, in_shadow_root: 
                             let mut pat = estree_binding_pat(&declarator.id, source, ctx_start - 4);
                             // Add loc and adjust columns for destructured patterns
                             if let Some(obj) = pat.as_object_mut() {
-                                let s = obj.get("start").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                let s =
+                                    obj.get("start").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                                 let e = obj.get("end").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                                 obj.insert("loc".to_string(), loc_json(source, s, e));
                             }
@@ -2101,19 +2764,22 @@ fn serialize_node_modern_ctx(node: &TemplateNode, source: &str, in_shadow_root: 
                 "context": context
             });
             if let Some(key) = &block.key {
-                let key_header = &source[block.span.start as usize..];
-                if let Some(paren) = key_header.find('(') {
-                    let key_start = block.span.start + paren as u32 + 1;
+                if let Some(key_span) = block.key_span {
+                    let key_start = trimmed_span_start(key_span, key);
                     obj["key"] = expression_to_estree(source, key.trim(), key_start);
                 }
             }
             if let Some(idx) = &block.index {
                 obj["index"] = json!(idx);
             }
+            if let Some(fallback) = &block.fallback {
+                obj["fallback"] =
+                    serialize_fragment_modern_ctx(fallback, source, in_shadow_root, in_svelte_head);
+            }
             obj
         }
         TemplateNode::AwaitBlock(block) => {
-            let expr_start = block.span.start + 8;
+            let expr_start = trimmed_span_start(block.expression_span, &block.expression);
             let mut obj = json!({
                 "type": "AwaitBlock",
                 "start": block.span.start,
@@ -2122,47 +2788,64 @@ fn serialize_node_modern_ctx(node: &TemplateNode, source: &str, in_shadow_root: 
             });
             // Add pending/then/catch (always present in modern format)
             obj["pending"] = if let Some(pending) = &block.pending {
-                let nodes: Vec<Value> = pending.nodes.iter().map(|n| serialize_node_modern_ctx(n, source, in_shadow_root)).collect();
+                let nodes: Vec<Value> = pending
+                    .nodes
+                    .iter()
+                    .map(|n| serialize_node_modern_ctx(n, source, in_shadow_root, in_svelte_head))
+                    .collect();
                 json!({ "type": "Fragment", "nodes": nodes })
-            } else { Value::Null };
+            } else {
+                Value::Null
+            };
             obj["then"] = if let Some(then) = &block.then {
-                let nodes: Vec<Value> = then.nodes.iter().map(|n| serialize_node_modern_ctx(n, source, in_shadow_root)).collect();
+                let nodes: Vec<Value> = then
+                    .nodes
+                    .iter()
+                    .map(|n| serialize_node_modern_ctx(n, source, in_shadow_root, in_svelte_head))
+                    .collect();
                 json!({ "type": "Fragment", "nodes": nodes })
-            } else { Value::Null };
+            } else {
+                Value::Null
+            };
             obj["catch"] = if let Some(catch) = &block.catch {
-                let nodes: Vec<Value> = catch.nodes.iter().map(|n| serialize_node_modern_ctx(n, source, in_shadow_root)).collect();
+                let nodes: Vec<Value> = catch
+                    .nodes
+                    .iter()
+                    .map(|n| serialize_node_modern_ctx(n, source, in_shadow_root, in_svelte_head))
+                    .collect();
                 json!({ "type": "Fragment", "nodes": nodes })
-            } else { Value::Null };
+            } else {
+                Value::Null
+            };
             // value/error as Identifier objects
             if let Some(binding) = &block.then_binding {
-                let src_text = &source[block.span.start as usize..block.span.end as usize];
-                let then_keyword = src_text.find(":then").map(|p| (p, 5))
-                    .or_else(|| src_text.find(" then ").map(|p| (p + 1, 4)));
-                if let Some((pos, len)) = then_keyword {
-                    let after = &src_text[pos + len..];
-                    let trimmed = after.trim_start();
-                    let bs = block.span.start + pos as u32 + len as u32 + (after.len() - trimmed.len()) as u32;
-                    let be = bs + binding.len() as u32;
+                if let Some(binding_span) = block.then_binding_span {
+                    let bs = trimmed_span_start(binding_span, binding);
+                    let be = binding_span.end;
                     obj["value"] = json!({ "type": "Identifier", "name": binding, "start": bs, "end": be, "loc": loc_json_with_char(source, bs, be) });
-                } else { obj["value"] = json!(binding); }
-            } else { obj["value"] = Value::Null; }
+                } else {
+                    obj["value"] = json!(binding);
+                }
+            } else {
+                obj["value"] = Value::Null;
+            }
             if let Some(binding) = &block.catch_binding {
-                let src_text = &source[block.span.start as usize..block.span.end as usize];
-                let catch_keyword = src_text.find(":catch").map(|p| (p, 6))
-                    .or_else(|| src_text.find(" catch ").map(|p| (p + 1, 5)));
-                if let Some((pos, len)) = catch_keyword {
-                    let after = &src_text[pos + len..];
-                    let trimmed = after.trim_start();
-                    let bs = block.span.start + pos as u32 + len as u32 + (after.len() - trimmed.len()) as u32;
-                    let be = bs + binding.len() as u32;
+                if let Some(binding_span) = block.catch_binding_span {
+                    let bs = trimmed_span_start(binding_span, binding);
+                    let be = binding_span.end;
                     obj["error"] = json!({ "type": "Identifier", "name": binding, "start": bs, "end": be, "loc": loc_json_with_char(source, bs, be) });
-                } else { obj["error"] = json!(binding); }
-            } else { obj["error"] = Value::Null; }
+                } else {
+                    obj["error"] = json!(binding);
+                }
+            } else {
+                obj["error"] = Value::Null;
+            }
             obj
         }
         TemplateNode::KeyBlock(block) => {
-            let expr_start = block.span.start + 6;
-            let body = serialize_fragment_modern_ctx(&block.body, source, in_shadow_root);
+            let expr_start = trimmed_span_start(block.expression_span, &block.expression);
+            let body =
+                serialize_fragment_modern_ctx(&block.body, source, in_shadow_root, in_svelte_head);
             json!({
                 "type": "KeyBlock",
                 "start": block.span.start,
@@ -2172,24 +2855,16 @@ fn serialize_node_modern_ctx(node: &TemplateNode, source: &str, in_shadow_root: 
             })
         }
         TemplateNode::SnippetBlock(block) => {
-            let body = serialize_fragment_modern_ctx(&block.body, source, in_shadow_root);
-            let actual_name = if let Some(angle) = block.name.find('<') { &block.name[..angle] } else { &block.name };
-            let tag_text = &source[block.span.start as usize..];
-            let (name_start, name_end) = if actual_name.is_empty() {
-                // Empty snippet name: position is after "{#snippet "
-                let pos = block.span.start + 10; // "{#snippet " = 10 chars
-                (pos, pos)
+            let body =
+                serialize_fragment_modern_ctx(&block.body, source, in_shadow_root, in_svelte_head);
+            let (name_start, name_end) = if block.name.is_empty() {
+                (block.name_span.start, block.name_span.start)
             } else {
-                let name_start_rel = tag_text.find(actual_name).unwrap_or(10);
-                let name_start = block.span.start + name_start_rel as u32;
-                let name_end = name_start + actual_name.len() as u32;
-                (name_start, name_end)
+                (block.name_span.start, block.name_span.end)
             };
 
             // Parse parameters
             let parameters = if !block.params.is_empty() {
-                let paren_start_rel = tag_text.find('(').unwrap_or(0);
-                let paren_start = block.span.start + paren_start_rel as u32;
                 let wrapper = format!("function f({}) {{}}", block.params);
                 use oxc::allocator::Allocator;
                 use oxc::parser::Parser;
@@ -2198,13 +2873,27 @@ fn serialize_node_modern_ctx(node: &TemplateNode, source: &str, in_shadow_root: 
                 let result = Parser::new(&alloc, &wrapper, SourceType::ts()).parse();
                 if let Some(stmt) = result.program.body.first() {
                     if let oxc::ast::ast::Statement::FunctionDeclaration(func) = stmt {
-                        let params: Vec<Value> = func.params.items.iter().map(|p| {
-                            estree_binding_pattern(p, source, paren_start + 1 - 11)
-                        }).collect();
+                        let params_offset = block
+                            .params_span
+                            .map(|s| s.start)
+                            .unwrap_or(block.name_span.end)
+                            .saturating_sub(11);
+                        let params: Vec<Value> = func
+                            .params
+                            .items
+                            .iter()
+                            .map(|p| estree_binding_pattern(p, source, params_offset))
+                            .collect();
                         json!(params)
-                    } else { json!([]) }
-                } else { json!([]) }
-            } else { json!([]) };
+                    } else {
+                        json!([])
+                    }
+                } else {
+                    json!([])
+                }
+            } else {
+                json!([])
+            };
 
             let mut snippet_json = json!({
                 "type": "SnippetBlock",
@@ -2212,7 +2901,7 @@ fn serialize_node_modern_ctx(node: &TemplateNode, source: &str, in_shadow_root: 
                 "end": block.span.end,
                 "expression": {
                     "type": "Identifier",
-                    "name": actual_name,
+                    "name": block.name,
                     "start": name_start,
                     "end": name_end,
                     "loc": loc_json_with_char(source, name_start, name_end)
@@ -2221,19 +2910,13 @@ fn serialize_node_modern_ctx(node: &TemplateNode, source: &str, in_shadow_root: 
                 "body": body
             });
             // Add typeParams for generic snippets
-            if block.name.contains('<') {
-                if let Some(angle_pos) = block.name.find('<') {
-                    let generic_part = &block.name[angle_pos..];
-                    if generic_part.starts_with('<') && generic_part.ends_with('>') {
-                        let inner = &generic_part[1..generic_part.len() - 1];
-                        snippet_json["typeParams"] = json!(inner);
-                    }
-                }
+            if let Some(type_params) = &block.type_params {
+                snippet_json["typeParams"] = json!(type_params);
             }
             snippet_json
         }
         TemplateNode::RenderTag(r) => {
-            let expr_start = r.span.start + 9;
+            let expr_start = trimmed_span_start(r.expression_span, &r.expression);
             json!({
                 "type": "RenderTag",
                 "start": r.span.start,
@@ -2245,14 +2928,16 @@ fn serialize_node_modern_ctx(node: &TemplateNode, source: &str, in_shadow_root: 
             json!({
                 "type": "DebugTag",
                 "start": d.span.start,
-                "end": d.span.end
+                "end": d.span.end,
+                "identifiers": serialize_debug_identifiers(d, source)
             })
         }
         TemplateNode::ConstTag(c) => {
             json!({
                 "type": "ConstTag",
                 "start": c.span.start,
-                "end": c.span.end
+                "end": c.span.end,
+                "declaration": serialize_const_declaration_modern(c, source)
             })
         }
     }
@@ -2266,7 +2951,11 @@ pub fn to_legacy_json(ast: &SvelteAst, source: &str) -> Value {
         ast.instance.as_ref().map(|s| s.span.end),
         ast.module.as_ref().map(|s| s.span.end),
         ast.css.as_ref().map(|s| s.span.end),
-    ].into_iter().flatten().max().unwrap_or(0);
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+    .unwrap_or(0);
     let html = serialize_fragment_legacy_root(&ast.html, source, has_blocks, last_block_end);
     let mut root = json!({ "html": html });
 
@@ -2277,20 +2966,20 @@ pub fn to_legacy_json(ast: &SvelteAst, source: &str) -> Value {
 
     // Add instance script if present
     if let Some(script) = &ast.instance {
-        root["instance"] = serialize_script_legacy(script, source, "default");
+        let leading_comments = html_comments_before(&ast.html.nodes, script.span.start);
+        root["instance"] = serialize_script_legacy(script, source, "default", &leading_comments);
     }
 
     // Add module script if present
     if let Some(script) = &ast.module {
-        root["module"] = serialize_script_legacy(script, source, "module");
+        let leading_comments = html_comments_before(&ast.html.nodes, script.span.start);
+        root["module"] = serialize_script_legacy(script, source, "module", &leading_comments);
     }
 
     // Collect all comments from scripts for root _comments field
     let mut all_comments = Vec::new();
     for script in [&ast.instance, &ast.module].into_iter().flatten() {
-        let tag_text = &source[script.span.start as usize..script.span.end as usize];
-        let content_start_rel = tag_text.find('>').map(|p| p + 1).unwrap_or(0);
-        let content_start = script.span.start + content_start_rel as u32;
+        let content_start = script.content_span.start;
 
         use oxc::allocator::Allocator;
         use oxc::parser::Parser;
@@ -2310,7 +2999,10 @@ pub fn to_legacy_json(ast: &SvelteAst, source: &str) -> Value {
             let value = if c.is_line() {
                 value.strip_prefix("//").unwrap_or(value)
             } else {
-                value.strip_prefix("/*").and_then(|v| v.strip_suffix("*/")).unwrap_or(value)
+                value
+                    .strip_prefix("/*")
+                    .and_then(|v| v.strip_suffix("*/"))
+                    .unwrap_or(value)
             };
             all_comments.push(json!({
                 "type": comment_type,
@@ -2322,10 +3014,15 @@ pub fn to_legacy_json(ast: &SvelteAst, source: &str) -> Value {
         }
     }
     // Also collect JS comments from template expressions (inside { })
-    let tmpl_script_ranges: Vec<(usize, usize)> = [&ast.instance, &ast.module].iter()
+    let tmpl_script_ranges: Vec<(usize, usize)> = [&ast.instance, &ast.module]
+        .iter()
         .filter_map(|s| s.as_ref())
         .map(|s| (s.span.start as usize, s.span.end as usize))
-        .chain(ast.css.as_ref().map(|s| (s.span.start as usize, s.span.end as usize)))
+        .chain(
+            ast.css
+                .as_ref()
+                .map(|s| (s.span.start as usize, s.span.end as usize)),
+        )
         .collect();
     {
         let bytes = source.as_bytes();
@@ -2333,15 +3030,29 @@ pub fn to_legacy_json(ast: &SvelteAst, source: &str) -> Value {
         let mut brace_depth = 0i32;
         while i < source.len() {
             // Skip script/style blocks
-            if tmpl_script_ranges.iter().any(|(s, e)| i >= *s && i < *e) { i += 1; continue; }
-            if bytes[i] == b'{' { brace_depth += 1; i += 1; continue; }
-            if bytes[i] == b'}' { brace_depth -= 1; i += 1; continue; }
+            if tmpl_script_ranges.iter().any(|(s, e)| i >= *s && i < *e) {
+                i += 1;
+                continue;
+            }
+            if bytes[i] == b'{' {
+                brace_depth += 1;
+                i += 1;
+                continue;
+            }
+            if bytes[i] == b'}' {
+                brace_depth -= 1;
+                i += 1;
+                continue;
+            }
             // Only look for comments INSIDE expressions
             if brace_depth > 0 {
                 if i + 1 < source.len() && bytes[i] == b'/' && bytes[i + 1] == b'/' {
-                    let start = i as u32; i += 2;
+                    let start = i as u32;
+                    i += 2;
                     let value_start = i;
-                    while i < source.len() && bytes[i] != b'\n' { i += 1; }
+                    while i < source.len() && bytes[i] != b'\n' {
+                        i += 1;
+                    }
                     let value = &source[value_start..i];
                     all_comments.push(json!({
                         "type": "Line", "value": value, "start": start, "end": i as u32,
@@ -2349,10 +3060,14 @@ pub fn to_legacy_json(ast: &SvelteAst, source: &str) -> Value {
                     }));
                     continue;
                 } else if i + 1 < source.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
-                    let start = i as u32; i += 2;
+                    let start = i as u32;
+                    i += 2;
                     let value_start = i;
-                    while i + 1 < source.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') { i += 1; }
-                    let value = &source[value_start..i]; i += 2;
+                    while i + 1 < source.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                        i += 1;
+                    }
+                    let value = &source[value_start..i];
+                    i += 2;
                     all_comments.push(json!({
                         "type": "Block", "value": value, "start": start, "end": i as u32,
                         "loc": loc_json(source, start, i as u32)
@@ -2362,12 +3077,17 @@ pub fn to_legacy_json(ast: &SvelteAst, source: &str) -> Value {
             }
             // Skip strings
             if bytes[i] == b'"' || bytes[i] == b'\'' || bytes[i] == b'`' {
-                let q = bytes[i]; i += 1;
+                let q = bytes[i];
+                i += 1;
                 while i < source.len() && bytes[i] != q {
-                    if bytes[i] == b'\\' { i += 1; }
+                    if bytes[i] == b'\\' {
+                        i += 1;
+                    }
                     i += 1;
                 }
-                if i < source.len() { i += 1; }
+                if i < source.len() {
+                    i += 1;
+                }
                 continue;
             }
             i += 1;
@@ -2392,13 +3112,9 @@ pub fn to_legacy_json(ast: &SvelteAst, source: &str) -> Value {
     root
 }
 
-fn serialize_css_legacy(style: &Style, source: &str) -> Value {
-    // Find actual content boundaries in source
-    let tag_text = &source[style.span.start as usize..style.span.end as usize];
-    let content_start_rel = tag_text.find('>').map(|p| p + 1).unwrap_or(0);
-    let content_end_rel = tag_text.find("</style").unwrap_or(tag_text.len());
-    let content_start = style.span.start + content_start_rel as u32;
-    let content_end = style.span.start + content_end_rel as u32;
+fn serialize_css_legacy(style: &Style, _source: &str) -> Value {
+    let content_start = style.content_span.start;
+    let content_end = style.content_span.end;
 
     // Parse CSS children and strip internal fields
     let mut children = crate::parser::css::parse_css_children(&style.content, content_start);
@@ -2419,7 +3135,35 @@ fn serialize_css_legacy(style: &Style, source: &str) -> Value {
     })
 }
 
-fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Value {
+fn html_comments_before<'a>(nodes: &'a [TemplateNode<'a>], before: u32) -> Vec<&'a Comment> {
+    let mut expected_end = before;
+
+    for node in nodes.iter().rev() {
+        if node_span_start(node) >= before {
+            continue;
+        }
+        if node_span_end(node) != expected_end {
+            break;
+        }
+
+        match node {
+            TemplateNode::Comment(comment) => return vec![comment],
+            TemplateNode::Text(text) if text.data.trim().is_empty() => {
+                expected_end = text.span.start;
+            }
+            _ => break,
+        }
+    }
+
+    Vec::new()
+}
+
+fn serialize_script_legacy(
+    script: &Script,
+    source: &str,
+    context: &str,
+    leading_html_comments: &[&Comment],
+) -> Value {
     // Parse the script content with oxc and serialize to estree
     use oxc::allocator::Allocator;
     use oxc::parser::Parser;
@@ -2432,14 +3176,11 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
         SourceType::mjs()
     };
 
-    // Find the script content start position in the original source
-    let tag_text = &source[script.span.start as usize..script.span.end as usize];
-    let content_start_rel = tag_text.find('>').map(|p| p + 1).unwrap_or(0);
-    let content_start = script.span.start + content_start_rel as u32;
+    let content_start = script.content_span.start;
 
     let result = Parser::new(&alloc, &script.content, source_type).parse();
 
-    let program_end = content_start + script.content.len() as u32;
+    let program_end = script.content_span.end;
 
     // Compute loc using the actual source line of the <script> tag
     let (start_line, _) = offset_to_loc(source, script.span.start as usize);
@@ -2450,9 +3191,12 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
     });
 
     // Serialize the program body statements with comment association
-    let mut body: Vec<Value> = result.program.body.iter().map(|stmt| {
-        serialize_statement_legacy(stmt, source, content_start)
-    }).collect();
+    let mut body: Vec<Value> = result
+        .program
+        .body
+        .iter()
+        .map(|stmt| serialize_statement_legacy(stmt, source, content_start))
+        .collect();
 
     // Associate comments with statements using attached_to
     for c in result.program.comments.iter() {
@@ -2463,7 +3207,9 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
         let value = if c.is_line() {
             raw.strip_prefix("//").unwrap_or(raw)
         } else {
-            raw.strip_prefix("/*").and_then(|v| v.strip_suffix("*/")).unwrap_or(raw)
+            raw.strip_prefix("/*")
+                .and_then(|v| v.strip_suffix("*/"))
+                .unwrap_or(raw)
         };
         let comment_json = json!({
             "type": comment_type,
@@ -2483,7 +3229,9 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
                 if stmt_start == attached_abs {
                     if let Some(obj) = stmt.as_object_mut() {
                         let arr = obj.entry("leadingComments").or_insert(json!([]));
-                        if let Some(a) = arr.as_array_mut() { a.push(comment_json.clone()); }
+                        if let Some(a) = arr.as_array_mut() {
+                            a.push(comment_json.clone());
+                        }
                     }
                     found = true;
                     break;
@@ -2492,7 +3240,8 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
             // If not found at top level, recursively search nested nodes
             if !found {
                 for stmt in body.iter_mut() {
-                    if attach_comment_recursive(stmt, &comment_json, attached_abs, c_start, source) {
+                    if attach_comment_recursive(stmt, &comment_json, attached_abs, c_start, source)
+                    {
                         break;
                     }
                 }
@@ -2509,14 +3258,18 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
                     if stmt_end_line == comment_line {
                         if let Some(obj) = body[i].as_object_mut() {
                             let arr = obj.entry("trailingComments").or_insert(json!([]));
-                            if let Some(a) = arr.as_array_mut() { a.push(comment_json.clone()); }
+                            if let Some(a) = arr.as_array_mut() {
+                                a.push(comment_json.clone());
+                            }
                         }
                         found = true;
                         break;
                     }
                 }
             }
-            if found { continue; }
+            if found {
+                continue;
+            }
             // Try to attach to nested nodes by walking the body tree
             for stmt in body.iter_mut() {
                 if attach_comment_recursive(stmt, &comment_json, attached_abs, c_start, source) {
@@ -2527,24 +3280,32 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
     }
 
     // Serialize comments
-    let comments: Vec<Value> = result.program.comments.iter().map(|c| {
-        let c_start = content_start + c.span.start;
-        let c_end = content_start + c.span.end;
-        let comment_type = if c.is_line() { "Line" } else { "Block" };
-        let value = &script.content[c.span.start as usize..c.span.end as usize];
-        // Strip the comment delimiters
-        let value = if c.is_line() {
-            value.strip_prefix("//").unwrap_or(value)
-        } else {
-            value.strip_prefix("/*").and_then(|v| v.strip_suffix("*/")).unwrap_or(value)
-        };
-        json!({
-            "type": comment_type,
-            "value": value,
-            "start": c_start,
-            "end": c_end
+    let comments: Vec<Value> = result
+        .program
+        .comments
+        .iter()
+        .map(|c| {
+            let c_start = content_start + c.span.start;
+            let c_end = content_start + c.span.end;
+            let comment_type = if c.is_line() { "Line" } else { "Block" };
+            let value = &script.content[c.span.start as usize..c.span.end as usize];
+            // Strip the comment delimiters
+            let value = if c.is_line() {
+                value.strip_prefix("//").unwrap_or(value)
+            } else {
+                value
+                    .strip_prefix("/*")
+                    .and_then(|v| v.strip_suffix("*/"))
+                    .unwrap_or(value)
+            };
+            json!({
+                "type": comment_type,
+                "value": value,
+                "start": c_start,
+                "end": c_end
+            })
         })
-    }).collect();
+        .collect();
 
     let mut program = json!({
         "type": "Program",
@@ -2560,24 +3321,15 @@ fn serialize_script_legacy(script: &Script, source: &str, context: &str) -> Valu
         program["trailingComments"] = json!(comments);
     }
 
-    // Check for HTML comments before the script tag
-    let before_script = &source[..script.span.start as usize];
-    let mut leading = Vec::new();
-    let mut search_from = 0;
-    while let Some(start_pos) = before_script[search_from..].find("<!--") {
-        let abs_start = search_from + start_pos;
-        if let Some(end_rel) = before_script[abs_start + 4..].find("-->") {
-            let abs_end = abs_start + 4 + end_rel + 3;
-            let comment_data = &before_script[abs_start + 4..abs_start + 4 + end_rel];
-            leading.push(json!({
+    let leading: Vec<Value> = leading_html_comments
+        .iter()
+        .map(|comment| {
+            json!({
                 "type": "Line",
-                "value": comment_data
-            }));
-            search_from = abs_end;
-        } else {
-            break;
-        }
-    }
+                "value": comment.data
+            })
+        })
+        .collect();
     if !leading.is_empty() {
         program["leadingComments"] = json!(leading);
     }
@@ -2598,50 +3350,65 @@ fn offset_to_loc_json(text: &str, offset: usize) -> Value {
 }
 
 /// Serialize a JS statement to legacy estree JSON.
-fn serialize_statement_legacy(stmt: &oxc::ast::ast::Statement<'_>, source: &str, offset: u32) -> Value {
+fn serialize_statement_legacy(
+    stmt: &oxc::ast::ast::Statement<'_>,
+    source: &str,
+    offset: u32,
+) -> Value {
     use oxc::ast::ast::Statement;
     match stmt {
         Statement::VariableDeclaration(decl) => {
             let start = offset + decl.span.start;
             let end = offset + decl.span.end;
-            let declarations: Vec<Value> = decl.declarations.iter().map(|d| {
-                let d_start = offset + d.span.start;
-                let d_end = offset + d.span.end;
-                let mut id = estree_binding_pat(&d.id, source, offset);
-                let init = d.init.as_ref().map(|e| estree_expr(e, source, offset));
-                // Add typeAnnotation from VariableDeclarator to the id
-                if let Some(type_ann) = &d.type_annotation {
-                    if let Some(id_obj) = id.as_object_mut() {
-                        let ann_start = offset + type_ann.span.start;
-                        let ann_end = offset + type_ann.span.end;
-                        // Extend id end to include type annotation
-                        id_obj.insert("end".to_string(), json!(ann_end));
-                        let type_node = serialize_ts_type(&type_ann.type_annotation, source, offset);
-                        id_obj.insert("typeAnnotation".to_string(), json!({
-                            "type": "TSTypeAnnotation",
-                            "start": ann_start,
-                            "end": ann_end,
-                            "loc": loc_json(source, ann_start, ann_end),
-                            "typeAnnotation": type_node
-                        }));
-                        // Update loc end
-                        if let Some(loc) = id_obj.get_mut("loc") {
-                            if let Some(loc_obj) = loc.as_object_mut() {
-                                let (el, ec) = offset_to_loc(source, ann_end as usize);
-                                loc_obj.insert("end".to_string(), json!({"line": el, "column": ec}));
+            let declarations: Vec<Value> = decl
+                .declarations
+                .iter()
+                .map(|d| {
+                    let d_start = offset + d.span.start;
+                    let d_end = offset + d.span.end;
+                    let mut id = estree_binding_pat(&d.id, source, offset);
+                    let init = d.init.as_ref().map(|e| estree_expr(e, source, offset));
+                    // Add typeAnnotation from VariableDeclarator to the id
+                    if let Some(type_ann) = &d.type_annotation {
+                        if let Some(id_obj) = id.as_object_mut() {
+                            let ann_start = offset + type_ann.span.start;
+                            let ann_end = offset + type_ann.span.end;
+                            // Extend id end to include type annotation
+                            id_obj.insert("end".to_string(), json!(ann_end));
+                            let type_node =
+                                serialize_ts_type(&type_ann.type_annotation, source, offset);
+                            id_obj.insert(
+                                "typeAnnotation".to_string(),
+                                json!({
+                                    "type": "TSTypeAnnotation",
+                                    "start": ann_start,
+                                    "end": ann_end,
+                                    "loc": loc_json(source, ann_start, ann_end),
+                                    "typeAnnotation": type_node
+                                }),
+                            );
+                            // Update loc end
+                            if let Some(loc) = id_obj.get_mut("loc") {
+                                if let Some(loc_obj) = loc.as_object_mut() {
+                                    let (el, ec) = offset_to_loc(source, ann_end as usize);
+                                    loc_obj.insert(
+                                        "end".to_string(),
+                                        json!({"line": el, "column": ec}),
+                                    );
+                                }
                             }
                         }
                     }
-                }
-                json!({
-                    "type": "VariableDeclarator",
-                    "start": d_start,
-                    "end": d_end,
-                    "loc": loc_json(source, d_start, d_end),
-                    "id": id,
-                    "init": init
+                    json!({
+                        "type": "VariableDeclarator",
+                        "start": d_start,
+                        "end": d_end,
+                        "loc": loc_json(source, d_start, d_end),
+                        "id": id,
+                        "init": init
+                    })
                 })
-            }).collect();
+                .collect();
             json!({
                 "type": "VariableDeclaration",
                 "start": start,
@@ -2771,9 +3538,10 @@ fn serialize_statement_legacy(stmt: &oxc::ast::ast::Statement<'_>, source: &str,
         Statement::ExportNamedDeclaration(exp) => {
             let start = offset + exp.span.start;
             let end = offset + exp.span.end;
-            let declaration = exp.declaration.as_ref().map(|d| {
-                serialize_statement_legacy_from_decl(d, source, offset)
-            });
+            let declaration = exp
+                .declaration
+                .as_ref()
+                .map(|d| serialize_statement_legacy_from_decl(d, source, offset));
             json!({
                 "type": "ExportNamedDeclaration",
                 "start": start,
@@ -2799,15 +3567,20 @@ fn serialize_statement_legacy(stmt: &oxc::ast::ast::Statement<'_>, source: &str,
         Statement::FunctionDeclaration(f) => {
             let start = offset + f.span.start;
             let end = offset + f.span.end;
-            let params: Vec<Value> = f.params.items.iter().map(|p| {
-                estree_binding_pattern(p, source, offset)
-            }).collect();
+            let params: Vec<Value> = f
+                .params
+                .items
+                .iter()
+                .map(|p| estree_binding_pattern(p, source, offset))
+                .collect();
             let body_val = f.body.as_ref().map(|b| {
                 let b_start = offset + b.span.start;
                 let b_end = offset + b.span.end;
-                let stmts: Vec<Value> = b.statements.iter().map(|s| {
-                    serialize_statement_legacy(s, source, offset)
-                }).collect();
+                let stmts: Vec<Value> = b
+                    .statements
+                    .iter()
+                    .map(|s| serialize_statement_legacy(s, source, offset))
+                    .collect();
                 json!({
                     "type": "BlockStatement",
                     "start": b_start,
@@ -2848,27 +3621,35 @@ fn serialize_statement_legacy(stmt: &oxc::ast::ast::Statement<'_>, source: &str,
     }
 }
 
-fn serialize_statement_legacy_from_decl(decl: &oxc::ast::ast::Declaration<'_>, source: &str, offset: u32) -> Value {
+fn serialize_statement_legacy_from_decl(
+    decl: &oxc::ast::ast::Declaration<'_>,
+    source: &str,
+    offset: u32,
+) -> Value {
     use oxc::ast::ast::Declaration;
     match decl {
         Declaration::VariableDeclaration(v) => {
             // Reuse the VariableDeclaration serialization by wrapping in a Statement
             let start = offset + v.span.start;
             let end = offset + v.span.end;
-            let declarations: Vec<Value> = v.declarations.iter().map(|d| {
-                let d_start = offset + d.span.start;
-                let d_end = offset + d.span.end;
-                let id = estree_binding_pat(&d.id, source, offset);
-                let init = d.init.as_ref().map(|e| estree_expr(e, source, offset));
-                json!({
-                    "type": "VariableDeclarator",
-                    "start": d_start,
-                    "end": d_end,
-                    "loc": loc_json(source, d_start, d_end),
-                    "id": id,
-                    "init": init
+            let declarations: Vec<Value> = v
+                .declarations
+                .iter()
+                .map(|d| {
+                    let d_start = offset + d.span.start;
+                    let d_end = offset + d.span.end;
+                    let id = estree_binding_pat(&d.id, source, offset);
+                    let init = d.init.as_ref().map(|e| estree_expr(e, source, offset));
+                    json!({
+                        "type": "VariableDeclarator",
+                        "start": d_start,
+                        "end": d_end,
+                        "loc": loc_json(source, d_start, d_end),
+                        "id": id,
+                        "init": init
+                    })
                 })
-            }).collect();
+                .collect();
             json!({
                 "type": "VariableDeclaration",
                 "start": start,
@@ -2905,11 +3686,16 @@ fn serialize_statement_legacy_from_decl(decl: &oxc::ast::ast::Declaration<'_>, s
                 })
             })
         }
-        _ => json!({ "type": "UnknownDeclaration" })
+        _ => json!({ "type": "UnknownDeclaration" }),
     }
 }
 
-fn serialize_fragment_legacy_root(fragment: &Fragment, source: &str, has_blocks: bool, last_block_end: u32) -> Value {
+fn serialize_fragment_legacy_root(
+    fragment: &Fragment,
+    source: &str,
+    has_blocks: bool,
+    last_block_end: u32,
+) -> Value {
     // If the fragment has no nodes at all (script-only file with no whitespace between blocks)
     if fragment.nodes.is_empty() && has_blocks {
         return json!({
@@ -2927,7 +3713,8 @@ fn serialize_fragment_legacy_root(fragment: &Fragment, source: &str, has_blocks:
         // Only strip the LAST node if it's whitespace after the last block
         while let Some(last) = nodes.last() {
             if let TemplateNode::Text(t) = last {
-                if t.data.chars().all(|c| c.is_ascii_whitespace()) && t.span.start >= last_block_end {
+                if t.data.chars().all(|c| c.is_ascii_whitespace()) && t.span.start >= last_block_end
+                {
                     nodes.pop();
                     continue;
                 }
@@ -2938,7 +3725,10 @@ fn serialize_fragment_legacy_root(fragment: &Fragment, source: &str, has_blocks:
     } else {
         strip_trailing_whitespace(&fragment.nodes)
     };
-    let children: Vec<Value> = filtered.iter().map(|n| serialize_node_legacy(n, source)).collect();
+    let children: Vec<Value> = filtered
+        .iter()
+        .map(|n| serialize_node_legacy(n, source))
+        .collect();
     // Fragment end: use the last NON-whitespace child's end
     let mut end = filtered.iter().rev()
         .find(|n| !matches!(n, TemplateNode::Text(t) if t.data.chars().all(|c| c.is_ascii_whitespace())))
@@ -2949,9 +3739,9 @@ fn serialize_fragment_legacy_root(fragment: &Fragment, source: &str, has_blocks:
     if end as usize == source.len() && source.ends_with('\n') {
         end -= 1;
     }
-    let has_non_whitespace = filtered.iter().any(|n| {
-        !matches!(n, TemplateNode::Text(t) if t.data.chars().all(|c| c.is_ascii_whitespace()))
-    });
+    let has_non_whitespace = filtered.iter().any(
+        |n| !matches!(n, TemplateNode::Text(t) if t.data.chars().all(|c| c.is_ascii_whitespace())),
+    );
     let start;
     if has_non_whitespace {
         start = filtered.iter()
@@ -2960,10 +3750,16 @@ fn serialize_fragment_legacy_root(fragment: &Fragment, source: &str, has_blocks:
             .unwrap_or(fragment.span.start);
     } else if has_blocks && !filtered.is_empty() {
         // Only whitespace between scripts — inverted range (Svelte compiler behavior)
-        start = filtered.last().map(|n| node_span_end(n)).unwrap_or(fragment.span.start);
+        start = filtered
+            .last()
+            .map(|n| node_span_end(n))
+            .unwrap_or(fragment.span.start);
         end = filtered.first().map(|n| node_span_start(n)).unwrap_or(end);
     } else {
-        start = filtered.first().map(|n| node_span_start(n)).unwrap_or(fragment.span.start);
+        start = filtered
+            .first()
+            .map(|n| node_span_start(n))
+            .unwrap_or(fragment.span.start);
     }
     json!({
         "type": "Fragment",
@@ -2977,8 +3773,14 @@ fn serialize_fragment_legacy_root(fragment: &Fragment, source: &str, has_blocks:
 fn serialize_fragment_legacy(fragment: &Fragment, source: &str) -> Value {
     // Root fragment: only strip trailing whitespace, keep all other nodes
     let filtered = strip_trailing_whitespace(&fragment.nodes);
-    let children: Vec<Value> = filtered.iter().map(|n| serialize_node_legacy(n, source)).collect();
-    let end = filtered.last().map(|n| node_span_end(n)).unwrap_or(fragment.span.end);
+    let children: Vec<Value> = filtered
+        .iter()
+        .map(|n| serialize_node_legacy(n, source))
+        .collect();
+    let end = filtered
+        .last()
+        .map(|n| node_span_end(n))
+        .unwrap_or(fragment.span.end);
     // Fragment start: use the first non-whitespace-text node's start position
     let start = filtered.iter()
         .find(|n| !matches!(n, TemplateNode::Text(t) if t.data.chars().all(|c| c.is_ascii_whitespace())))
@@ -2994,21 +3796,22 @@ fn serialize_fragment_legacy(fragment: &Fragment, source: &str) -> Value {
 }
 
 fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
+    serialize_node_legacy_ctx(node, source, false)
+}
+
+fn serialize_node_legacy_ctx(node: &TemplateNode, source: &str, in_svelte_head: bool) -> Value {
     match node {
-        TemplateNode::Text(t) => {
-            json!({
-                "type": "Text",
-                "start": t.span.start,
-                "end": t.span.end,
-                "raw": t.data,
-                "data": decode_entities(&t.data)
-            })
-        }
+        TemplateNode::Text(t) => serialize_text_legacy(t, true),
         TemplateNode::Comment(c) => {
             // Parse svelte-ignore directives from comment text
             let ignores: Vec<&str> = if c.data.trim_start().starts_with("svelte-ignore") {
-                let after_prefix = c.data.trim_start().strip_prefix("svelte-ignore").unwrap_or("");
-                after_prefix.split(',')
+                let after_prefix = c
+                    .data
+                    .trim_start()
+                    .strip_prefix("svelte-ignore")
+                    .unwrap_or("");
+                after_prefix
+                    .split(',')
                     .map(|s| s.trim())
                     .filter(|s| !s.is_empty())
                     .collect()
@@ -3024,51 +3827,66 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
             })
         }
         TemplateNode::Element(el) => {
-            let children: Vec<Value> = el.children.iter().map(|n| serialize_node_legacy(n, source)).collect();
+            let child_in_svelte_head = el.name == "svelte:head";
+            let children: Vec<Value> = el
+                .children
+                .iter()
+                .map(|n| {
+                    if el.name.eq_ignore_ascii_case("style") {
+                        if let TemplateNode::Text(text) = n {
+                            return serialize_text_legacy(text, false);
+                        }
+                    }
+                    serialize_node_legacy_ctx(n, source, child_in_svelte_head)
+                })
+                .collect();
             // For svelte:component, extract the `this` attribute as `expression`
             let mut extra_fields = serde_json::Map::new();
-            let mut filtered_attrs = el.attributes.clone();
+            let mut filtered_attrs: Vec<(&Attribute, &AttributeMeta)> =
+                el.attributes.iter().zip(el.attribute_meta.iter()).collect();
             // For svelte:element, the field name is "tag" instead of "expression"
-            let this_field_name = if el.name == "svelte:element" { "tag" } else { "expression" };
+            let this_field_name = if el.name == "svelte:element" {
+                "tag"
+            } else {
+                "expression"
+            };
 
             if el.name == "svelte:component" || el.name == "svelte:element" {
-                if let Some(idx) = filtered_attrs.iter().position(|a| {
-                    matches!(a, Attribute::NormalAttribute { name, .. } if name == "this")
+                if let Some(idx) = filtered_attrs.iter().position(|(attr, _)| {
+                    matches!(attr, Attribute::NormalAttribute { name, .. } if name == "this")
                 }) {
-                    let this_attr = filtered_attrs.remove(idx);
-                    if let Attribute::NormalAttribute { value, span, .. } = &this_attr {
+                    let (this_attr, this_meta) = filtered_attrs.remove(idx);
+                    if let Attribute::NormalAttribute { value, span, .. } = this_attr {
                         match value {
                             AttributeValue::Expression(expr) => {
-                                let region = &source[span.start as usize..span.end as usize];
-                                let brace_pos = region.find('{').map(|p| p + 1).unwrap_or(0);
-                                let expr_start = span.start + brace_pos as u32;
+                                let expression_span = this_meta.expression_span.unwrap_or(*span);
                                 extra_fields.insert(this_field_name.to_string(),
-                                    expression_to_estree(source, expr.trim(), expr_start));
+                                    expression_to_estree(
+                                        source,
+                                        expr.trim(),
+                                        trimmed_span_start(expression_span, expr),
+                                    ));
                             }
                             AttributeValue::Static(s) => {
                                 let inner = s.trim();
-                                if inner.starts_with('{') && inner.ends_with('}') {
-                                    let expr_str = &inner[1..inner.len()-1];
-                                    let region = &source[span.start as usize..span.end as usize];
-                                    let brace_pos = region.find('{').map(|p| p + 1).unwrap_or(0);
-                                    let expr_start = span.start + brace_pos as u32;
-                                    extra_fields.insert(this_field_name.to_string(),
-                                        expression_to_estree(source, expr_str.trim(), expr_start));
-                                } else {
-                                    // Plain string value: this="div"
-                                    extra_fields.insert(this_field_name.to_string(),
-                                        json!(inner));
-                                }
+                                // Plain string value: this="div"
+                                extra_fields.insert(this_field_name.to_string(), json!(inner));
                             }
                             AttributeValue::Concat(parts) => {
                                 // Single expression in concat: ="{expr}"
                                 if parts.len() == 1 {
                                     if let AttributeValuePart::Expression(expr) = &parts[0] {
-                                        let region = &source[span.start as usize..span.end as usize];
-                                        let brace_pos = region.find('{').map(|p| p + 1).unwrap_or(0);
-                                        let expr_start = span.start + brace_pos as u32;
+                                        let expression_span = this_meta
+                                            .parts
+                                            .first()
+                                            .and_then(|meta| meta.expression_span)
+                                            .unwrap_or(*span);
                                         extra_fields.insert(this_field_name.to_string(),
-                                            expression_to_estree(source, expr.trim(), expr_start));
+                                            expression_to_estree(
+                                                source,
+                                                expr.trim(),
+                                                trimmed_span_start(expression_span, expr),
+                                            ));
                                     }
                                 }
                             }
@@ -3078,32 +3896,36 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
                 }
             }
 
-            let el_type = if el.name.starts_with(|c: char| c.is_uppercase()) || el.name.contains('.') {
-                "InlineComponent"
-            } else if el.name.starts_with("svelte:") {
-                match el.name.as_str() {
-                    "svelte:self" => "InlineComponent",
-                    "svelte:component" => "InlineComponent",
-                    "svelte:element" => "Element",
-                    "svelte:window" => "Window",
-                    "svelte:document" => "Document",
-                    "svelte:body" => "Body",
-                    "svelte:head" => "Head",
-                    "svelte:options" => "Options",
-                    "svelte:fragment" => "SlotTemplate",
-                    _ => "Element",
-                }
-            } else if el.name == "slot" {
-                "Slot"
-            } else {
-                "Element"
-            };
-            let attributes: Vec<Value> = filtered_attrs.iter().map(|a| serialize_attribute_legacy(a, source)).collect();
+            let el_type =
+                if el.name.starts_with(|c: char| c.is_uppercase()) || el.name.contains('.') {
+                    "InlineComponent"
+                } else if el.name.starts_with("svelte:") {
+                    match el.name.as_str() {
+                        "svelte:self" => "InlineComponent",
+                        "svelte:component" => "InlineComponent",
+                        "svelte:element" => "Element",
+                        "svelte:window" => "Window",
+                        "svelte:document" => "Document",
+                        "svelte:body" => "Body",
+                        "svelte:head" => "Head",
+                        "svelte:options" => "Options",
+                        "svelte:fragment" => "SlotTemplate",
+                        _ => "Element",
+                    }
+                } else if el.name == "title" && in_svelte_head {
+                    "Title"
+                } else if el.name == "slot" {
+                    "Slot"
+                } else {
+                    "Element"
+                };
+            let attributes: Vec<Value> = filtered_attrs
+                .iter()
+                .map(|(attr, meta)| serialize_attribute_legacy(attr, meta, source))
+                .collect();
             // For <style> elements inside other elements, if empty, add empty Text node
             let children = if el.name == "style" && children.is_empty() {
-                // Find position after <style>
-                let tag_text = &source[el.span.start as usize..el.span.end as usize];
-                let content_pos = el.span.start + tag_text.find('>').map(|p| p + 1).unwrap_or(0) as u32;
+                let content_pos = el.start_tag_end + 1;
                 vec![json!({
                     "type": "Text",
                     "start": content_pos,
@@ -3128,8 +3950,7 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
         }
         TemplateNode::MustacheTag(m) => {
             let trimmed = m.expression.trim();
-            let leading_ws = m.expression.len() - m.expression.trim_start().len();
-            let expr_start = m.span.start + 1 + leading_ws as u32; // skip '{' + leading whitespace
+            let expr_start = trimmed_span_start(m.expression_span, &m.expression);
             json!({
                 "type": "MustacheTag",
                 "start": m.span.start,
@@ -3138,10 +3959,7 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
             })
         }
         TemplateNode::RawMustacheTag(r) => {
-            // {@html expr} - expression starts after "{@html "
-            let tag_text = &source[r.span.start as usize..r.span.end as usize];
-            let expr_offset = tag_text.find(r.expression.trim_start()).unwrap_or(7);
-            let expr_start = r.span.start + expr_offset as u32;
+            let expr_start = trimmed_span_start(r.expression_span, &r.expression);
             json!({
                 "type": "RawMustacheTag",
                 "start": r.span.start,
@@ -3150,18 +3968,11 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
             })
         }
         TemplateNode::DebugTag(d) => {
-            let idents: Vec<Value> = d.identifiers.iter().enumerate().map(|(_, ident)| {
-                // Try to find the identifier position in source
-                json!({
-                    "type": "Identifier",
-                    "name": ident
-                })
-            }).collect();
             json!({
                 "type": "DebugTag",
                 "start": d.span.start,
                 "end": d.span.end,
-                "identifiers": idents
+                "identifiers": serialize_debug_identifiers(d, source)
             })
         }
         TemplateNode::ConstTag(c) => {
@@ -3169,11 +3980,11 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
                 "type": "ConstTag",
                 "start": c.span.start,
                 "end": c.span.end,
-                "declaration": c.declaration
+                "expression": serialize_const_expression_legacy(c, source)
             })
         }
         TemplateNode::RenderTag(r) => {
-            let expr_start = r.span.start + 9; // skip "{@render "
+            let expr_start = trimmed_span_start(r.expression_span, &r.expression);
             json!({
                 "type": "RenderTag",
                 "start": r.span.start,
@@ -3182,16 +3993,13 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
             })
         }
         TemplateNode::IfBlock(block) => {
-            let (children, _) = serialize_filtered_children(&block.consequent.nodes, source, block.span.end);
-            // For the condition expression, find it in source after "{#if "
-            let src_at_block = &source[block.span.start as usize..];
-            let is_real_if = src_at_block.starts_with("{#if");
-            let expr_start = if is_real_if {
-                block.span.start + 5
-            } else {
-                // {:else} synthetic block — no expression
-                block.span.start
-            };
+            let (children, _) = serialize_filtered_children_ctx(
+                &block.consequent.nodes,
+                source,
+                block.span.end,
+                in_svelte_head,
+            );
+            let expr_start = trimmed_span_start(block.test_span, &block.test);
             let mut obj = json!({
                 "type": "IfBlock",
                 "start": block.span.start,
@@ -3202,13 +4010,13 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
             if let Some(alt) = &block.alternate {
                 match alt.as_ref() {
                     TemplateNode::IfBlock(alt_block) => {
-                        // Check source to distinguish {:else} from {:else if} with empty expression
-                        let is_plain_else = alt_block.test.is_empty()
-                            && !source[alt_block.span.start as usize..].starts_with("{:else if");
-                        if is_plain_else {
+                        if alt_block.test.is_empty() && !alt_block.elseif {
                             // {:else} block - end is at the end of the fragment (before {/if})
-                            let (else_children, _) = serialize_filtered_children(
-                                &alt_block.consequent.nodes, source, alt_block.span.end
+                            let (else_children, _) = serialize_filtered_children_ctx(
+                                &alt_block.consequent.nodes,
+                                source,
+                                alt_block.span.end,
+                                in_svelte_head,
                             );
                             obj["else"] = json!({
                                 "type": "ElseBlock",
@@ -3218,12 +4026,14 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
                             });
                         } else {
                             // {:else if ...} block — wrap IfBlock in an ElseBlock
-                            // The IfBlock's span starts at {:else if, so we find the } to get content start
-                            let tag_region = &source[alt_block.span.start as usize..];
-                            let close_brace = tag_region.find('}').unwrap_or(0);
-                            let content_start = alt_block.span.start + close_brace as u32 + 1;
+                            let content_start = alt_block.header_span.end;
 
-                            let inner = serialize_elseif_block(alt_block, source, content_start, block.span.end);
+                            let inner = serialize_elseif_block(
+                                alt_block,
+                                source,
+                                block.span.end,
+                                in_svelte_head,
+                            );
                             // ElseBlock end should be the alt IfBlock's span end (where {/if} or next {:else} starts)
                             let else_block_end = alt_block.span.end;
                             obj["else"] = json!({
@@ -3240,15 +4050,17 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
             obj
         }
         TemplateNode::EachBlock(block) => {
-            let (children, _) = serialize_filtered_children(&block.body.nodes, source, block.span.end);
-            let expr_start = block.span.start + 7; // skip "{#each "
+            let (children, _) = serialize_filtered_children_ctx(
+                &block.body.nodes,
+                source,
+                block.span.end,
+                in_svelte_head,
+            );
+            let expr_start = trimmed_span_start(block.expression_span, &block.expression);
             let context_str = &block.context;
 
-            // Find context position in source after " as "
-            let header = &source[block.span.start as usize..];
-            let as_pos = header.find(" as ").map(|p| p + 4).unwrap_or(0);
-            let ctx_start = block.span.start + as_pos as u32;
-            let ctx_end = ctx_start + context_str.len() as u32;
+            let ctx_start = block.context_span.start;
+            let ctx_end = block.context_span.end;
 
             // Parse context - could be Identifier, ArrayPattern, ObjectPattern, or null for empty
             let context = if context_str.is_empty() {
@@ -3302,16 +4114,15 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
             }
 
             if let Some(key) = &block.key {
-                // Find key expression position
-                let header = &source[block.span.start as usize..];
-                if let Some(paren) = header.find('(') {
-                    let key_start = block.span.start + paren as u32 + 1;
+                if let Some(key_span) = block.key_span {
+                    let key_start = trimmed_span_start(key_span, key);
                     obj["key"] = expression_to_estree(source, key.trim(), key_start);
                 }
             }
 
             if let Some(fb) = &block.fallback {
-                let (else_children, _) = serialize_filtered_children(&fb.nodes, source, fb.span.end);
+                let (else_children, _) =
+                    serialize_filtered_children_ctx(&fb.nodes, source, fb.span.end, in_svelte_head);
                 obj["else"] = json!({
                     "type": "ElseBlock",
                     "start": fb.span.start,
@@ -3323,7 +4134,8 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
             obj
         }
         TemplateNode::AwaitBlock(block) => {
-            let expr_start = block.span.start + 8; // skip "{#await "
+            let expr_start = trimmed_span_start(block.expression_span, &block.expression);
+            let expr_end = block.expression_span.end;
             let mut obj = json!({
                 "type": "AwaitBlock",
                 "start": block.span.start,
@@ -3333,16 +4145,9 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
 
             // value (then binding) — serialize as Identifier or null
             if let Some(binding) = &block.then_binding {
-                // Find binding position in source (both {:then binding} and {#await expr then binding})
-                let src_text = &source[block.span.start as usize..block.span.end as usize];
-                let then_keyword = src_text.find(":then").map(|p| (p, 5))
-                    .or_else(|| src_text.find(" then ").map(|p| (p + 1, 4)));
-                if let Some((then_pos, then_len)) = then_keyword {
-                    let after_then = &src_text[then_pos + then_len..];
-                    let trimmed = after_then.trim_start();
-                    let binding_start = block.span.start + then_pos as u32 + then_len as u32
-                        + (after_then.len() - trimmed.len()) as u32;
-                    let binding_end = binding_start + binding.len() as u32;
+                if let Some(binding_span) = block.then_binding_span {
+                    let binding_start = trimmed_span_start(binding_span, binding);
+                    let binding_end = binding_span.end;
                     obj["value"] = json!({
                         "type": "Identifier",
                         "name": binding,
@@ -3359,15 +4164,9 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
 
             // error (catch binding)
             if let Some(binding) = &block.catch_binding {
-                let src_text = &source[block.span.start as usize..block.span.end as usize];
-                let catch_keyword = src_text.find(":catch").map(|p| (p, 6))
-                    .or_else(|| src_text.find(" catch ").map(|p| (p + 1, 5)));
-                if let Some((catch_pos, catch_len)) = catch_keyword {
-                    let after_catch = &src_text[catch_pos + catch_len..];
-                    let trimmed = after_catch.trim_start();
-                    let binding_start = block.span.start + catch_pos as u32 + catch_len as u32
-                        + (after_catch.len() - trimmed.len()) as u32;
-                    let binding_end = binding_start + binding.len() as u32;
+                if let Some(binding_span) = block.catch_binding_span {
+                    let binding_start = trimmed_span_start(binding_span, binding);
+                    let binding_end = binding_span.end;
                     obj["error"] = json!({
                         "type": "Identifier",
                         "name": binding,
@@ -3382,17 +4181,31 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
                 obj["error"] = Value::Null;
             }
 
-            // Pending block — always present
-            if let Some(pending) = &block.pending {
-                let children: Vec<Value> = pending.nodes.iter()
-                    .map(|n| serialize_node_legacy(n, source)).collect();
+            // Pending/then/catch spans intentionally follow Svelte's legacy AST adapter.
+            let pending_end = if let Some(pending) = &block.pending {
+                let children: Vec<Value> = pending
+                    .nodes
+                    .iter()
+                    .map(|n| serialize_node_legacy_ctx(n, source, in_svelte_head))
+                    .collect();
+                let pending_start = pending
+                    .nodes
+                    .first()
+                    .map(node_span_start)
+                    .unwrap_or_else(|| index_after_next_closing_brace(source, expr_end));
+                let pending_end = pending
+                    .nodes
+                    .last()
+                    .map(node_span_end)
+                    .unwrap_or(pending_start);
                 obj["pending"] = json!({
                     "type": "PendingBlock",
-                    "start": pending.span.start,
-                    "end": pending.span.end,
+                    "start": pending_start,
+                    "end": pending_end,
                     "children": children,
                     "skip": false
                 });
+                Some(pending_end)
             } else {
                 obj["pending"] = json!({
                     "type": "PendingBlock",
@@ -3401,19 +4214,32 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
                     "children": [],
                     "skip": true
                 });
-            }
+                None
+            };
 
-            // Then block
-            if let Some(then) = &block.then {
-                let children: Vec<Value> = then.nodes.iter()
-                    .map(|n| serialize_node_legacy(n, source)).collect();
+            let then_end = if let Some(then) = &block.then {
+                let children: Vec<Value> = then
+                    .nodes
+                    .iter()
+                    .map(|n| serialize_node_legacy_ctx(n, source, in_svelte_head))
+                    .collect();
+                let then_start = pending_end
+                    .or_else(|| then.nodes.first().map(node_span_start))
+                    .unwrap_or_else(|| index_after_next_closing_brace(source, expr_end));
+                let then_end = then.nodes.last().map(node_span_end).unwrap_or_else(|| {
+                    index_after_last_closing_brace_at_or_before(
+                        source,
+                        pending_end.unwrap_or(expr_end),
+                    )
+                });
                 obj["then"] = json!({
                     "type": "ThenBlock",
-                    "start": then.span.start,
-                    "end": then.span.end,
+                    "start": then_start,
+                    "end": then_end,
                     "children": children,
                     "skip": false
                 });
+                Some(then_end)
             } else {
                 obj["then"] = json!({
                     "type": "ThenBlock",
@@ -3422,16 +4248,29 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
                     "children": [],
                     "skip": true
                 });
-            }
+                None
+            };
 
-            // Catch block
             if let Some(catch) = &block.catch {
-                let children: Vec<Value> = catch.nodes.iter()
-                    .map(|n| serialize_node_legacy(n, source)).collect();
+                let children: Vec<Value> = catch
+                    .nodes
+                    .iter()
+                    .map(|n| serialize_node_legacy_ctx(n, source, in_svelte_head))
+                    .collect();
+                let catch_start = then_end
+                    .or(pending_end)
+                    .or_else(|| catch.nodes.first().map(node_span_start))
+                    .unwrap_or_else(|| index_after_next_closing_brace(source, expr_end));
+                let catch_end = catch.nodes.last().map(node_span_end).unwrap_or_else(|| {
+                    index_after_last_closing_brace_at_or_before(
+                        source,
+                        then_end.or(pending_end).unwrap_or(expr_end),
+                    )
+                });
                 obj["catch"] = json!({
                     "type": "CatchBlock",
-                    "start": catch.span.start,
-                    "end": catch.span.end,
+                    "start": catch_start,
+                    "end": catch_end,
                     "children": children,
                     "skip": false
                 });
@@ -3448,8 +4287,13 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
             obj
         }
         TemplateNode::KeyBlock(block) => {
-            let (children, _) = serialize_filtered_children(&block.body.nodes, source, block.span.end);
-            let expr_start = block.span.start + 6; // skip "{#key "
+            let (children, _) = serialize_filtered_children_ctx(
+                &block.body.nodes,
+                source,
+                block.span.end,
+                in_svelte_head,
+            );
+            let expr_start = trimmed_span_start(block.expression_span, &block.expression);
             json!({
                 "type": "KeyBlock",
                 "start": block.span.start,
@@ -3459,31 +4303,22 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
             })
         }
         TemplateNode::SnippetBlock(block) => {
-            let (children, _) = serialize_filtered_children(&block.body.nodes, source, block.span.end);
+            let (children, _) = serialize_filtered_children_ctx(
+                &block.body.nodes,
+                source,
+                block.span.end,
+                in_svelte_head,
+            );
 
-            // Find the name position in source: after "{#snippet "
-            let tag_text = &source[block.span.start as usize..];
-
-            // Strip generic type params from name (e.g., "generic<T extends string>" → "generic")
-            let actual_name = if let Some(angle) = block.name.find('<') {
-                &block.name[..angle]
+            let (name_start, name_end) = if block.name.is_empty() {
+                (block.name_span.start, block.name_span.start)
             } else {
-                &block.name
-            };
-
-            let (name_start, name_end) = if actual_name.is_empty() {
-                let pos = block.span.start + 10; // "{#snippet " = 10 chars
-                (pos, pos)
-            } else {
-                let name_start_rel = tag_text.find(actual_name).unwrap_or(10);
-                let name_start = block.span.start + name_start_rel as u32;
-                let name_end = name_start + actual_name.len() as u32;
-                (name_start, name_end)
+                (block.name_span.start, block.name_span.end)
             };
 
             let expression = json!({
                 "type": "Identifier",
-                "name": actual_name,
+                "name": block.name,
                 "start": name_start,
                 "end": name_end,
                 "loc": loc_json_with_char(source, name_start, name_end)
@@ -3491,10 +4326,6 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
 
             // Parse parameters if present
             let parameters = if !block.params.is_empty() {
-                // Find params in source between ( and )
-                let paren_start_rel = tag_text.find('(').unwrap_or(0);
-                let paren_start = block.span.start + paren_start_rel as u32;
-
                 // Parse as function params using oxc
                 let wrapper = format!("function f({}) {{}}", block.params);
                 use oxc::allocator::Allocator;
@@ -3504,9 +4335,17 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
                 let result = Parser::new(&alloc, &wrapper, SourceType::ts()).parse();
                 if let Some(stmt) = result.program.body.first() {
                     if let oxc::ast::ast::Statement::FunctionDeclaration(func) = stmt {
-                        let params: Vec<Value> = func.params.items.iter().map(|p| {
-                            estree_binding_pattern(p, source, paren_start + 1 - 11) // adjust for "function f(" prefix (11 chars)
-                        }).collect();
+                        let params_offset = block
+                            .params_span
+                            .map(|s| s.start)
+                            .unwrap_or(block.name_span.end)
+                            .saturating_sub(11);
+                        let params: Vec<Value> = func
+                            .params
+                            .items
+                            .iter()
+                            .map(|p| estree_binding_pattern(p, source, params_offset))
+                            .collect();
                         json!(params)
                     } else {
                         json!([])
@@ -3528,18 +4367,8 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
             });
 
             // Add typeParams for generic snippets
-            if block.name.contains('<') {
-                // Extract the generic part from the name
-                if let Some(angle_pos) = block.name.find('<') {
-                    let generic_part = &block.name[angle_pos..];
-                    // Strip outer < >
-                    if generic_part.starts_with('<') && generic_part.ends_with('>') {
-                        let inner = &generic_part[1..generic_part.len() - 1];
-                        obj["typeParams"] = json!(inner);
-                    } else {
-                        obj["typeParams"] = json!(generic_part);
-                    }
-                }
+            if let Some(type_params) = &block.type_params {
+                obj["typeParams"] = json!(type_params);
             }
 
             obj
@@ -3547,24 +4376,119 @@ fn serialize_node_legacy(node: &TemplateNode, source: &str) -> Value {
     }
 }
 
+fn serialize_text_legacy(text: &Text, include_raw: bool) -> Value {
+    let mut value = json!({
+        "type": "Text",
+        "start": text.span.start,
+        "end": text.span.end,
+        "data": decode_entities(&text.data)
+    });
+    if include_raw {
+        value["raw"] = json!(text.data);
+    }
+    value
+}
+
+fn serialize_debug_identifiers(debug: &DebugTag, source: &str) -> Vec<Value> {
+    debug
+        .identifiers
+        .iter()
+        .zip(debug.identifier_spans.iter())
+        .map(|(name, span)| {
+            json!({
+                "type": "Identifier",
+                "start": span.start,
+                "end": span.end,
+                "loc": loc_json(source, span.start, span.end),
+                "name": name
+            })
+        })
+        .collect()
+}
+
+fn serialize_const_declaration_modern(const_tag: &ConstTag, source: &str) -> Value {
+    use oxc::allocator::Allocator;
+    use oxc::parser::Parser;
+    use oxc::span::SourceType;
+
+    let wrapper = format!("const {}", const_tag.declaration);
+    let offset = const_tag.span.start + 2;
+    let alloc = Allocator::default();
+    let parsed = Parser::new(&alloc, &wrapper, SourceType::ts()).parse();
+
+    let Some(stmt) = parsed.program.body.first() else {
+        return Value::Null;
+    };
+    let mut declaration = serialize_statement_legacy(stmt, source, offset);
+
+    if let Some(obj) = declaration.as_object_mut() {
+        obj.remove("loc");
+        if let Some(declarations) = obj.get_mut("declarations").and_then(|v| v.as_array_mut()) {
+            for declarator in declarations {
+                if let Some(declarator_obj) = declarator.as_object_mut() {
+                    declarator_obj.remove("loc");
+                    if let Some(id) = declarator_obj.get_mut("id") {
+                        add_character_to_locs(id, source);
+                    }
+                }
+            }
+        }
+    }
+
+    declaration
+}
+
+fn serialize_const_expression_legacy(const_tag: &ConstTag, source: &str) -> Value {
+    let expr_start = trimmed_span_start(const_tag.declaration_span, &const_tag.declaration);
+    let mut expression = expression_to_estree(source, const_tag.declaration.trim(), expr_start);
+    if let Some(obj) = expression.as_object_mut() {
+        obj.remove("loc");
+        if let Some(left) = obj.get_mut("left") {
+            add_character_to_locs(left, source);
+        }
+    }
+    expression
+}
+
+fn add_character_to_locs(value: &mut Value, source: &str) {
+    match value {
+        Value::Object(obj) => {
+            let start = obj.get("start").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let end = obj.get("end").and_then(|v| v.as_u64()).map(|v| v as u32);
+            if obj.contains_key("loc") {
+                if let (Some(start), Some(end)) = (start, end) {
+                    obj.insert("loc".to_string(), loc_json_with_char(source, start, end));
+                }
+            }
+            for child in obj.values_mut() {
+                add_character_to_locs(child, source);
+            }
+        }
+        Value::Array(values) => {
+            for child in values {
+                add_character_to_locs(child, source);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Serialize an {:else if} IfBlock with elseif:true flag.
 /// `outer_end` is the end position of the outermost {/if} tag.
-fn serialize_elseif_block(block: &IfBlock, source: &str, content_start: u32, outer_end: u32) -> Value {
-    let (children, _) = serialize_filtered_children(&block.consequent.nodes, source, block.span.end);
-
-    // The expression is within the {:else if ...} tag, before content_start
-    let tag_text = &source[block.span.start as usize..(content_start as usize).saturating_sub(1)];
-    let else_if_prefix = "{:else if";
-    let expr_offset = if let Some(idx) = tag_text.find(else_if_prefix) {
-        idx + else_if_prefix.len()
-    } else {
-        0
-    };
-    // Skip whitespace
-    let mut expr_start = block.span.start + expr_offset as u32;
-    while (expr_start as usize) < source.len() && source.as_bytes()[expr_start as usize].is_ascii_whitespace() {
-        expr_start += 1;
-    }
+fn serialize_elseif_block(
+    block: &IfBlock,
+    source: &str,
+    outer_end: u32,
+    in_svelte_head: bool,
+) -> Value {
+    let (children, _) = serialize_filtered_children_ctx(
+        &block.consequent.nodes,
+        source,
+        block.span.end,
+        in_svelte_head,
+    );
+    let expr_start = trimmed_span_start(block.test_span, &block.test);
+    let content_start = block.header_span.end;
 
     let mut obj = json!({
         "type": "IfBlock",
@@ -3578,10 +4502,13 @@ fn serialize_elseif_block(block: &IfBlock, source: &str, content_start: u32, out
     // Handle nested alternates
     if let Some(alt) = &block.alternate {
         if let TemplateNode::IfBlock(alt_block) = alt.as_ref() {
-            if alt_block.test.is_empty() {
+            if alt_block.test.is_empty() && !alt_block.elseif {
                 // {:else} block
-                let (else_children, _) = serialize_filtered_children(
-                    &alt_block.consequent.nodes, source, alt_block.span.end
+                let (else_children, _) = serialize_filtered_children_ctx(
+                    &alt_block.consequent.nodes,
+                    source,
+                    alt_block.span.end,
+                    in_svelte_head,
                 );
                 obj["else"] = json!({
                     "type": "ElseBlock",
@@ -3591,10 +4518,8 @@ fn serialize_elseif_block(block: &IfBlock, source: &str, content_start: u32, out
                 });
             } else {
                 // Nested {:else if ...}
-                let tag_region = &source[alt_block.span.start as usize..];
-                let close_brace = tag_region.find('}').unwrap_or(0);
-                let nested_content_start = alt_block.span.start + close_brace as u32 + 1;
-                let inner = serialize_elseif_block(alt_block, source, nested_content_start, outer_end);
+                let nested_content_start = alt_block.header_span.end;
+                let inner = serialize_elseif_block(alt_block, source, outer_end, in_svelte_head);
                 let else_block_end = alt_block.span.end;
                 obj["else"] = json!({
                     "type": "ElseBlock",
@@ -3609,18 +4534,20 @@ fn serialize_elseif_block(block: &IfBlock, source: &str, content_start: u32, out
     obj
 }
 
-fn serialize_attribute_legacy(attr: &Attribute, source: &str) -> Value {
+fn serialize_attribute_legacy(attr: &Attribute, meta: &AttributeMeta, source: &str) -> Value {
     match attr {
         Attribute::NormalAttribute { name, value, span } => {
             // Check for shorthand attribute: {name}
-            let tag_region = &source[span.start as usize..span.end as usize];
-            let is_shorthand = tag_region.starts_with('{') && tag_region.ends_with('}')
+            let is_shorthand = meta.mustache_span == Some(*span)
                 && matches!(value, AttributeValue::Expression(e) if e == name);
 
             if is_shorthand {
                 // Shorthand: {id} → Attribute with AttributeShorthand value
-                let expr_start = span.start + 1; // after {
-                let expr_end = span.end - 1; // before }
+                let expr_start = meta
+                    .expression_span
+                    .map(|s| s.start)
+                    .unwrap_or(span.start + 1);
+                let expr_end = meta.expression_span.map(|s| s.end).unwrap_or(span.end - 1);
                 let name_loc = loc_json_with_char(source, expr_start, expr_end);
                 json!({
                     "type": "Attribute",
@@ -3642,11 +4569,10 @@ fn serialize_attribute_legacy(attr: &Attribute, source: &str) -> Value {
                     }]
                 })
             } else {
-                let name_offset = tag_region.find(name.as_str()).unwrap_or(0);
-                let n_start = span.start + name_offset as u32;
-                let n_end = n_start + name.len() as u32;
+                let n_start = meta.name_span.start;
+                let n_end = meta.name_span.end;
 
-                let value_json = serialize_attr_value_legacy(value, source, span);
+                let value_json = serialize_attr_value_legacy(value, meta, source);
 
                 json!({
                     "type": "Attribute",
@@ -3660,10 +4586,9 @@ fn serialize_attribute_legacy(attr: &Attribute, source: &str) -> Value {
         }
         Attribute::Spread { span } => {
             // The spread expression is between {... and }
-            let region = &source[span.start as usize..span.end as usize];
-            let expr_str = region.trim_start_matches('{').trim_start_matches("...").trim_end_matches('}');
-            let expr_start_offset = region.find("...").map(|p| p + 3).unwrap_or(1);
-            let expr_start = span.start + expr_start_offset as u32;
+            let expression_span = meta.expression_span.unwrap_or(*span);
+            let expr_str = source_for_span(source, expression_span);
+            let expr_start = trimmed_span_start(expression_span, expr_str);
             json!({
                 "type": "Spread",
                 "start": span.start,
@@ -3671,7 +4596,13 @@ fn serialize_attribute_legacy(attr: &Attribute, source: &str) -> Value {
                 "expression": expression_to_estree(source, expr_str.trim(), expr_start)
             })
         }
-        Attribute::Directive { kind, name, modifiers, span, .. } => {
+        Attribute::Directive {
+            kind,
+            name,
+            modifiers,
+            value,
+            span,
+        } => {
             let type_name = match kind {
                 DirectiveKind::EventHandler => "EventHandler",
                 DirectiveKind::Binding => "Binding",
@@ -3685,153 +4616,15 @@ fn serialize_attribute_legacy(attr: &Attribute, source: &str) -> Value {
                 DirectiveKind::Let => "Let",
             };
 
-            // Calculate name_loc: from directive start to end of directive name (prefix:name)
-            let attr_text = &source[span.start as usize..span.end as usize];
-            let _colon_pos = attr_text.find(':').unwrap_or(0);
-            let name_start = span.start;
-            // name_loc covers the entire "prefix:name" part
-            let name_end_rel = if let Some(eq) = attr_text.find('=') {
-                eq
-            } else if let Some(pipe) = attr_text.find('|') {
-                pipe
-            } else {
-                attr_text.len()
-            };
-            let name_end = span.start + name_end_rel as u32;
-
             // Parse expression from directive value if present
-            let expression = if let Some(eq_pos) = attr_text.find('=') {
-                let value_part = attr_text[eq_pos + 1..].trim_start();
-                if value_part.starts_with('{') && value_part.ends_with('}') {
-                    // Direct expression: ={expr}
-                    let expr_str = &value_part[1..value_part.len()-1];
-                    let brace_pos = attr_text[eq_pos..].find('{').unwrap_or(1);
-                    let expr_start = span.start + eq_pos as u32 + brace_pos as u32 + 1;
-                    Some(expression_to_estree(source, expr_str.trim(), expr_start))
-                } else if (value_part.starts_with('"') || value_part.starts_with('\''))
-                    && value_part.len() > 2
-                {
-                    // Quoted value: ="{expr}" or ="static"
-                    let inner = &value_part[1..value_part.len()-1];
-                    if inner.starts_with('{') && inner.ends_with('}') {
-                        // Quoted expression: ="{expr}"
-                        let expr_str = &inner[1..inner.len()-1];
-                        let brace_pos = attr_text[eq_pos..].find('{').unwrap_or(2);
-                        let expr_start = span.start + eq_pos as u32 + brace_pos as u32 + 1;
-                        Some(expression_to_estree(source, expr_str.trim(), expr_start))
-                    } else if inner.contains('{') {
-                        // Quoted concat value: ="red{variable}"
-                        let quote_pos_rel = attr_text[eq_pos..].find(|c: char| c == '"' || c == '\'').unwrap_or(1);
-                        let inner_start = span.start + eq_pos as u32 + quote_pos_rel as u32 + 1;
-                        // Build concat parts
-                        let mut parts = Vec::new();
-                        let mut pos = 0;
-                        let bytes = inner.as_bytes();
-                        while pos < inner.len() {
-                            if bytes[pos] == b'{' {
-                                let expr_start_abs = inner_start + pos as u32 + 1;
-                                let expr_end = inner[pos + 1..].find('}').unwrap_or(inner.len() - pos - 1);
-                                let expr_str = &inner[pos + 1..pos + 1 + expr_end];
-                                let mustache_start = inner_start + pos as u32;
-                                let mustache_end = inner_start + pos as u32 + expr_end as u32 + 2;
-                                parts.push(json!({
-                                    "type": "MustacheTag",
-                                    "start": mustache_start,
-                                    "end": mustache_end,
-                                    "expression": expression_to_estree(source, expr_str.trim(), expr_start_abs)
-                                }));
-                                pos += expr_end + 2;
-                            } else {
-                                let text_start = pos;
-                                while pos < inner.len() && bytes[pos] != b'{' {
-                                    pos += 1;
-                                }
-                                let text = &inner[text_start..pos];
-                                parts.push(json!({
-                                    "type": "Text",
-                                    "start": inner_start + text_start as u32,
-                                    "end": inner_start + pos as u32,
-                                    "raw": text,
-                                    "data": text
-                                }));
-                            }
-                        }
-                        Some(Value::Array(parts))
-                    } else {
-                        // Static string value
-                        let val_start_rel = attr_text[eq_pos..].find(|c: char| c == '"' || c == '\'').unwrap_or(1);
-                        let val_start = span.start + eq_pos as u32 + val_start_rel as u32 + 1;
-                        let val_end = span.end - 1;
-                        Some(json!([{
-                            "type": "Text",
-                            "start": val_start,
-                            "end": val_end,
-                            "raw": inner,
-                            "data": inner
-                        }]))
-                    }
-                } else {
-                    // Unquoted value: =value or =value{expr}
-                    let val_start_rel = eq_pos + 1 + (attr_text[eq_pos + 1..].len() - value_part.len());
-                    let val_start = span.start + val_start_rel as u32;
-
-                    if value_part.contains('{') {
-                        // Concat value: red{variable} — build parts inline
-                        let mut parts = Vec::new();
-                        let mut pos = 0;
-                        let bytes = value_part.as_bytes();
-                        while pos < value_part.len() {
-                            if bytes[pos] == b'{' {
-                                let expr_start_abs = val_start + pos as u32 + 1;
-                                let expr_end = value_part[pos + 1..].find('}').unwrap_or(value_part.len() - pos - 1);
-                                let expr_str = &value_part[pos + 1..pos + 1 + expr_end];
-                                let mustache_start = val_start + pos as u32;
-                                let mustache_end = val_start + pos as u32 + expr_end as u32 + 2;
-                                parts.push(json!({
-                                    "type": "MustacheTag",
-                                    "start": mustache_start,
-                                    "end": mustache_end,
-                                    "expression": expression_to_estree(source, expr_str.trim(), expr_start_abs)
-                                }));
-                                pos += expr_end + 2;
-                            } else {
-                                let text_start = pos;
-                                while pos < value_part.len() && bytes[pos] != b'{' {
-                                    pos += 1;
-                                }
-                                let text = &value_part[text_start..pos];
-                                parts.push(json!({
-                                    "type": "Text",
-                                    "start": val_start + text_start as u32,
-                                    "end": val_start + pos as u32,
-                                    "raw": text,
-                                    "data": text
-                                }));
-                            }
-                        }
-                        Some(Value::Array(parts))
-                    } else {
-                        // Plain value: red
-                        let val_end = val_start + value_part.len() as u32;
-                        Some(json!([{
-                            "type": "Text",
-                            "start": val_start,
-                            "end": val_end,
-                            "raw": value_part,
-                            "data": value_part
-                        }]))
-                    }
-                }
-            } else {
-                None
-            };
+            let expression = directive_expression_legacy(value, meta, source);
 
             let mut obj = json!({
                 "start": span.start,
                 "end": span.end,
                 "type": type_name,
                 "name": name,
-                "name_loc": loc_json_with_char(source, name_start, name_end),
+                "name_loc": loc_json_with_char(source, meta.name_span.start, meta.name_span.end),
                 "modifiers": modifiers
             });
 
@@ -3843,15 +4636,14 @@ fn serialize_attribute_legacy(attr: &Attribute, source: &str) -> Value {
                         obj["value"] = expr;
                     } else {
                         // Expression value — wrap in MustacheTag array
-                        let brace_pos = attr_text.find('{');
-                        let close_brace = attr_text.rfind('}');
-                        if let (Some(bp), Some(cbp)) = (brace_pos, close_brace) {
-                            let mustache_start = span.start + bp as u32;
-                            let mustache_end = span.start + cbp as u32 + 1;
+                        if let Some(mustache_span) = meta
+                            .mustache_span
+                            .or_else(|| meta.parts.first().and_then(|part| part.mustache_span))
+                        {
                             obj["value"] = json!([{
                                 "type": "MustacheTag",
-                                "start": mustache_start,
-                                "end": mustache_end,
+                                "start": mustache_span.start,
+                                "end": mustache_span.end,
                                 "expression": expr
                             }]);
                         } else {
@@ -3866,14 +4658,11 @@ fn serialize_attribute_legacy(attr: &Attribute, source: &str) -> Value {
                     obj["expression"] = expr;
                 } else if matches!(kind, DirectiveKind::Binding) {
                     // Shorthand binding: bind:foo → expression is Identifier("foo")
-                    // Find the name position after the colon
-                    let colon_pos = attr_text.find(':').unwrap_or(0);
-                    let name_abs_start = span.start + colon_pos as u32 + 1;
-                    let name_abs_end = name_end;
+                    let subject_span = meta.directive_subject_span.unwrap_or(meta.name_span);
                     obj["expression"] = json!({
                         "type": "Identifier",
-                        "start": name_abs_start,
-                        "end": name_abs_end,
+                        "start": subject_span.start,
+                        "end": subject_span.end,
                         "name": name
                     });
                 } else {
@@ -3903,93 +4692,61 @@ fn serialize_attribute_legacy(attr: &Attribute, source: &str) -> Value {
     }
 }
 
-fn serialize_attr_value_legacy(value: &AttributeValue, source: &str, attr_span: &oxc::span::Span) -> Value {
+fn serialize_attr_value_legacy(
+    value: &AttributeValue,
+    meta: &AttributeMeta,
+    source: &str,
+) -> Value {
     match value {
         AttributeValue::True => json!(true),
         AttributeValue::Static(s) => {
-            // Find the value position in source
-            let region = &source[attr_span.start as usize..attr_span.end as usize];
-            if s.is_empty() {
-                // Empty string: ="", position between the quotes
-                let quote_pos = region.rfind(|c: char| c == '"' || c == '\'').unwrap_or(region.len());
-                let val_pos = attr_span.start + quote_pos as u32;
-                json!([{
-                    "start": val_pos,
-                    "end": val_pos,
-                    "type": "Text",
-                    "raw": "",
-                    "data": ""
-                }])
-            } else {
-                let val_start_rel = region.find(s.as_str()).unwrap_or(0);
-                let val_start = attr_span.start + val_start_rel as u32;
-                let val_end = val_start + s.len() as u32;
-                json!([{
-                    "start": val_start,
-                    "end": val_end,
-                    "type": "Text",
-                    "raw": s,
-                    "data": decode_entities(s)
-                }])
-            }
+            let value_span = meta.value_span.unwrap_or(meta.name_span);
+            json!([{
+                "start": value_span.start,
+                "end": value_span.end,
+                "type": "Text",
+                "raw": s,
+                "data": decode_entities(s)
+            }])
         }
         AttributeValue::Expression(expr) => {
-            // Find expression position - after ={
-            let region = &source[attr_span.start as usize..attr_span.end as usize];
-            let expr_start_rel = region.find('{').map(|p| p + 1).unwrap_or(0);
-            let expr_start = attr_span.start + expr_start_rel as u32;
-            // The overall mustache tag span includes the { }
-            let mustache_start = attr_span.start + region.find('{').unwrap_or(0) as u32;
-            let mustache_end = attr_span.start + region.rfind('}').map(|p| p + 1).unwrap_or(region.len()) as u32;
+            let expression_span = meta.expression_span.unwrap_or(meta.name_span);
+            let mustache_span = meta.mustache_span.unwrap_or(expression_span);
+            let expr_start = trimmed_span_start(expression_span, expr);
             json!([{
                 "type": "MustacheTag",
-                "start": mustache_start,
-                "end": mustache_end,
+                "start": mustache_span.start,
+                "end": mustache_span.end,
                 "expression": expression_to_estree(source, expr.trim(), expr_start)
             }])
         }
         AttributeValue::Concat(parts) => {
-            // Find the start of the value content in source
-            let region = &source[attr_span.start as usize..attr_span.end as usize];
-            let eq_pos = region.find('=').unwrap_or(0);
-            let after_eq = &region[eq_pos + 1..];
-            let value_offset = if after_eq.starts_with('"') || after_eq.starts_with('\'') {
-                eq_pos + 2 // skip =' or ="
-            } else {
-                eq_pos + 1 // unquoted
-            };
-            let mut pos = attr_span.start + value_offset as u32;
-
-            let values: Vec<Value> = parts.iter().map(|part| {
-                match part {
+            let values: Vec<Value> = parts
+                .iter()
+                .zip(meta.parts.iter())
+                .map(|(part, part_meta)| match part {
                     AttributeValuePart::Static(s) => {
-                        let start = pos;
-                        pos += s.len() as u32;
                         json!({
-                            "start": start,
-                            "end": pos,
+                            "start": part_meta.span.start,
+                            "end": part_meta.span.end,
                             "type": "Text",
                             "raw": s,
                             "data": decode_entities(s)
                         })
                     }
                     AttributeValuePart::Expression(expr) => {
-                        let mustache_start = pos;
-                        pos += 1; // skip {
-                        let expr_start = pos;
-                        pos += expr.len() as u32;
-                        let _expr_end = pos;
-                        pos += 1; // skip }
-                        let mustache_end = pos;
+                        let expression_span = part_meta.expression_span.unwrap_or(part_meta.span);
+                        let mustache_span = part_meta.mustache_span.unwrap_or(part_meta.span);
+                        let expr_start = trimmed_span_start(expression_span, expr);
                         json!({
                             "type": "MustacheTag",
-                            "start": mustache_start,
-                            "end": mustache_end,
+                            "start": mustache_span.start,
+                            "end": mustache_span.end,
                             "expression": expression_to_estree(source, expr.trim(), expr_start)
                         })
                     }
-                }
-            }).collect();
+                })
+                .collect();
             Value::Array(values)
         }
     }

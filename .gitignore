@@ -1,9 +1,9 @@
 # Build
 /target
-Cargo.lock
 
 # Vendor (cloned by prepare.sh)
 /vendor/
+/vendors/
 
 # Test fixtures (committed to main for CI)
 
@@ -39,3 +39,5 @@ audit-log.md
 reports/
 .claude
 CLAUDE.md
+
+docs/

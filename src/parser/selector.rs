@@ -16,8 +16,8 @@
 
 use cssparser::{CowRcStr, Parser as CssParser, ParserInput, SourceLocation, ToCss};
 use selectors::parser::{
-    Component as SelComponent, NonTSPseudoClass, ParseRelative, Parser as SelParser,
-    PseudoElement, Selector, SelectorImpl, SelectorList, SelectorParseErrorKind,
+    Component as SelComponent, NonTSPseudoClass, ParseRelative, Parser as SelParser, PseudoElement,
+    Selector, SelectorImpl, SelectorList, SelectorParseErrorKind,
 };
 
 /// Tiny string wrapper satisfying `selectors`' identifier / atom bounds.
@@ -37,7 +37,10 @@ impl OxAtom {
         use std::hash::{BuildHasher, Hasher};
         let mut hasher = rustc_hash::FxBuildHasher::default().build_hasher();
         hasher.write(s.as_bytes());
-        OxAtom { value: s.into(), hash: hasher.finish() as u32 }
+        OxAtom {
+            value: s.into(),
+            hash: hasher.finish() as u32,
+        }
     }
 
     pub fn as_str(&self) -> &str {
@@ -338,11 +341,8 @@ where
 /// into `:is()` / `:where()` / `:not()` / `:has()` and into `:global(...)`
 /// when `visit_global` is true. The callback receives `(component, in_global)`
 /// so rules can distinguish globally-scoped classes/ids from local ones.
-pub fn walk_components<F>(
-    list: &SelectorList<OxSelector>,
-    visit_global: bool,
-    f: &mut F,
-) where
+pub fn walk_components<F>(list: &SelectorList<OxSelector>, visit_global: bool, f: &mut F)
+where
     F: FnMut(&SelComponent<OxSelector>, bool),
 {
     for selector in list.slice() {
@@ -350,12 +350,8 @@ pub fn walk_components<F>(
     }
 }
 
-fn walk_selector<F>(
-    selector: &Selector<OxSelector>,
-    visit_global: bool,
-    in_global: bool,
-    f: &mut F,
-) where
+fn walk_selector<F>(selector: &Selector<OxSelector>, visit_global: bool, in_global: bool, f: &mut F)
+where
     F: FnMut(&SelComponent<OxSelector>, bool),
 {
     for component in selector.iter_raw_match_order() {
@@ -427,7 +423,11 @@ mod tests {
                 local.push(a.as_str().to_string());
             }
         });
-        assert_eq!(local, vec!["bar"], "with visit_global=false, :global body is hidden");
+        assert_eq!(
+            local,
+            vec!["bar"],
+            "with visit_global=false, :global body is hidden"
+        );
 
         let mut all = Vec::new();
         walk_components(&list, true, &mut |c, in_global| {

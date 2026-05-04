@@ -2,8 +2,8 @@
 
 pub mod rules;
 
-use oxc::span::Span;
 use crate::ast::*;
+use oxc::span::Span;
 
 /// A lint diagnostic.
 #[derive(Debug, Clone)]
@@ -64,21 +64,35 @@ pub struct LintContext<'a> {
 impl<'a> LintContext<'a> {
     pub fn new(ast: &'a SvelteAst<'a>, source: &'a str) -> Self {
         Self {
-            ast, source, config: RuleConfig::default(), file_path: None, is_svelte_module: false,
-            instance_semantic: None, module_semantic: None,
-            instance_content_offset: 0, module_content_offset: 0,
+            ast,
+            source,
+            config: RuleConfig::default(),
+            file_path: None,
+            is_svelte_module: false,
+            instance_semantic: None,
+            module_semantic: None,
+            instance_content_offset: 0,
+            module_content_offset: 0,
             is_runes: false,
-            diagnostics: Vec::new(), current_rule: "",
+            diagnostics: Vec::new(),
+            current_rule: "",
         }
     }
 
     pub fn with_config(ast: &'a SvelteAst<'a>, source: &'a str, config: RuleConfig) -> Self {
         Self {
-            ast, source, config, file_path: None, is_svelte_module: false,
-            instance_semantic: None, module_semantic: None,
-            instance_content_offset: 0, module_content_offset: 0,
+            ast,
+            source,
+            config,
+            file_path: None,
+            is_svelte_module: false,
+            instance_semantic: None,
+            module_semantic: None,
+            instance_content_offset: 0,
+            module_content_offset: 0,
             is_runes: false,
-            diagnostics: Vec::new(), current_rule: "",
+            diagnostics: Vec::new(),
+            current_rule: "",
         }
     }
 
@@ -98,30 +112,48 @@ impl<'a> LintContext<'a> {
     #[inline]
     pub fn diagnostic(&mut self, message: impl Into<String>, span: Span) {
         self.diagnostics.push(LintDiagnostic {
-            rule_name: self.current_rule, message: message.into(), span, fix: None,
+            rule_name: self.current_rule,
+            message: message.into(),
+            span,
+            fix: None,
         });
     }
 
     pub fn diagnostic_with_fix(&mut self, message: impl Into<String>, span: Span, fix: Fix) {
         self.diagnostics.push(LintDiagnostic {
-            rule_name: self.current_rule, message: message.into(), span, fix: Some(fix),
+            rule_name: self.current_rule,
+            message: message.into(),
+            span,
+            fix: Some(fix),
         });
     }
 
     #[inline]
-    fn set_rule(&mut self, name: &'static str) { self.current_rule = name; }
-    pub fn into_diagnostics(self) -> Vec<LintDiagnostic> { self.diagnostics }
+    fn set_rule(&mut self, name: &'static str) {
+        self.current_rule = name;
+    }
+    pub fn into_diagnostics(self) -> Vec<LintDiagnostic> {
+        self.diagnostics
+    }
 }
 
 /// The trait all lint rules implement.
 pub trait Rule: Send + Sync {
     fn name(&self) -> &'static str;
-    fn is_recommended(&self) -> bool { false }
-    fn is_fixable(&self) -> bool { false }
+    fn is_recommended(&self) -> bool {
+        false
+    }
+    fn is_fixable(&self) -> bool {
+        false
+    }
     /// Whether this rule can apply to plain .js/.ts files (not just .svelte).
-    fn applies_to_scripts(&self) -> bool { false }
+    fn applies_to_scripts(&self) -> bool {
+        false
+    }
     /// Whether this rule can apply to .svelte.js/.svelte.ts modules.
-    fn applies_to_svelte_scripts(&self) -> bool { false }
+    fn applies_to_svelte_scripts(&self) -> bool {
+        false
+    }
     fn run(&self, ctx: &mut LintContext);
 }
 
@@ -135,12 +167,18 @@ impl Linter {
     pub fn recommended() -> Self {
         let rules = rules::recommended_rules();
         let has_script_rules = rules.iter().any(|r| r.applies_to_scripts());
-        Self { rules, has_script_rules }
+        Self {
+            rules,
+            has_script_rules,
+        }
     }
     pub fn all() -> Self {
         let rules = rules::all_rules();
         let has_script_rules = rules.iter().any(|r| r.applies_to_scripts());
-        Self { rules, has_script_rules }
+        Self {
+            rules,
+            has_script_rules,
+        }
     }
 
     pub fn with_custom_rules(mut self, rules: Vec<Box<dyn Rule>>) -> Self {
@@ -161,29 +199,51 @@ impl Linter {
     }
 
     pub fn lint<'a>(&self, ast: &'a SvelteAst<'a>, source: &'a str) -> Vec<LintDiagnostic> {
-        self.lint_impl(ast, source, RuleConfig::default(), None, ScriptMode::Full, /*is_svelte_module*/ false)
+        self.lint_impl(
+            ast,
+            source,
+            RuleConfig::default(),
+            None,
+            ScriptMode::Full,
+            /*is_svelte_module*/ false,
+        )
     }
 
     /// Lint a plain JS/TS file. Only runs rules marked with `applies_to_scripts`.
     /// Wraps the source in a synthetic SvelteAst with the content as an instance script.
     pub fn lint_script(&self, source: &str) -> Vec<LintDiagnostic> {
-        if !self.has_script_rules { return vec![]; }
-        use crate::ast::{SvelteAst, Script, Fragment};
+        if !self.has_script_rules {
+            return vec![];
+        }
+        use crate::ast::{Fragment, Script, SvelteAst};
         use std::marker::PhantomData;
         let ast = SvelteAst {
-            html: Fragment { nodes: vec![], span: oxc::span::Span::new(0, 0), _phantom: PhantomData },
+            html: Fragment {
+                nodes: vec![],
+                span: oxc::span::Span::new(0, 0),
+                _phantom: PhantomData,
+            },
             instance: Some(Script {
                 content: source.to_string(),
                 module: false,
                 lang: None,
                 strict_events: false,
                 span: oxc::span::Span::new(0, source.len() as u32),
+                attrs_span: oxc::span::Span::new(0, 0),
+                content_span: oxc::span::Span::new(0, source.len() as u32),
             }),
             module: None,
             css: None,
             _phantom: PhantomData,
         };
-        self.lint_impl(&ast, source, RuleConfig::default(), None, ScriptMode::ScriptOnly, /*is_svelte_module*/ false)
+        self.lint_impl(
+            &ast,
+            source,
+            RuleConfig::default(),
+            None,
+            ScriptMode::ScriptOnly,
+            /*is_svelte_module*/ false,
+        )
     }
 
     /// Lint a `.svelte.js` or `.svelte.ts` module. Runs rules marked with
@@ -191,27 +251,58 @@ impl Linter {
     pub fn lint_svelte_script(&self, source: &str, is_ts: bool) -> Vec<LintDiagnostic> {
         use std::marker::PhantomData;
         let ast = SvelteAst {
-            html: Fragment { nodes: vec![], span: oxc::span::Span::new(0, 0), _phantom: PhantomData },
+            html: Fragment {
+                nodes: vec![],
+                span: oxc::span::Span::new(0, 0),
+                _phantom: PhantomData,
+            },
             instance: Some(Script {
                 content: source.to_string(),
                 module: false,
                 lang: if is_ts { Some("ts".to_string()) } else { None },
                 strict_events: false,
                 span: oxc::span::Span::new(0, source.len() as u32),
+                attrs_span: oxc::span::Span::new(0, 0),
+                content_span: oxc::span::Span::new(0, source.len() as u32),
             }),
             module: None,
             css: None,
             _phantom: PhantomData,
         };
-        self.lint_impl(&ast, source, RuleConfig::default(), None, ScriptMode::SvelteModule, /*is_svelte_module*/ true)
+        self.lint_impl(
+            &ast,
+            source,
+            RuleConfig::default(),
+            None,
+            ScriptMode::SvelteModule,
+            /*is_svelte_module*/ true,
+        )
     }
 
-    pub fn lint_with_config<'a>(&self, ast: &'a SvelteAst<'a>, source: &'a str, config: RuleConfig) -> Vec<LintDiagnostic> {
+    pub fn lint_with_config<'a>(
+        &self,
+        ast: &'a SvelteAst<'a>,
+        source: &'a str,
+        config: RuleConfig,
+    ) -> Vec<LintDiagnostic> {
         self.lint_impl(ast, source, config, None, ScriptMode::Full, false)
     }
 
-    pub fn lint_with_config_and_path<'a>(&self, ast: &'a SvelteAst<'a>, source: &'a str, config: RuleConfig, file_path: &str) -> Vec<LintDiagnostic> {
-        self.lint_impl(ast, source, config, Some(file_path.to_string()), ScriptMode::Full, false)
+    pub fn lint_with_config_and_path<'a>(
+        &self,
+        ast: &'a SvelteAst<'a>,
+        source: &'a str,
+        config: RuleConfig,
+        file_path: &str,
+    ) -> Vec<LintDiagnostic> {
+        self.lint_impl(
+            ast,
+            source,
+            config,
+            Some(file_path.to_string()),
+            ScriptMode::Full,
+            false,
+        )
     }
 
     /// Central lint driver. Creates an allocator, parses script blocks into oxc ASTs
@@ -234,27 +325,63 @@ impl Linter {
         let alloc = Allocator::default();
 
         // Compute content offsets first (don't depend on parse success).
-        let instance_offset = ast.instance.as_ref().map(|s| {
-            if is_svelte_module { s.span.start } else { script_content_offset(s, source) }
-        }).unwrap_or(0);
-        let module_offset = ast.module.as_ref().map(|s| script_content_offset(s, source)).unwrap_or(0);
+        let instance_offset = ast
+            .instance
+            .as_ref()
+            .map(|s| {
+                if is_svelte_module {
+                    s.span.start
+                } else {
+                    script_content_offset(s, source)
+                }
+            })
+            .unwrap_or(0);
+        let module_offset = ast
+            .module
+            .as_ref()
+            .map(|s| script_content_offset(s, source))
+            .unwrap_or(0);
 
         // Parse each script. On parse error we just leave semantic as None — rules that
         // need a semantic model early-return, matching existing behavior.
         let instance_parse = ast.instance.as_ref().and_then(|s| {
-            if s.content.trim().is_empty() { return None; }
-            let st = if matches!(s.lang.as_deref(), Some("ts" | "typescript")) { SourceType::ts() } else { SourceType::mjs() };
+            if s.content.trim().is_empty() {
+                return None;
+            }
+            let st = if matches!(s.lang.as_deref(), Some("ts" | "typescript")) {
+                SourceType::ts()
+            } else {
+                SourceType::mjs()
+            };
             let r = Parser::new(&alloc, &s.content, st).parse();
-            if !r.errors.is_empty() { None } else { Some(r) }
+            if !r.errors.is_empty() {
+                None
+            } else {
+                Some(r)
+            }
         });
         let module_parse = ast.module.as_ref().and_then(|s| {
-            if s.content.trim().is_empty() { return None; }
-            let st = if matches!(s.lang.as_deref(), Some("ts" | "typescript")) { SourceType::ts() } else { SourceType::mjs() };
+            if s.content.trim().is_empty() {
+                return None;
+            }
+            let st = if matches!(s.lang.as_deref(), Some("ts" | "typescript")) {
+                SourceType::ts()
+            } else {
+                SourceType::mjs()
+            };
             let r = Parser::new(&alloc, &s.content, st).parse();
-            if !r.errors.is_empty() { None } else { Some(r) }
+            if !r.errors.is_empty() {
+                None
+            } else {
+                Some(r)
+            }
         });
-        let instance_semantic = instance_parse.as_ref().map(|p| SemanticBuilder::new().build(&p.program).semantic);
-        let module_semantic = module_parse.as_ref().map(|p| SemanticBuilder::new().build(&p.program).semantic);
+        let instance_semantic = instance_parse
+            .as_ref()
+            .map(|p| SemanticBuilder::new().build(&p.program).semantic);
+        let module_semantic = module_parse
+            .as_ref()
+            .map(|p| SemanticBuilder::new().build(&p.program).semantic);
 
         let is_runes = instance_semantic.as_ref().is_some_and(detect_runes)
             || module_semantic.as_ref().is_some_and(detect_runes);
@@ -272,9 +399,13 @@ impl Linter {
             let include = match script_mode {
                 ScriptMode::Full => true,
                 ScriptMode::ScriptOnly => rule.applies_to_scripts(),
-                ScriptMode::SvelteModule => rule.applies_to_scripts() || rule.applies_to_svelte_scripts(),
+                ScriptMode::SvelteModule => {
+                    rule.applies_to_scripts() || rule.applies_to_svelte_scripts()
+                }
             };
-            if !include { continue; }
+            if !include {
+                continue;
+            }
             ctx.set_rule(rule.name());
             rule.run(&mut ctx);
         }
@@ -308,14 +439,22 @@ fn script_content_offset(script: &Script, source: &str) -> u32 {
 /// classify "no rune call" as "undetermined" rather than "legacy", which matches
 /// vendor's default when the parser can't prove the mode.
 const RUNE_NAMES: &[&str] = &[
-    "$state", "$derived", "$effect", "$props", "$bindable", "$inspect", "$host",
+    "$state",
+    "$derived",
+    "$effect",
+    "$props",
+    "$bindable",
+    "$inspect",
+    "$host",
 ];
 
 fn detect_runes(semantic: &oxc::semantic::Semantic) -> bool {
-    use oxc::ast::AstKind;
     use oxc::ast::ast::Expression;
+    use oxc::ast::AstKind;
     for node in semantic.nodes().iter() {
-        let AstKind::CallExpression(ce) = node.kind() else { continue };
+        let AstKind::CallExpression(ce) = node.kind() else {
+            continue;
+        };
         let root_name: Option<&str> = match &ce.callee {
             Expression::Identifier(id) => Some(id.name.as_str()),
             Expression::StaticMemberExpression(mem) => match &mem.object {
@@ -386,7 +525,10 @@ fn parse_directives(source: &str) -> Vec<Directive> {
             if let Some(rest) = inner.strip_prefix("svelte-ignore") {
                 let rules = parse_svelte_ignore_rules(rest.trim());
                 if !rules.is_empty() {
-                    directives.push(Directive::DisableNextLine { line: line_idx, rules });
+                    directives.push(Directive::DisableNextLine {
+                        line: line_idx,
+                        rules,
+                    });
                 }
                 continue;
             }
@@ -394,10 +536,17 @@ fn parse_directives(source: &str) -> Vec<Directive> {
             // <!-- eslint-disable-next-line rule1, rule2 -->
             // <!-- oxlint-disable-next-line rule1, rule2 -->
             // <!-- oxvelte-disable-next-line rule1, rule2 -->
-            for prefix in &["eslint-disable-next-line", "oxlint-disable-next-line", "oxvelte-disable-next-line"] {
+            for prefix in &[
+                "eslint-disable-next-line",
+                "oxlint-disable-next-line",
+                "oxvelte-disable-next-line",
+            ] {
                 if let Some(rest) = inner.strip_prefix(prefix) {
                     let rules = parse_rule_list(rest.trim());
-                    directives.push(Directive::DisableNextLine { line: line_idx, rules });
+                    directives.push(Directive::DisableNextLine {
+                        line: line_idx,
+                        rules,
+                    });
                 }
             }
 
@@ -409,16 +558,24 @@ fn parse_directives(source: &str) -> Vec<Directive> {
 
                 if let Some(rest) = inner.strip_prefix(disable.as_str()) {
                     if rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\t') {
-                        if !rest.trim_start().starts_with("next-line") && !rest.trim_start().starts_with("line") {
+                        if !rest.trim_start().starts_with("next-line")
+                            && !rest.trim_start().starts_with("line")
+                        {
                             let rules = parse_rule_list(rest.trim());
-                            directives.push(Directive::DisableBlock { line: line_idx, rules });
+                            directives.push(Directive::DisableBlock {
+                                line: line_idx,
+                                rules,
+                            });
                         }
                     }
                 }
                 if let Some(rest) = inner.strip_prefix(enable.as_str()) {
                     if rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\t') {
                         let rules = parse_rule_list(rest.trim());
-                        directives.push(Directive::EnableBlock { line: line_idx, rules });
+                        directives.push(Directive::EnableBlock {
+                            line: line_idx,
+                            rules,
+                        });
                     }
                 }
             }
@@ -433,7 +590,10 @@ fn parse_directives(source: &str) -> Vec<Directive> {
             if let Some(rest) = comment.strip_prefix("svelte-ignore") {
                 let rules = parse_svelte_ignore_rules(rest.trim());
                 if !rules.is_empty() {
-                    directives.push(Directive::DisableNextLine { line: line_idx, rules });
+                    directives.push(Directive::DisableNextLine {
+                        line: line_idx,
+                        rules,
+                    });
                 }
                 continue;
             }
@@ -444,10 +604,16 @@ fn parse_directives(source: &str) -> Vec<Directive> {
 
                 if let Some(rest) = comment.strip_prefix(dnl.as_str()) {
                     let rules = parse_rule_list(rest.trim());
-                    directives.push(Directive::DisableNextLine { line: line_idx, rules });
+                    directives.push(Directive::DisableNextLine {
+                        line: line_idx,
+                        rules,
+                    });
                 } else if let Some(rest) = comment.strip_prefix(dl.as_str()) {
                     let rules = parse_rule_list(rest.trim());
-                    directives.push(Directive::DisableLine { line: line_idx, rules });
+                    directives.push(Directive::DisableLine {
+                        line: line_idx,
+                        rules,
+                    });
                 }
             }
         }
@@ -462,15 +628,23 @@ fn parse_directives(source: &str) -> Vec<Directive> {
                 // Must match "eslint-disable" but NOT "eslint-disable-next-line" or "eslint-disable-line"
                 if let Some(rest) = comment.strip_prefix(disable.as_str()) {
                     if rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\t') {
-                        if !rest.trim_start().starts_with("next-line") && !rest.trim_start().starts_with("line") {
+                        if !rest.trim_start().starts_with("next-line")
+                            && !rest.trim_start().starts_with("line")
+                        {
                             let rules = parse_rule_list(rest.trim());
-                            directives.push(Directive::DisableBlock { line: line_idx, rules });
+                            directives.push(Directive::DisableBlock {
+                                line: line_idx,
+                                rules,
+                            });
                         }
                     }
                 } else if let Some(rest) = comment.strip_prefix(enable.as_str()) {
                     if rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\t') {
                         let rules = parse_rule_list(rest.trim());
-                        directives.push(Directive::EnableBlock { line: line_idx, rules });
+                        directives.push(Directive::EnableBlock {
+                            line: line_idx,
+                            rules,
+                        });
                     }
                 }
             }
@@ -503,7 +677,9 @@ fn extract_js_block_comment(s: &str) -> Option<&str> {
 
 /// Parse comma-separated rule names. Empty list means "all rules".
 fn parse_rule_list(s: &str) -> Vec<String> {
-    if s.is_empty() { return Vec::new(); } // empty = all rules
+    if s.is_empty() {
+        return Vec::new();
+    } // empty = all rules
     s.split(|c: char| c == ',' || c == ' ')
         .map(|r| r.trim())
         .filter(|r| !r.is_empty() && !r.starts_with("--"))
@@ -517,7 +693,9 @@ fn parse_svelte_ignore_rules(s: &str) -> Vec<String> {
     let mut rest = s;
     while !rest.is_empty() {
         let rest_trimmed = rest.trim_start();
-        if rest_trimmed.is_empty() { break; }
+        if rest_trimmed.is_empty() {
+            break;
+        }
         // Skip parenthesized notes: (reason text)
         if rest_trimmed.starts_with('(') {
             if let Some(close) = rest_trimmed.find(')') {
@@ -527,7 +705,8 @@ fn parse_svelte_ignore_rules(s: &str) -> Vec<String> {
             break;
         }
         // Extract rule name (until space, comma, or paren)
-        let end = rest_trimmed.find(|c: char| c == ' ' || c == ',' || c == '(')
+        let end = rest_trimmed
+            .find(|c: char| c == ' ' || c == ',' || c == '(')
             .unwrap_or(rest_trimmed.len());
         let rule = &rest_trimmed[..end];
         if !rule.is_empty() {
@@ -544,7 +723,9 @@ fn parse_svelte_ignore_rules(s: &str) -> Vec<String> {
 /// Check if a rule name matches a directive's rule list.
 /// If the directive's rule list is empty, it matches ALL rules.
 fn rule_matches(rule_name: &str, directive_rules: &[String]) -> bool {
-    if directive_rules.is_empty() { return true; } // empty = all rules
+    if directive_rules.is_empty() {
+        return true;
+    } // empty = all rules
     directive_rules.iter().any(|r| {
         r == rule_name
             || rule_name.ends_with(r.as_str()) // "no-console" matches "svelte/no-console"
@@ -554,63 +735,90 @@ fn rule_matches(rule_name: &str, directive_rules: &[String]) -> bool {
 
 /// Filter diagnostics by removing any suppressed by ignore comments.
 fn filter_suppressed(diagnostics: Vec<LintDiagnostic>, source: &str) -> Vec<LintDiagnostic> {
-    if diagnostics.is_empty() { return diagnostics; }
+    if diagnostics.is_empty() {
+        return diagnostics;
+    }
 
     let directives = parse_directives(source);
-    if directives.is_empty() { return diagnostics; }
+    if directives.is_empty() {
+        return diagnostics;
+    }
 
     // Build line offset table for mapping span → line number
     let line_starts: Vec<usize> = std::iter::once(0)
-        .chain(source.bytes().enumerate().filter(|(_, b)| *b == b'\n').map(|(i, _)| i + 1))
+        .chain(
+            source
+                .bytes()
+                .enumerate()
+                .filter(|(_, b)| *b == b'\n')
+                .map(|(i, _)| i + 1),
+        )
         .collect();
 
     let span_to_line = |offset: u32| -> usize {
-        line_starts.partition_point(|&start| start <= offset as usize).saturating_sub(1)
+        line_starts
+            .partition_point(|&start| start <= offset as usize)
+            .saturating_sub(1)
     };
 
-    diagnostics.into_iter().filter(|diag| {
-        let diag_line = span_to_line(diag.span.start);
+    diagnostics
+        .into_iter()
+        .filter(|diag| {
+            let diag_line = span_to_line(diag.span.start);
 
-        for dir in &directives {
-            match dir {
-                Directive::DisableNextLine { line, rules } => {
-                    if diag_line == line + 1 && rule_matches(diag.rule_name, rules) {
-                        return false;
+            for dir in &directives {
+                match dir {
+                    Directive::DisableNextLine { line, rules } => {
+                        if diag_line == line + 1 && rule_matches(diag.rule_name, rules) {
+                            return false;
+                        }
                     }
-                }
-                Directive::DisableLine { line, rules } => {
-                    if diag_line == *line && rule_matches(diag.rule_name, rules) {
-                        return false;
+                    Directive::DisableLine { line, rules } => {
+                        if diag_line == *line && rule_matches(diag.rule_name, rules) {
+                            return false;
+                        }
                     }
-                }
-                Directive::DisableBlock { line, rules } => {
-                    if diag_line >= *line && rule_matches(diag.rule_name, rules) {
-                        // Check if re-enabled before this diagnostic
-                        let re_enabled = directives.iter().any(|d| {
-                            if let Directive::EnableBlock { line: enable_line, rules: enable_rules } = d {
-                                *enable_line > *line && *enable_line <= diag_line
-                                    && (enable_rules.is_empty() || rules.iter().all(|r| enable_rules.contains(r)))
-                            } else { false }
-                        });
-                        if !re_enabled { return false; }
+                    Directive::DisableBlock { line, rules } => {
+                        if diag_line >= *line && rule_matches(diag.rule_name, rules) {
+                            // Check if re-enabled before this diagnostic
+                            let re_enabled = directives.iter().any(|d| {
+                                if let Directive::EnableBlock {
+                                    line: enable_line,
+                                    rules: enable_rules,
+                                } = d
+                                {
+                                    *enable_line > *line
+                                        && *enable_line <= diag_line
+                                        && (enable_rules.is_empty()
+                                            || rules.iter().all(|r| enable_rules.contains(r)))
+                                } else {
+                                    false
+                                }
+                            });
+                            if !re_enabled {
+                                return false;
+                            }
+                        }
                     }
+                    Directive::EnableBlock { .. } => {} // handled inside DisableBlock
                 }
-                Directive::EnableBlock { .. } => {} // handled inside DisableBlock
             }
-        }
-        true
-    }).collect()
+            true
+        })
+        .collect()
 }
 
 /// Walk all template nodes recursively, calling visitor on each.
 pub fn walk_template_nodes<F>(fragment: &Fragment, visitor: &mut F)
-where F: FnMut(&TemplateNode)
+where
+    F: FnMut(&TemplateNode),
 {
     walk_nodes(&fragment.nodes, visitor);
 }
 
 fn walk_nodes<F>(nodes: &[TemplateNode], visitor: &mut F)
-where F: FnMut(&TemplateNode)
+where
+    F: FnMut(&TemplateNode),
 {
     for node in nodes {
         visitor(node);
@@ -626,7 +834,9 @@ where F: FnMut(&TemplateNode)
                     match alt.as_ref() {
                         TemplateNode::IfBlock(ib) => {
                             walk_nodes(&ib.consequent.nodes, visitor);
-                            if let Some(a) = &ib.alternate { walk_alt(a, visitor); }
+                            if let Some(a) = &ib.alternate {
+                                walk_alt(a, visitor);
+                            }
                         }
                         _ => {}
                     }
@@ -634,12 +844,20 @@ where F: FnMut(&TemplateNode)
             }
             TemplateNode::EachBlock(block) => {
                 walk_nodes(&block.body.nodes, visitor);
-                if let Some(fb) = &block.fallback { walk_nodes(&fb.nodes, visitor); }
+                if let Some(fb) = &block.fallback {
+                    walk_nodes(&fb.nodes, visitor);
+                }
             }
             TemplateNode::AwaitBlock(block) => {
-                if let Some(p) = &block.pending { walk_nodes(&p.nodes, visitor); }
-                if let Some(t) = &block.then { walk_nodes(&t.nodes, visitor); }
-                if let Some(c) = &block.catch { walk_nodes(&c.nodes, visitor); }
+                if let Some(p) = &block.pending {
+                    walk_nodes(&p.nodes, visitor);
+                }
+                if let Some(t) = &block.then {
+                    walk_nodes(&t.nodes, visitor);
+                }
+                if let Some(c) = &block.catch {
+                    walk_nodes(&c.nodes, visitor);
+                }
             }
             TemplateNode::KeyBlock(block) => walk_nodes(&block.body.nodes, visitor),
             TemplateNode::SnippetBlock(block) => walk_nodes(&block.body.nodes, visitor),
@@ -649,12 +867,14 @@ where F: FnMut(&TemplateNode)
 }
 
 fn walk_alt<F>(alt: &Box<TemplateNode>, visitor: &mut F)
-where F: FnMut(&TemplateNode)
+where
+    F: FnMut(&TemplateNode),
 {
     visitor(alt);
     if let TemplateNode::IfBlock(ib) = alt.as_ref() {
         walk_nodes(&ib.consequent.nodes, visitor);
-        if let Some(a) = &ib.alternate { walk_alt(a, visitor); }
+        if let Some(a) = &ib.alternate {
+            walk_alt(a, visitor);
+        }
     }
 }
-

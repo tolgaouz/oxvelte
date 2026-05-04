@@ -1,592 +1,592 @@
 {
 	"html": {
-		"type": "Fragment",
-		"start": 0,
-		"end": 324,
 		"children": [
 			{
-				"type": "Element",
-				"start": 0,
-				"end": 14,
-				"name": "div",
 				"attributes": [
 					{
-						"type": "Attribute",
-						"start": 5,
 						"end": 7,
 						"name": "",
 						"name_loc": {
-							"start": {
-								"line": 1,
-								"column": 6,
-								"character": 6
-							},
 							"end": {
-								"line": 1,
+								"character": 6,
 								"column": 6,
-								"character": 6
+								"line": 1
+							},
+							"start": {
+								"character": 6,
+								"column": 6,
+								"line": 1
 							}
 						},
+						"start": 5,
+						"type": "Attribute",
 						"value": [
 							{
-								"type": "AttributeShorthand",
-								"start": 6,
 								"end": 6,
 								"expression": {
-									"type": "Identifier",
-									"name": "",
-									"start": 6,
 									"end": 6,
 									"loc": {
-										"start": {
-											"line": 1,
-											"column": 6,
-											"character": 6
-										},
 										"end": {
-											"line": 1,
+											"character": 6,
 											"column": 6,
-											"character": 6
+											"line": 1
+										},
+										"start": {
+											"character": 6,
+											"column": 6,
+											"line": 1
 										}
-									}
-								}
+									},
+									"name": "",
+									"start": 6,
+									"type": "Identifier"
+								},
+								"start": 6,
+								"type": "AttributeShorthand"
 							}
 						]
 					}
 				],
-				"children": []
+				"children": [],
+				"end": 14,
+				"name": "div",
+				"start": 0,
+				"type": "Element"
 			},
 			{
-				"type": "Text",
-				"start": 14,
+				"data": "\n",
 				"end": 15,
 				"raw": "\n",
-				"data": "\n"
+				"start": 14,
+				"type": "Text"
 			},
 			{
-				"type": "Element",
-				"start": 15,
-				"end": 33,
-				"name": "div",
 				"attributes": [
 					{
-						"type": "Attribute",
-						"start": 20,
 						"end": 26,
 						"name": "foo",
 						"name_loc": {
-							"start": {
-								"line": 2,
-								"column": 5,
-								"character": 20
-							},
 							"end": {
-								"line": 2,
+								"character": 23,
 								"column": 8,
-								"character": 23
+								"line": 2
+							},
+							"start": {
+								"character": 20,
+								"column": 5,
+								"line": 2
 							}
 						},
+						"start": 20,
+						"type": "Attribute",
 						"value": [
 							{
-								"type": "MustacheTag",
-								"start": 24,
 								"end": 26,
 								"expression": {
-									"type": "Identifier",
-									"start": 25,
 									"end": 25,
-									"name": ""
-								}
+									"name": "",
+									"start": 25,
+									"type": "Identifier"
+								},
+								"start": 24,
+								"type": "MustacheTag"
 							}
 						]
 					}
 				],
-				"children": []
+				"children": [],
+				"end": 33,
+				"name": "div",
+				"start": 15,
+				"type": "Element"
 			},
 			{
-				"type": "Text",
-				"start": 33,
+				"data": "\n\n",
 				"end": 35,
 				"raw": "\n\n",
-				"data": "\n\n"
+				"start": 33,
+				"type": "Text"
 			},
 			{
-				"type": "Element",
-				"start": 35,
-				"end": 55,
-				"name": "div",
 				"attributes": [
 					{
-						"type": "Attribute",
-						"start": 40,
 						"end": 48,
 						"name": "foo",
 						"name_loc": {
-							"start": {
-								"line": 4,
-								"column": 5,
-								"character": 40
-							},
 							"end": {
-								"line": 4,
+								"character": 43,
 								"column": 8,
-								"character": 43
+								"line": 4
+							},
+							"start": {
+								"character": 40,
+								"column": 5,
+								"line": 4
 							}
 						},
+						"start": 40,
+						"type": "Attribute",
 						"value": [
 							{
-								"type": "MustacheTag",
-								"start": 44,
 								"end": 48,
 								"expression": {
-									"type": "Identifier",
-									"start": 45,
 									"end": 47,
-									"name": ""
-								}
+									"name": "",
+									"start": 45,
+									"type": "Identifier"
+								},
+								"start": 44,
+								"type": "MustacheTag"
 							}
 						]
 					}
 				],
-				"children": []
+				"children": [],
+				"end": 55,
+				"name": "div",
+				"start": 35,
+				"type": "Element"
 			},
 			{
-				"type": "Text",
-				"start": 55,
+				"data": "\n",
 				"end": 56,
 				"raw": "\n",
-				"data": "\n"
+				"start": 55,
+				"type": "Text"
 			},
 			{
-				"type": "Element",
-				"start": 56,
-				"end": 80,
-				"name": "div",
 				"attributes": [
 					{
-						"type": "Attribute",
-						"start": 61,
 						"end": 73,
 						"name": "foo",
 						"name_loc": {
-							"start": {
-								"line": 5,
-								"column": 5,
-								"character": 61
-							},
 							"end": {
-								"line": 5,
+								"character": 64,
 								"column": 8,
-								"character": 64
+								"line": 5
+							},
+							"start": {
+								"character": 61,
+								"column": 5,
+								"line": 5
 							}
 						},
+						"start": 61,
+						"type": "Attribute",
 						"value": [
 							{
-								"type": "MustacheTag",
-								"start": 65,
 								"end": 73,
 								"expression": {
-									"type": "Identifier",
-									"start": 66,
 									"end": 72,
-									"name": ""
-								}
+									"name": "",
+									"start": 66,
+									"type": "Identifier"
+								},
+								"start": 65,
+								"type": "MustacheTag"
 							}
 						]
 					}
 				],
-				"children": []
+				"children": [],
+				"end": 80,
+				"name": "div",
+				"start": 56,
+				"type": "Element"
 			},
 			{
-				"type": "Text",
-				"start": 80,
+				"data": "\n",
 				"end": 81,
 				"raw": "\n",
-				"data": "\n"
+				"start": 80,
+				"type": "Text"
 			},
 			{
-				"type": "InlineComponent",
-				"start": 81,
-				"end": 113,
-				"name": "Component",
 				"attributes": [
 					{
-						"type": "Attribute",
-						"start": 92,
 						"end": 110,
 						"name": "onclick",
 						"name_loc": {
-							"start": {
-								"line": 6,
-								"column": 11,
-								"character": 92
-							},
 							"end": {
-								"line": 6,
+								"character": 99,
 								"column": 18,
-								"character": 99
+								"line": 6
+							},
+							"start": {
+								"character": 92,
+								"column": 11,
+								"line": 6
 							}
 						},
+						"start": 92,
+						"type": "Attribute",
 						"value": [
 							{
-								"type": "MustacheTag",
-								"start": 100,
 								"end": 110,
 								"expression": {
-									"type": "Identifier",
-									"start": 101,
 									"end": 109,
-									"name": ""
-								}
+									"name": "",
+									"start": 101,
+									"type": "Identifier"
+								},
+								"start": 100,
+								"type": "MustacheTag"
 							}
 						]
 					}
 				],
-				"children": []
+				"children": [],
+				"end": 113,
+				"name": "Component",
+				"start": 81,
+				"type": "InlineComponent"
 			},
 			{
-				"type": "Text",
-				"start": 113,
+				"data": "\n\n",
 				"end": 115,
 				"raw": "\n\n",
-				"data": "\n\n"
+				"start": 113,
+				"type": "Text"
 			},
 			{
-				"type": "Element",
-				"start": 115,
-				"end": 140,
-				"name": "input",
 				"attributes": [
 					{
-						"start": 122,
 						"end": 137,
-						"type": "Binding",
+						"expression": {
+							"end": 136,
+							"name": "",
+							"start": 134,
+							"type": "Identifier"
+						},
+						"modifiers": [],
 						"name": "value",
 						"name_loc": {
-							"start": {
-								"line": 8,
-								"column": 7,
-								"character": 122
-							},
 							"end": {
-								"line": 8,
+								"character": 132,
 								"column": 17,
-								"character": 132
+								"line": 8
+							},
+							"start": {
+								"character": 122,
+								"column": 7,
+								"line": 8
 							}
 						},
-						"expression": {
-							"type": "Identifier",
-							"start": 134,
-							"end": 136,
-							"name": ""
-						},
-						"modifiers": []
+						"start": 122,
+						"type": "Binding"
 					}
 				],
-				"children": []
+				"children": [],
+				"end": 140,
+				"name": "input",
+				"start": 115,
+				"type": "Element"
 			},
 			{
-				"type": "Text",
-				"start": 140,
+				"data": "\n\nasd",
 				"end": 145,
 				"raw": "\n\nasd",
-				"data": "\n\nasd"
+				"start": 140,
+				"type": "Text"
 			},
 			{
-				"type": "MustacheTag",
-				"start": 145,
 				"end": 149,
 				"expression": {
-					"type": "Identifier",
-					"start": 146,
 					"end": 148,
-					"name": ""
-				}
+					"name": "",
+					"start": 146,
+					"type": "Identifier"
+				},
+				"start": 145,
+				"type": "MustacheTag"
 			},
 			{
-				"type": "Text",
-				"start": 149,
+				"data": "asd\n",
 				"end": 153,
 				"raw": "asd\n",
-				"data": "asd\n"
+				"start": 149,
+				"type": "Text"
 			},
 			{
-				"type": "MustacheTag",
-				"start": 153,
 				"end": 164,
 				"expression": {
-					"type": "Identifier",
-					"start": 154,
 					"end": 163,
-					"name": ""
-				}
+					"name": "",
+					"start": 154,
+					"type": "Identifier"
+				},
+				"start": 153,
+				"type": "MustacheTag"
 			},
 			{
-				"type": "Text",
-				"start": 164,
+				"data": "\n\n",
 				"end": 166,
 				"raw": "\n\n",
-				"data": "\n\n"
+				"start": 164,
+				"type": "Text"
 			},
 			{
-				"type": "IfBlock",
-				"start": 166,
+				"children": [],
 				"end": 179,
 				"expression": {
-					"type": "Identifier",
-					"start": 171,
 					"end": 173,
-					"name": ""
+					"name": "",
+					"start": 171,
+					"type": "Identifier"
 				},
-				"children": []
+				"start": 166,
+				"type": "IfBlock"
 			},
 			{
-				"type": "Text",
-				"start": 179,
+				"data": "\n\n",
 				"end": 181,
 				"raw": "\n\n",
-				"data": "\n\n"
+				"start": 179,
+				"type": "Text"
 			},
 			{
-				"type": "EachBlock",
-				"start": 181,
-				"end": 217,
 				"children": [],
 				"context": {
-					"type": "Identifier",
-					"name": "item",
-					"start": 197,
 					"end": 201,
 					"loc": {
-						"start": {
-							"line": 15,
-							"column": 16,
-							"character": 197
-						},
 						"end": {
-							"line": 15,
+							"character": 201,
 							"column": 20,
-							"character": 201
-						}
-					}
-				},
-				"expression": {
-					"type": "Identifier",
-					"start": 188,
-					"end": 193,
-					"loc": {
-						"start": {
-							"line": 15,
-							"column": 7
+							"line": 15
 						},
-						"end": {
-							"line": 15,
-							"column": 12
+						"start": {
+							"character": 197,
+							"column": 16,
+							"line": 15
 						}
 					},
-					"name": "array"
+					"name": "item",
+					"start": 197,
+					"type": "Identifier"
+				},
+				"end": 217,
+				"expression": {
+					"end": 193,
+					"loc": {
+						"end": {
+							"column": 12,
+							"line": 15
+						},
+						"start": {
+							"column": 7,
+							"line": 15
+						}
+					},
+					"name": "array",
+					"start": 188,
+					"type": "Identifier"
 				},
 				"key": {
-					"type": "Identifier",
-					"start": 203,
 					"end": 208,
-					"name": ""
-				}
+					"name": "",
+					"start": 203,
+					"type": "Identifier"
+				},
+				"start": 181,
+				"type": "EachBlock"
 			},
 			{
-				"type": "Text",
-				"start": 217,
+				"data": "\n\n",
 				"end": 219,
 				"raw": "\n\n",
-				"data": "\n\n"
+				"start": 217,
+				"type": "Text"
 			},
 			{
-				"type": "EachBlock",
-				"start": 219,
-				"end": 246,
 				"children": [],
 				"context": {
-					"type": "Identifier",
-					"name": "item",
-					"start": 234,
 					"end": 238,
 					"loc": {
-						"start": {
-							"line": 17,
-							"column": 15,
-							"character": 234
-						},
 						"end": {
-							"line": 17,
+							"character": 238,
 							"column": 19,
-							"character": 238
+							"line": 17
+						},
+						"start": {
+							"character": 234,
+							"column": 15,
+							"line": 17
 						}
-					}
+					},
+					"name": "item",
+					"start": 234,
+					"type": "Identifier"
 				},
+				"end": 246,
 				"expression": {
-					"type": "Identifier",
+					"end": 230,
 					"name": "",
 					"start": 226,
-					"end": 230
-				}
+					"type": "Identifier"
+				},
+				"start": 219,
+				"type": "EachBlock"
 			},
 			{
-				"type": "Text",
-				"start": 246,
+				"data": "\n\n",
 				"end": 248,
 				"raw": "\n\n",
-				"data": "\n\n"
+				"start": 246,
+				"type": "Text"
 			},
 			{
-				"type": "AwaitBlock",
-				"start": 248,
-				"end": 267,
-				"expression": {
-					"type": "Identifier",
-					"start": 256,
-					"end": 258,
-					"name": ""
-				},
-				"value": null,
-				"error": null,
-				"pending": {
-					"type": "PendingBlock",
-					"start": 259,
-					"end": 259,
-					"children": [],
-					"skip": false
-				},
-				"then": {
-					"type": "ThenBlock",
-					"start": null,
-					"end": null,
-					"children": [],
-					"skip": true
-				},
 				"catch": {
-					"type": "CatchBlock",
-					"start": null,
-					"end": null,
 					"children": [],
-					"skip": true
-				}
+					"end": null,
+					"skip": true,
+					"start": null,
+					"type": "CatchBlock"
+				},
+				"end": 267,
+				"error": null,
+				"expression": {
+					"end": 258,
+					"name": "",
+					"start": 256,
+					"type": "Identifier"
+				},
+				"pending": {
+					"children": [],
+					"end": 259,
+					"skip": false,
+					"start": 259,
+					"type": "PendingBlock"
+				},
+				"start": 248,
+				"then": {
+					"children": [],
+					"end": null,
+					"skip": true,
+					"start": null,
+					"type": "ThenBlock"
+				},
+				"type": "AwaitBlock",
+				"value": null
 			},
 			{
-				"type": "Text",
-				"start": 267,
+				"data": "\n\n",
 				"end": 269,
 				"raw": "\n\n",
-				"data": "\n\n"
+				"start": 267,
+				"type": "Text"
 			},
 			{
-				"type": "AwaitBlock",
-				"start": 269,
+				"catch": {
+					"children": [],
+					"end": null,
+					"skip": true,
+					"start": null,
+					"type": "CatchBlock"
+				},
 				"end": 295,
+				"error": null,
 				"expression": {
-					"type": "Identifier",
+					"end": 279,
 					"name": "",
 					"start": 277,
-					"end": 279
+					"type": "Identifier"
 				},
+				"pending": {
+					"children": [],
+					"end": null,
+					"skip": true,
+					"start": null,
+					"type": "PendingBlock"
+				},
+				"start": 269,
+				"then": {
+					"children": [],
+					"end": 267,
+					"skip": false,
+					"start": 287,
+					"type": "ThenBlock"
+				},
+				"type": "AwaitBlock",
 				"value": {
-					"type": "Identifier",
-					"name": "y",
-					"start": 285,
 					"end": 286,
 					"loc": {
-						"start": {
-							"line": 21,
-							"column": 16,
-							"character": 285
-						},
 						"end": {
-							"line": 21,
+							"character": 286,
 							"column": 17,
-							"character": 286
+							"line": 21
+						},
+						"start": {
+							"character": 285,
+							"column": 16,
+							"line": 21
 						}
-					}
-				},
-				"error": null,
-				"pending": {
-					"type": "PendingBlock",
-					"start": null,
-					"end": null,
-					"children": [],
-					"skip": true
-				},
-				"then": {
-					"type": "ThenBlock",
-					"start": 287,
-					"end": 267,
-					"children": [],
-					"skip": false
-				},
-				"catch": {
-					"type": "CatchBlock",
-					"start": null,
-					"end": null,
-					"children": [],
-					"skip": true
+					},
+					"name": "y",
+					"start": 285,
+					"type": "Identifier"
 				}
 			},
 			{
-				"type": "Text",
-				"start": 295,
+				"data": "\n\n",
 				"end": 297,
 				"raw": "\n\n",
-				"data": "\n\n"
+				"start": 295,
+				"type": "Text"
 			},
 			{
-				"type": "AwaitBlock",
-				"start": 297,
-				"end": 324,
-				"expression": {
-					"type": "Identifier",
-					"name": "",
-					"start": 305,
-					"end": 307
+				"catch": {
+					"children": [],
+					"end": 295,
+					"skip": false,
+					"start": 316,
+					"type": "CatchBlock"
 				},
-				"value": null,
+				"end": 324,
 				"error": {
-					"type": "Identifier",
-					"name": "y",
-					"start": 314,
 					"end": 315,
 					"loc": {
-						"start": {
-							"line": 23,
-							"column": 17,
-							"character": 314
-						},
 						"end": {
-							"line": 23,
+							"character": 315,
 							"column": 18,
-							"character": 315
+							"line": 23
+						},
+						"start": {
+							"character": 314,
+							"column": 17,
+							"line": 23
 						}
-					}
+					},
+					"name": "y",
+					"start": 314,
+					"type": "Identifier"
+				},
+				"expression": {
+					"end": 307,
+					"name": "",
+					"start": 305,
+					"type": "Identifier"
 				},
 				"pending": {
-					"type": "PendingBlock",
-					"start": null,
-					"end": null,
 					"children": [],
-					"skip": true
+					"end": null,
+					"skip": true,
+					"start": null,
+					"type": "PendingBlock"
 				},
+				"start": 297,
 				"then": {
-					"type": "ThenBlock",
-					"start": null,
+					"children": [],
 					"end": null,
-					"children": [],
-					"skip": true
+					"skip": true,
+					"start": null,
+					"type": "ThenBlock"
 				},
-				"catch": {
-					"type": "CatchBlock",
-					"start": 316,
-					"end": 295,
-					"children": [],
-					"skip": false
-				}
+				"type": "AwaitBlock",
+				"value": null
 			}
-		]
+		],
+		"end": 324,
+		"start": 0,
+		"type": "Fragment"
 	}
 }

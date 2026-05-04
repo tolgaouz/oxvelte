@@ -2,16 +2,18 @@
 //! regions, then parses the template with a custom parser and hands script
 //! content to `oxc::parser`.
 
-pub mod template;
-pub mod serialize;
 pub mod css;
-pub mod selector;
 pub mod expression;
+pub(crate) mod scanner;
+pub mod selector;
+pub mod serialize;
+pub mod template;
 
-use oxc_diagnostics::OxcDiagnostic;
-use oxc::span::Span;
 use crate::ast::*;
 use oxc::allocator::Allocator;
+use oxc::span::Span;
+use oxc_diagnostics::OxcDiagnostic;
+use scanner::{SvelteScanner, TokenKind};
 use std::marker::PhantomData;
 
 #[derive(Debug)]
@@ -24,35 +26,37 @@ pub struct ParseResult<'a> {
 /// pre-parsed template-expression AST nodes attached to the returned
 /// `SvelteAst` — it must outlive the result.
 pub fn parse<'a>(source: &'a str, allocator: &'a Allocator) -> ParseResult<'a> {
-    let mut errors = Vec::new();
-    let regions = extract_regions(source);
+    let mut regions = extract_regions(source);
+    let mut errors = std::mem::take(&mut regions.errors);
 
     let instance = regions.instance.map(|r| Script {
-        content: r.content.to_string(), module: false,
+        content: r.content.to_string(),
+        module: false,
         lang: r.lang.map(|s| s.to_string()),
-        strict_events: r.strict_events, span: r.span,
+        strict_events: r.strict_events,
+        span: r.span,
+        attrs_span: r.attrs_span,
+        content_span: r.content_span,
     });
     let module = regions.module.map(|r| Script {
-        content: r.content.to_string(), module: true,
+        content: r.content.to_string(),
+        module: true,
         lang: r.lang.map(|s| s.to_string()),
-        strict_events: r.strict_events, span: r.span,
+        strict_events: r.strict_events,
+        span: r.span,
+        attrs_span: r.attrs_span,
+        content_span: r.content_span,
     });
     let css = regions.style.map(|r| Style {
         content: r.content.to_string(),
-        lang: r.lang.map(|s| s.to_string()), span: r.span,
+        lang: r.lang.map(|s| s.to_string()),
+        span: r.span,
+        attrs_span: r.attrs_span,
+        content_span: r.content_span,
     });
 
-    let html = match template::parse_fragment(source, allocator) {
-        Ok(fragment) => fragment,
-        Err(e) => {
-            errors.push(e);
-            Fragment {
-                nodes: Vec::new(),
-                span: Span::new(0, source.len() as u32),
-                _phantom: PhantomData,
-            }
-        }
-    };
+    let (html, template_errors) = template::parse_fragment_with_errors(source, allocator);
+    errors.extend(template_errors);
 
     ParseResult {
         ast: SvelteAst {
@@ -74,6 +78,8 @@ struct Region<'a> {
     lang: Option<&'a str>,
     strict_events: bool,
     span: Span,
+    attrs_span: Span,
+    content_span: Span,
 }
 
 #[derive(Debug, Default)]
@@ -81,107 +87,269 @@ struct Regions<'a> {
     instance: Option<Region<'a>>,
     module: Option<Region<'a>>,
     style: Option<Region<'a>>,
+    errors: Vec<OxcDiagnostic>,
 }
 
 fn extract_regions<'a>(source: &'a str) -> Regions<'a> {
     let mut regions = Regions::default();
 
-    let mut search_from = 0;
-    while let Some(open_start) = source[search_from..].find("<script") {
-        let open_start = search_from + open_start;
-        let after_tag = &source[open_start + 7..];
-        let Some(open_end_rel) = after_tag.find('>') else { break };
-        let tag_attrs = &after_tag[..open_end_rel];
-        let content_start = open_start + 7 + open_end_rel + 1;
-        let Some(close_rel) = find_close_tag(&source[content_start..], "script") else { break };
-        let content_end = content_start + close_rel;
-        let block_end = source[content_end..].find('>').map(|p| content_end + p + 1)
-            .unwrap_or(content_end + 9);
-        let content = &source[content_start..content_end];
-        let lang = extract_attr(tag_attrs, "lang");
-        let is_module = tag_attrs.contains("context=\"module\"")
-            || tag_attrs.contains("context='module'")
-            || tag_attrs.contains("context=module")
-            || tag_attrs.split_whitespace().any(|a| a == "module");
-        let strict_events = has_bool_attr(tag_attrs, "strictEvents");
+    let mut element_stack: Vec<&str> = Vec::new();
+    let mut block_depth = 0usize;
+    for token in SvelteScanner::new(source) {
+        match token.kind {
+            TokenKind::StartTag {
+                name,
+                attrs,
+                self_closing,
+            } => {
+                let _ = attrs;
+                if !self_closing && should_track_element(name) {
+                    element_stack.push(name);
+                }
+            }
+            TokenKind::EndTag { name } => {
+                if let Some(idx) = element_stack
+                    .iter()
+                    .rposition(|open| open.eq_ignore_ascii_case(name))
+                {
+                    element_stack.truncate(idx);
+                }
+            }
+            TokenKind::RawRegion {
+                name,
+                attrs,
+                attrs_span,
+                content,
+                content_span,
+                closed,
+            } => {
+                if block_depth > 0
+                    || !element_stack.is_empty()
+                    || element_stack
+                        .iter()
+                        .any(|open| open.eq_ignore_ascii_case("svelte:head"))
+                {
+                    continue;
+                }
 
-        let region = Region { content, lang, strict_events, span: Span::new(open_start as u32, block_end as u32) };
-        if is_module { regions.module = Some(region); } else { regions.instance = Some(region); }
-        search_from = block_end;
-    }
+                if name.eq_ignore_ascii_case("script") {
+                    if !closed {
+                        regions
+                            .errors
+                            .push(OxcDiagnostic::error("Unclosed top-level script block"));
+                    }
+                    let context_attr = find_attr(attrs, "context");
+                    if !matches!(context_attr, None | Some(Some("module"))) {
+                        regions.errors.push(OxcDiagnostic::error(
+                            "If the context attribute is supplied, its value must be \"module\"",
+                        ));
+                    }
+                    let module_attr = find_attr(attrs, "module");
+                    if matches!(module_attr, Some(Some(_))) {
+                        regions.errors.push(OxcDiagnostic::error(
+                            "If the `module` attribute is supplied, it must be a boolean attribute",
+                        ));
+                    }
+                    for reserved in ["server", "client", "worker", "test", "default"] {
+                        if find_attr(attrs, reserved).is_some() {
+                            regions.errors.push(OxcDiagnostic::error(format!(
+                                "The `{reserved}` attribute is reserved and cannot be used"
+                            )));
+                        }
+                    }
+                    let is_module = module_attr == Some(None)
+                        || context_attr
+                            .is_some_and(|value| value.is_some_and(|value| value == "module"));
+                    let region = Region {
+                        content,
+                        lang: extract_attr(attrs, "lang"),
+                        strict_events: has_bool_attr(attrs, "strictEvents"),
+                        span: token.span,
+                        attrs_span,
+                        content_span,
+                    };
 
-    if let Some(open_start) = source.find("<style") {
-        // Skip <style> inside <svelte:head>
-        let before = &source[..open_start];
-        let in_svelte_head = before.rfind("<svelte:head").map(|head_start| {
-            !source[head_start..open_start].contains("</svelte:head")
-        }).unwrap_or(false);
-        if in_svelte_head {
-            return regions;
-        }
-        let after_tag = &source[open_start + 6..];
-        if let Some(open_end_rel) = after_tag.find('>') {
-            let tag_attrs = &after_tag[..open_end_rel];
-            let content_start = open_start + 6 + open_end_rel + 1;
-            // Find </style> or </style followed by whitespace then >
-            if let Some(close_rel) = find_close_tag(&source[content_start..], "style") {
-                let content_end = content_start + close_rel;
-                // Find the > after </style
-                let close_tag_start = content_end;
-                let block_end = source[close_tag_start..].find('>').map(|p| close_tag_start + p + 1)
-                    .unwrap_or(content_end + 8);
-                regions.style = Some(Region {
-                    content: &source[content_start..content_end],
-                    lang: extract_attr(tag_attrs, "lang"),
-                    strict_events: false,
-                    span: Span::new(open_start as u32, block_end as u32),
-                });
+                    if is_module {
+                        if regions.module.is_some() {
+                            regions.errors.push(OxcDiagnostic::error(
+                                "Duplicate top-level module script block",
+                            ));
+                        } else {
+                            regions.module = Some(region);
+                        }
+                    } else if regions.instance.is_some() {
+                        regions.errors.push(OxcDiagnostic::error(
+                            "Duplicate top-level instance script block",
+                        ));
+                    } else {
+                        regions.instance = Some(region);
+                    }
+                } else if name.eq_ignore_ascii_case("style") {
+                    if !closed {
+                        regions
+                            .errors
+                            .push(OxcDiagnostic::error("Unclosed top-level style block"));
+                    }
+                    let region = Region {
+                        content,
+                        lang: extract_attr(attrs, "lang"),
+                        strict_events: false,
+                        span: token.span,
+                        attrs_span,
+                        content_span,
+                    };
+                    if regions.style.is_some() {
+                        regions
+                            .errors
+                            .push(OxcDiagnostic::error("Duplicate top-level style block"));
+                    } else {
+                        regions.style = Some(region);
+                    }
+                }
+            }
+            TokenKind::Text(text) | TokenKind::HtmlComment(text) => {
+                let _ = text;
+            }
+            TokenKind::Mustache { expression } => {
+                let _ = expression;
+            }
+            TokenKind::BlockStart {
+                keyword,
+                expression,
+            } => {
+                let _ = (keyword, expression);
+                if element_stack.is_empty() && is_structural_block_keyword(keyword) {
+                    block_depth += 1;
+                }
+            }
+            TokenKind::BlockContinuation {
+                keyword,
+                expression,
+            } => {
+                let _ = (keyword, expression);
+            }
+            TokenKind::BlockEnd { keyword } => {
+                if is_structural_block_keyword(keyword) {
+                    block_depth = block_depth.saturating_sub(1);
+                }
             }
         }
     }
-    regions
-}
 
-/// Find a closing tag like </tagname> or </tagname  \n  > (with whitespace).
-/// Returns the byte offset of `</tagname` relative to the input.
-fn find_close_tag(source: &str, tag_name: &str) -> Option<usize> {
-    let prefix = format!("</{}", tag_name);
-    let mut search_from = 0;
-    while let Some(pos) = source[search_from..].find(&prefix) {
-        let abs_pos = search_from + pos;
-        let after = &source[abs_pos + prefix.len()..];
-        // Check that next non-whitespace char is >
-        let trimmed = after.trim_start();
-        if trimmed.starts_with('>') {
-            return Some(abs_pos);
-        }
-        search_from = abs_pos + prefix.len();
-    }
-    None
+    regions
 }
 
 /// True iff `attrs` contains a whole-token attribute named `name`, either as a
 /// bare boolean (`<script strictEvents>`), with a value (`strictEvents="true"`,
 /// `strictEvents={x}`), or self-close-adjacent (`strictEvents/>`).
 fn has_bool_attr(attrs: &str, name: &str) -> bool {
-    attrs.split(|c: char| c.is_whitespace() || c == '/').any(|tok| {
-        tok == name
-            || tok.strip_prefix(name).is_some_and(|rest| {
-                rest.starts_with('=')
-            })
-    })
+    find_attr(attrs, name).is_some()
 }
 
 fn extract_attr<'a>(attrs: &'a str, name: &str) -> Option<&'a str> {
-    for quote in ['"', '\''] {
-        let pattern = format!("{}={}", name, quote);
-        if let Some(start) = attrs.find(&pattern) {
-            let value_start = start + pattern.len();
-            let value_end = attrs[value_start..].find(quote)?;
-            return Some(&attrs[value_start..value_start + value_end]);
+    find_attr(attrs, name).flatten()
+}
+
+fn find_attr<'a>(attrs: &'a str, name: &str) -> Option<Option<&'a str>> {
+    let bytes = attrs.as_bytes();
+    let mut pos = 0;
+    while pos < attrs.len() {
+        while pos < attrs.len() && (bytes[pos].is_ascii_whitespace() || bytes[pos] == b'/') {
+            pos += 1;
+        }
+        let name_start = pos;
+        while pos < attrs.len() {
+            let ch = bytes[pos];
+            if ch.is_ascii_whitespace() || ch == b'=' || ch == b'/' || ch == b'>' {
+                break;
+            }
+            pos += 1;
+        }
+        if name_start == pos {
+            pos += 1;
+            continue;
+        }
+        let attr_name = &attrs[name_start..pos];
+        while pos < attrs.len() && bytes[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+
+        let value = if pos < attrs.len() && bytes[pos] == b'=' {
+            pos += 1;
+            while pos < attrs.len() && bytes[pos].is_ascii_whitespace() {
+                pos += 1;
+            }
+            Some(read_attr_value(attrs, &mut pos))
+        } else {
+            None
+        };
+
+        if attr_name == name {
+            return Some(value);
         }
     }
     None
+}
+
+fn read_attr_value<'a>(attrs: &'a str, pos: &mut usize) -> &'a str {
+    if *pos >= attrs.len() {
+        return "";
+    }
+    let bytes = attrs.as_bytes();
+    match bytes[*pos] {
+        b'\'' | b'"' => {
+            let quote = bytes[*pos];
+            *pos += 1;
+            let start = *pos;
+            while *pos < attrs.len() {
+                match bytes[*pos] {
+                    b'{' => {
+                        let expr_end = scanner::find_expression_end(attrs, *pos + 1);
+                        *pos = (expr_end + 1).min(attrs.len());
+                    }
+                    ch if ch == quote => break,
+                    _ => *pos += 1,
+                }
+            }
+            let end = *pos;
+            if *pos < attrs.len() {
+                *pos += 1;
+            }
+            &attrs[start..end]
+        }
+        b'{' => {
+            *pos += 1;
+            let start = *pos;
+            *pos = scanner::find_expression_end(attrs, *pos);
+            let end = *pos;
+            if *pos < attrs.len() {
+                *pos += 1;
+            }
+            &attrs[start..end]
+        }
+        _ => {
+            let start = *pos;
+            while *pos < attrs.len() {
+                let ch = bytes[*pos];
+                if ch.is_ascii_whitespace()
+                    || ch == b'>'
+                    || (ch == b'/' && attrs[*pos..].starts_with("/>") && *pos > start)
+                {
+                    break;
+                }
+                *pos += 1;
+            }
+            &attrs[start..*pos]
+        }
+    }
+}
+
+fn should_track_element(name: &str) -> bool {
+    !name.starts_with('!') && !scanner::is_html_void_element(name)
+}
+
+fn is_structural_block_keyword(keyword: &str) -> bool {
+    matches!(keyword, "if" | "each" | "await" | "key" | "snippet")
 }
 
 #[cfg(test)]
@@ -215,9 +383,61 @@ mod tests {
     #[test]
     fn test_module_script_legacy() {
         let alloc = Allocator::default();
-        let r = parse(r#"<script context="module">export const foo = 1;</script>"#, &alloc);
+        let r = parse(
+            r#"<script context="module">export const foo = 1;</script>"#,
+            &alloc,
+        );
         assert!(r.ast.module.is_some());
         assert!(r.ast.instance.is_none());
+    }
+
+    #[test]
+    fn test_script_context_invalid_value_reports_diagnostic() {
+        let alloc = Allocator::default();
+        for source in [
+            r#"<script context>let x = 1;</script>"#,
+            r#"<script context="foo">let x = 1;</script>"#,
+            r#"<script context={"module"}>let x = 1;</script>"#,
+        ] {
+            let r = parse(source, &alloc);
+            assert!(
+                r.errors.iter().any(|error| error
+                    .to_string()
+                    .contains("If the context attribute is supplied")),
+                "{source}: {:?}",
+                r.errors
+            );
+        }
+    }
+
+    #[test]
+    fn test_script_reserved_and_module_attribute_diagnostics() {
+        let alloc = Allocator::default();
+
+        let r = parse(r#"<script module="x">let x = 1;</script>"#, &alloc);
+        assert!(
+            r.errors
+                .iter()
+                .any(|error| error.to_string().contains("must be a boolean attribute")),
+            "{:?}",
+            r.errors
+        );
+
+        let r = parse(r#"<script server>let x = 1;</script>"#, &alloc);
+        assert!(
+            r.errors.iter().any(|error| error
+                .to_string()
+                .contains("The `server` attribute is reserved")),
+            "{:?}",
+            r.errors
+        );
+
+        let r = parse(
+            r#"<script module context="module">let x = 1;</script>"#,
+            &alloc,
+        );
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        assert_eq!(r.ast.module.unwrap().content, "let x = 1;");
     }
 
     #[test]
@@ -235,6 +455,17 @@ mod tests {
     }
 
     #[test]
+    fn test_style_tag_attribute_expression_may_contain_gt() {
+        let alloc = Allocator::default();
+        let source = "<style lang={foo > bar}>main { color: red; }</style>";
+        let r = parse(source, &alloc);
+        let style = r.ast.css.expect("expected style");
+        assert_eq!(style.lang.as_deref(), Some("foo > bar"));
+        assert_eq!(style.content, "main { color: red; }");
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
     fn test_full_component() {
         let alloc = Allocator::default();
         let source = "<script>\n    let count = 0;\n</script>\n\n<button>{count}</button>\n\n<style>\n    button { color: blue; }\n</style>";
@@ -242,5 +473,252 @@ mod tests {
         assert!(r.errors.is_empty());
         assert!(r.ast.instance.is_some());
         assert!(r.ast.css.is_some());
+    }
+
+    #[test]
+    fn test_tag_name_prefix_is_not_script() {
+        let alloc = Allocator::default();
+        let r = parse("<scripture>text</scripture>", &alloc);
+        assert!(r.ast.instance.is_none());
+        match &r.ast.html.nodes[0] {
+            TemplateNode::Element(el) => assert_eq!(el.name, "scripture"),
+            other => panic!("expected scripture element, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_script_inside_head_is_not_instance() {
+        let alloc = Allocator::default();
+        let source = r#"<svelte:head><script src="/analytics.js"></script></svelte:head><script>let x = 1;</script>"#;
+        let r = parse(source, &alloc);
+        assert_eq!(r.ast.instance.unwrap().content, "let x = 1;");
+    }
+
+    #[test]
+    fn test_style_after_head_style_is_extracted() {
+        let alloc = Allocator::default();
+        let source =
+            "<svelte:head><style></style></svelte:head><style>main { color: red; }</style>";
+        let r = parse(source, &alloc);
+        assert_eq!(r.ast.css.unwrap().content, "main { color: red; }");
+    }
+
+    #[test]
+    fn test_script_in_html_comment_is_not_instance() {
+        let alloc = Allocator::default();
+        let r = parse("<!-- <script>bad</script> --><p>ok</p>", &alloc);
+        assert!(r.ast.instance.is_none());
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_script_in_attribute_is_not_instance() {
+        let alloc = Allocator::default();
+        let source = r#"<div data-example="<script>bad</script>"></div>"#;
+        let r = parse(source, &alloc);
+        assert!(r.ast.instance.is_none());
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_script_in_child_content_is_not_instance() {
+        let alloc = Allocator::default();
+        let source = "<div><script>bad</script></div>";
+        let r = parse(source, &alloc);
+        assert!(r.ast.instance.is_none());
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_script_inside_block_is_not_instance() {
+        let alloc = Allocator::default();
+        let source = "{#if ok}<script>if (ok) { run(); }</script>{/if}";
+        let r = parse(source, &alloc);
+        assert!(r.ast.instance.is_none());
+        match &r.ast.html.nodes[0] {
+            TemplateNode::IfBlock(block) => match &block.consequent.nodes[0] {
+                TemplateNode::Element(element) => {
+                    assert_eq!(element.name, "script");
+                    match &element.children[0] {
+                        TemplateNode::Text(text) => assert_eq!(text.data, "if (ok) { run(); }"),
+                        other => panic!("expected script text, got {other:?}"),
+                    }
+                }
+                other => panic!("expected script element, got {other:?}"),
+            },
+            other => panic!("expected if block, got {other:?}"),
+        }
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_special_tag_before_script_does_not_hide_top_level_script() {
+        let alloc = Allocator::default();
+        let source = "{@html content}\n<script>let ok = true;</script>";
+        let r = parse(source, &alloc);
+        assert_eq!(r.ast.instance.unwrap().content, "let ok = true;");
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_style_in_html_comment_is_not_css() {
+        let alloc = Allocator::default();
+        let r = parse("<!-- <style>.bad {}</style> --><p>ok</p>", &alloc);
+        assert!(r.ast.css.is_none());
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_style_in_attribute_is_not_css() {
+        let alloc = Allocator::default();
+        let source = r#"<div data-example="<style>.bad {}</style>"></div>"#;
+        let r = parse(source, &alloc);
+        assert!(r.ast.css.is_none());
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_script_inside_raw_text_element_is_not_instance() {
+        let alloc = Allocator::default();
+        let source = "<textarea><script>bad</script></textarea><script>let ok = true;</script>";
+        let r = parse(source, &alloc);
+        assert_eq!(r.ast.instance.unwrap().content, "let ok = true;");
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_block_inside_textarea_reports_diagnostic_without_hiding_script() {
+        let alloc = Allocator::default();
+        let source = "<textarea>{#if x}</textarea><script>let ok = true;</script>";
+        let r = parse(source, &alloc);
+        assert_eq!(r.ast.instance.unwrap().content, "let ok = true;");
+        assert!(r.errors.iter().any(|error| error
+            .to_string()
+            .contains("block cannot be inside <textarea>")));
+    }
+
+    #[test]
+    fn test_style_inside_raw_text_element_is_not_css() {
+        let alloc = Allocator::default();
+        let source = "<textarea><style>.bad {}</style></textarea><style>.ok {}</style>";
+        let r = parse(source, &alloc);
+        assert_eq!(r.ast.css.unwrap().content, ".ok {}");
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_style_inside_block_is_not_css() {
+        let alloc = Allocator::default();
+        let source = "{#if ok}<style>.scoped { color: red; }</style>{/if}";
+        let r = parse(source, &alloc);
+        assert!(r.ast.css.is_none());
+        match &r.ast.html.nodes[0] {
+            TemplateNode::IfBlock(block) => match &block.consequent.nodes[0] {
+                TemplateNode::Element(element) => {
+                    assert_eq!(element.name, "style");
+                    match &element.children[0] {
+                        TemplateNode::Text(text) => {
+                            assert_eq!(text.data, ".scoped { color: red; }")
+                        }
+                        other => panic!("expected style text, got {other:?}"),
+                    }
+                }
+                other => panic!("expected style element, got {other:?}"),
+            },
+            other => panic!("expected if block, got {other:?}"),
+        }
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_special_tag_before_style_does_not_hide_top_level_style() {
+        let alloc = Allocator::default();
+        let source = "{@debug value}\n<style>.ok { color: red; }</style>";
+        let r = parse(source, &alloc);
+        assert_eq!(r.ast.css.unwrap().content, ".ok { color: red; }");
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_script_tag_attribute_expression_may_contain_gt() {
+        let alloc = Allocator::default();
+        let source = "<script lang={foo > bar}>let ok = true;</script>";
+        let r = parse(source, &alloc);
+        let script = r.ast.instance.expect("expected instance script");
+        assert_eq!(script.lang.as_deref(), Some("foo > bar"));
+        assert_eq!(script.content, "let ok = true;");
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_quoted_script_attr_expression_may_contain_matching_quote() {
+        let alloc = Allocator::default();
+        let source = r#"<script lang="{foo(">")}">let ok = true;</script>"#;
+        let r = parse(source, &alloc);
+        let script = r.ast.instance.expect("expected instance script");
+        assert_eq!(script.lang.as_deref(), Some(r#"{foo(">")}"#));
+        assert_eq!(script.content, "let ok = true;");
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_script_skip_ignores_close_text_in_opening_attribute() {
+        let alloc = Allocator::default();
+        let source = r#"<script data-close="</script>">let ok = true;</script><p>after</p>"#;
+        let r = parse(source, &alloc);
+        let script = r.ast.instance.expect("expected instance script");
+        assert_eq!(script.content, "let ok = true;");
+        assert_eq!(r.ast.html.nodes.len(), 1);
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_duplicate_top_level_scripts_report_diagnostic() {
+        let alloc = Allocator::default();
+        let source = "<script>let first = true;</script><script>let second = true;</script>";
+        let r = parse(source, &alloc);
+        assert_eq!(r.ast.instance.unwrap().content, "let first = true;");
+        assert_eq!(r.errors.len(), 1);
+    }
+
+    #[test]
+    fn test_duplicate_top_level_styles_report_diagnostic() {
+        let alloc = Allocator::default();
+        let source = "<style>.first {}</style><style>.second {}</style>";
+        let r = parse(source, &alloc);
+        assert_eq!(r.ast.css.unwrap().content, ".first {}");
+        assert_eq!(r.errors.len(), 1);
+    }
+
+    #[test]
+    fn test_unclosed_top_level_script_reports_diagnostic() {
+        let alloc = Allocator::default();
+        let r = parse("<script>let x = 1;", &alloc);
+        assert_eq!(r.ast.instance.unwrap().content, "let x = 1;");
+        assert!(!r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_script_close_tag_is_case_insensitive() {
+        let alloc = Allocator::default();
+        let r = parse("<SCRIPT>let x = 1;</script>", &alloc);
+        assert_eq!(r.ast.instance.unwrap().content, "let x = 1;");
+        assert!(r.ast.html.nodes.is_empty());
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_uppercase_void_element_does_not_hide_top_level_script() {
+        let alloc = Allocator::default();
+        let r = parse("<BR><script>let x = 1;</script>", &alloc);
+        assert_eq!(r.ast.instance.unwrap().content, "let x = 1;");
+        assert!(r.errors.is_empty());
+    }
+
+    #[test]
+    fn test_unclosed_template_block_reports_diagnostic() {
+        let alloc = Allocator::default();
+        let r = parse("{#if visible}<p>hello", &alloc);
+        assert!(!r.errors.is_empty());
     }
 }

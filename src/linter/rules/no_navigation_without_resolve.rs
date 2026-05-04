@@ -11,7 +11,7 @@ use oxc::ast::ast::{
 use oxc::ast::AstKind;
 use oxc::parser::Parser;
 use oxc::semantic::Semantic;
-use oxc::span::{GetSpan, Ident, SourceType, Span};
+use oxc::span::{GetSpan, SourceType, Span};
 use rustc_hash::FxHashSet;
 
 const NAV_FUNCTIONS: &[&str] = &["goto", "pushState", "replaceState"];
@@ -247,7 +247,7 @@ fn expr_contains_literal<'a>(
                 let name = id.name.as_str();
                 if !seen.insert(name.to_string()) { return false; }
                 let scoping = sem.scoping();
-                let Some(sid) = scoping.find_binding(scoping.root_scope_id(), Ident::new_const(name)) else {
+                let Some(sid) = scoping.find_binding(scoping.root_scope_id(), name.into()) else {
                     return false;
                 };
                 let decl_node_id = scoping.symbol_declaration(sid);
@@ -364,7 +364,7 @@ fn is_safe_template_root<'a>(
             }
             let Some(sem) = instance_sem else { return false };
             let scoping = sem.scoping();
-            let Some(sid) = scoping.find_binding(scoping.root_scope_id(), Ident::new_const(name)) else {
+            let Some(sid) = scoping.find_binding(scoping.root_scope_id(), name.into()) else {
                 return false;
             };
             let decl_node_id = scoping.symbol_declaration(sid);

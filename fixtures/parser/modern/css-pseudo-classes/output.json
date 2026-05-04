@@ -399,11 +399,12 @@
 	},
 	"js": [],
 	"start": 0,
-	"end": 386,
+	"end": 387,
 	"type": "Root",
 	"fragment": {
 		"type": "Fragment",
 		"nodes": []
 	},
-	"options": null
+	"options": null,
+	"comments": []
 }

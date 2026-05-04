@@ -1,8 +1,8 @@
 //! `svelte/no-unused-class-name` — disallow class names in the template that are not
 //! defined in the `<style>` block.
 
+use crate::ast::{Attribute, AttributeValue, DirectiveKind, TemplateNode};
 use crate::linter::{walk_template_nodes, LintContext, Rule};
-use crate::ast::{TemplateNode, Attribute, AttributeValue, DirectiveKind};
 use std::collections::HashSet;
 pub struct NoUnusedClassName;
 
@@ -12,19 +12,28 @@ impl Rule for NoUnusedClassName {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let allowed_class_names: Vec<String> = ctx.config.options.as_ref()
+        let allowed_class_names: Vec<String> = ctx
+            .config
+            .options
+            .as_ref()
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first())
             .and_then(|v| v.get("allowedClassNames"))
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
 
         let (mut allowed_plain, mut allowed_patterns) = (HashSet::new(), Vec::new());
         for name in &allowed_class_names {
             if name.starts_with('/') && name.ends_with('/') && name.len() > 2 {
-                allowed_patterns.push(name[1..name.len()-1].to_string());
-            } else { allowed_plain.insert(name.clone()); }
+                allowed_patterns.push(name[1..name.len() - 1].to_string());
+            } else {
+                allowed_plain.insert(name.clone());
+            }
         }
 
         // Collect every `.classname` referenced anywhere in the stylesheet.
@@ -51,7 +60,11 @@ impl Rule for NoUnusedClassName {
                                 element_classes.extend(val.split_whitespace().map(String::from));
                             }
                         }
-                        Attribute::Directive { kind: DirectiveKind::Class, name: cls_name, .. } => {
+                        Attribute::Directive {
+                            kind: DirectiveKind::Class,
+                            name: cls_name,
+                            ..
+                        } => {
                             element_classes.push(cls_name.clone());
                         }
                         _ => {}
@@ -59,8 +72,12 @@ impl Rule for NoUnusedClassName {
                 }
 
                 for cls in &element_classes {
-                    if css_classes.contains(cls.as_str()) || allowed_plain.contains(cls.as_str())
-                        || allowed_patterns.iter().any(|p| simple_regex_match(p, cls)) { continue; }
+                    if css_classes.contains(cls.as_str())
+                        || allowed_plain.contains(cls.as_str())
+                        || allowed_patterns.iter().any(|p| simple_regex_match(p, cls))
+                    {
+                        continue;
+                    }
                     ctx.diagnostic(format!("Unused class \"{}\".", cls), el.span);
                 }
             }
@@ -136,9 +153,19 @@ fn simple_regex_match(pattern: &str, text: &str) -> bool {
     false
 }
 
-fn regex_match_inner_impl(pattern: &str, text: &str, pi: usize, ti: usize, must_consume_all: bool) -> bool {
+fn regex_match_inner_impl(
+    pattern: &str,
+    text: &str,
+    pi: usize,
+    ti: usize,
+    must_consume_all: bool,
+) -> bool {
     if pi >= pattern.len() {
-        return if must_consume_all { ti >= text.len() } else { true };
+        return if must_consume_all {
+            ti >= text.len()
+        } else {
+            true
+        };
     }
     let pb = pattern.as_bytes();
     let tb = text.as_bytes();
@@ -153,11 +180,11 @@ fn regex_match_inner_impl(pattern: &str, text: &str, pi: usize, ti: usize, must_
             }
         };
         if pi + 2 < pattern.len() && pb[pi + 2] == b'{' {
-            if let Some(close) = pattern[pi+2..].find('}') {
-                let quant = &pattern[pi+3..pi+2+close];
+            if let Some(close) = pattern[pi + 2..].find('}') {
+                let quant = &pattern[pi + 3..pi + 2 + close];
                 let (min, max) = if let Some(comma) = quant.find(',') {
                     let mn: usize = quant[..comma].parse().unwrap_or(0);
-                    let mx: usize = quant[comma+1..].parse().unwrap_or(mn);
+                    let mx: usize = quant[comma + 1..].parse().unwrap_or(mn);
                     (mn, mx)
                 } else {
                     let n: usize = quant.parse().unwrap_or(1);
@@ -169,11 +196,20 @@ fn regex_match_inner_impl(pattern: &str, text: &str, pi: usize, ti: usize, must_
                 while count < max && t < tb.len() && matches_char(tb[t]) {
                     count += 1;
                     t += 1;
-                    if count >= min && regex_match_inner_impl(pattern, text, next_pi, t, must_consume_all) {
+                    if count >= min
+                        && regex_match_inner_impl(pattern, text, next_pi, t, must_consume_all)
+                    {
                         return true;
                     }
                 }
-                return count >= min && regex_match_inner_impl(pattern, text, next_pi, ti + count, must_consume_all);
+                return count >= min
+                    && regex_match_inner_impl(
+                        pattern,
+                        text,
+                        next_pi,
+                        ti + count,
+                        must_consume_all,
+                    );
             }
         }
         if ti < tb.len() && matches_char(tb[ti]) {
@@ -186,4 +222,33 @@ fn regex_match_inner_impl(pattern: &str, text: &str, pi: usize, ti: usize, must_
         return regex_match_inner_impl(pattern, text, pi + 1, ti + 1, must_consume_all);
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn classes(css: &str) -> Vec<String> {
+        let mut out = HashSet::new();
+        collect_css_classes(css, &mut out);
+        let mut classes: Vec<_> = out.into_iter().collect();
+        classes.sort();
+        classes
+    }
+
+    #[test]
+    fn class_collection_ignores_declaration_strings_and_urls() {
+        assert_eq!(
+            classes(r#".used { content: ".not-a-selector"; background: url(".also-not"); }"#),
+            vec!["used"]
+        );
+    }
+
+    #[test]
+    fn class_collection_descends_into_selector_pseudos() {
+        assert_eq!(
+            classes(":global(.global) :is(.a, .b) :not(.c) {}"),
+            vec!["a", "b", "c", "global"]
+        );
+    }
 }

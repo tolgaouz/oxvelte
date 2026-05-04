@@ -63,7 +63,12 @@ pub struct Text {
 #[derive(Debug, Clone, Serialize)]
 pub struct Element<'a> {
     pub name: String,
+    /// Span of the element name in the opening tag, excluding the leading `<`.
+    #[serde(skip)]
+    pub name_span: Span,
     pub attributes: Vec<Attribute>,
+    #[serde(skip)]
+    pub attribute_meta: Vec<AttributeMeta>,
     pub children: Vec<TemplateNode<'a>>,
     pub self_closing: bool,
     /// Full element span: from `<` of the opening tag through `>` of the
@@ -85,15 +90,35 @@ pub struct Element<'a> {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub enum Attribute {
-    NormalAttribute { name: String, value: AttributeValue, span: Span },
-    Spread { span: Span },
-    Directive { kind: DirectiveKind, name: String, modifiers: Vec<String>, value: AttributeValue, span: Span },
+    NormalAttribute {
+        name: String,
+        value: AttributeValue,
+        span: Span,
+    },
+    Spread {
+        span: Span,
+    },
+    Directive {
+        kind: DirectiveKind,
+        name: String,
+        modifiers: Vec<String>,
+        value: AttributeValue,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub enum DirectiveKind {
-    EventHandler, Binding, Class, StyleDirective, Use,
-    Transition, In, Out, Animate, Let,
+    EventHandler,
+    Binding,
+    Class,
+    StyleDirective,
+    Use,
+    Transition,
+    In,
+    Out,
+    Animate,
+    Let,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -110,10 +135,29 @@ pub enum AttributeValuePart {
     Expression(String),
 }
 
+#[derive(Debug, Clone)]
+pub struct AttributeMeta {
+    pub name_span: Span,
+    pub directive_subject_span: Option<Span>,
+    pub value_span: Option<Span>,
+    pub expression_span: Option<Span>,
+    pub mustache_span: Option<Span>,
+    pub parts: Vec<AttributePartMeta>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AttributePartMeta {
+    pub span: Span,
+    pub expression_span: Option<Span>,
+    pub mustache_span: Option<Span>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct MustacheTag<'a> {
     pub expression: String,
     pub span: Span,
+    #[serde(skip)]
+    pub expression_span: Span,
     /// Typed AST of the mustache's inner expression, parsed into a shared
     /// `oxc::allocator::Allocator` during template parsing. `None` when the
     /// expression text failed to parse as JS (the rule layer then falls
@@ -129,12 +173,16 @@ pub struct RawMustacheTag<'a> {
     pub expression: String,
     pub span: Span,
     #[serde(skip)]
+    pub expression_span: Span,
+    #[serde(skip)]
     pub _phantom: PhantomData<&'a ()>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DebugTag<'a> {
     pub identifiers: Vec<String>,
+    #[serde(skip)]
+    pub identifier_spans: Vec<Span>,
     pub span: Span,
     #[serde(skip)]
     pub _phantom: PhantomData<&'a ()>,
@@ -145,6 +193,8 @@ pub struct ConstTag<'a> {
     pub declaration: String,
     pub span: Span,
     #[serde(skip)]
+    pub declaration_span: Span,
+    #[serde(skip)]
     pub _phantom: PhantomData<&'a ()>,
 }
 
@@ -153,15 +203,26 @@ pub struct RenderTag<'a> {
     pub expression: String,
     pub span: Span,
     #[serde(skip)]
+    pub expression_span: Span,
+    #[serde(skip)]
     pub _phantom: PhantomData<&'a ()>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct Comment { pub data: String, pub span: Span }
+pub struct Comment {
+    pub data: String,
+    pub span: Span,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct IfBlock<'a> {
     pub test: String,
+    #[serde(skip)]
+    pub test_span: Span,
+    #[serde(skip)]
+    pub header_span: Span,
+    #[serde(skip)]
+    pub elseif: bool,
     pub consequent: Fragment<'a>,
     pub alternate: Option<Box<TemplateNode<'a>>>,
     pub span: Span,
@@ -170,9 +231,19 @@ pub struct IfBlock<'a> {
 #[derive(Debug, Clone, Serialize)]
 pub struct EachBlock<'a> {
     pub expression: String,
+    #[serde(skip)]
+    pub expression_span: Span,
     pub context: String,
+    #[serde(skip)]
+    pub context_span: Span,
     pub index: Option<String>,
+    #[serde(skip)]
+    pub index_span: Option<Span>,
     pub key: Option<String>,
+    #[serde(skip)]
+    pub key_span: Option<Span>,
+    #[serde(skip)]
+    pub header_span: Span,
     pub body: Fragment<'a>,
     pub fallback: Option<Fragment<'a>>,
     pub span: Span,
@@ -181,17 +252,25 @@ pub struct EachBlock<'a> {
 #[derive(Debug, Clone, Serialize)]
 pub struct AwaitBlock<'a> {
     pub expression: String,
+    #[serde(skip)]
+    pub expression_span: Span,
     pub pending: Option<Fragment<'a>>,
     pub then: Option<Fragment<'a>>,
     pub then_binding: Option<String>,
+    #[serde(skip)]
+    pub then_binding_span: Option<Span>,
     pub catch: Option<Fragment<'a>>,
     pub catch_binding: Option<String>,
+    #[serde(skip)]
+    pub catch_binding_span: Option<Span>,
     pub span: Span,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct KeyBlock<'a> {
     pub expression: String,
+    #[serde(skip)]
+    pub expression_span: Span,
     pub body: Fragment<'a>,
     pub span: Span,
 }
@@ -199,7 +278,14 @@ pub struct KeyBlock<'a> {
 #[derive(Debug, Clone, Serialize)]
 pub struct SnippetBlock<'a> {
     pub name: String,
+    #[serde(skip)]
+    pub name_span: Span,
+    pub type_params: Option<String>,
+    #[serde(skip)]
+    pub type_params_span: Option<Span>,
     pub params: String,
+    #[serde(skip)]
+    pub params_span: Option<Span>,
     pub body: Fragment<'a>,
     pub span: Span,
 }
@@ -213,6 +299,10 @@ pub struct Script {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub strict_events: bool,
     pub span: Span,
+    #[serde(skip)]
+    pub attrs_span: Span,
+    #[serde(skip)]
+    pub content_span: Span,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -220,4 +310,8 @@ pub struct Style {
     pub content: String,
     pub lang: Option<String>,
     pub span: Span,
+    #[serde(skip)]
+    pub attrs_span: Span,
+    #[serde(skip)]
+    pub content_span: Span,
 }

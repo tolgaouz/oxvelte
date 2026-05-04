@@ -6,7 +6,7 @@ use crate::ast::{Attribute, AttributeValue, AttributeValuePart, DirectiveKind, T
 use oxc::ast::ast::{AssignmentTarget, Expression, MemberExpression, SimpleAssignmentTarget};
 use oxc::ast::AstKind;
 use oxc::semantic::SymbolId;
-use oxc::span::{Ident, Span};
+use oxc::span::Span;
 use rustc_hash::FxHashSet;
 
 const DOM_METHODS: &[&str] = &[
@@ -86,9 +86,7 @@ impl Rule for NoDomManipulating {
         //    components (which are not bound to DOM even if named the same).
         let mut bound_symbols = FxHashSet::<SymbolId>::default();
         for name in &bound_names {
-            if let Some(sid) =
-                scoping.find_binding(scoping.root_scope_id(), Ident::new_const(name.as_str()))
-            {
+            if let Some(sid) = scoping.find_binding(scoping.root_scope_id(), name.as_str().into()) {
                 let flags = scoping.symbol_flags(sid);
                 // Accept `let`/`var`/parameter-like bindings; skip `const`
                 // (which is fine since bind:this requires assignable binding).

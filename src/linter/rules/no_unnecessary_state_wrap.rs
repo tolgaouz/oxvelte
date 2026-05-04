@@ -114,7 +114,7 @@ impl Rule for NoUnnecessaryStateWrap {
                             _ => break,
                         };
                         if let oxc::ast::ast::BindingPattern::BindingIdentifier(id) = &vd.id {
-                            decl_symbol = scoping.get_binding(scoping.root_scope_id(), oxc::span::Ident::new_const(id.name.as_str()));
+                            decl_symbol = scoping.get_binding(scoping.root_scope_id(), id.name.as_str().into());
                         }
                     }
                     break;

@@ -36,8 +36,12 @@ pub fn unwrap_template_expression<'a, 'r>(
     result: &'r ParserReturn<'a>,
 ) -> Option<&'r Expression<'a>> {
     let stmt = result.program.body.first()?;
-    let Statement::ExpressionStatement(es) = stmt else { return None };
-    let Expression::UnaryExpression(u) = &es.expression else { return None };
+    let Statement::ExpressionStatement(es) = stmt else {
+        return None;
+    };
+    let Expression::UnaryExpression(u) = &es.expression else {
+        return None;
+    };
     Some(match &u.argument {
         Expression::ParenthesizedExpression(p) => &p.expression,
         other => other,
