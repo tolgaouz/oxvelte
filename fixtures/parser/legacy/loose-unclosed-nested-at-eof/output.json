@@ -1,0 +1,35 @@
+{
+  "html": {
+    "children": [
+      {
+        "attributes": [],
+        "children": [
+          {
+            "attributes": [],
+            "children": [
+              {
+                "attributes": [],
+                "children": [],
+                "end": 9,
+                "name": "c",
+                "start": 6,
+                "type": "Element"
+              }
+            ],
+            "end": -1,
+            "name": "b",
+            "start": 3,
+            "type": "Element"
+          }
+        ],
+        "end": -1,
+        "name": "a",
+        "start": 0,
+        "type": "Element"
+      }
+    ],
+    "end": -1,
+    "start": 0,
+    "type": "Fragment"
+  }
+}

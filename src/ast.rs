@@ -85,6 +85,13 @@ pub struct Element<'a> {
     /// self-closing and void elements.
     #[serde(skip)]
     pub end_tag_span: Option<Span>,
+    /// True when this element was left on the parser's open-node stack at
+    /// EOF and is *not* the innermost unclosed entry. the `end` of such nodes
+    /// are left at `-1` (its initial sentinel value); only the topmost gets
+    /// adjusted to `template.length`. Modern + legacy serializers consult this
+    /// and emit `end: -1` to match.
+    #[serde(skip)]
+    pub unclosed_at_eof_outer: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -226,6 +233,9 @@ pub struct IfBlock<'a> {
     pub consequent: Fragment<'a>,
     pub alternate: Option<Box<TemplateNode<'a>>>,
     pub span: Span,
+    /// See [`Element::unclosed_at_eof_outer`].
+    #[serde(skip)]
+    pub unclosed_at_eof_outer: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -247,6 +257,9 @@ pub struct EachBlock<'a> {
     pub body: Fragment<'a>,
     pub fallback: Option<Fragment<'a>>,
     pub span: Span,
+    /// See [`Element::unclosed_at_eof_outer`].
+    #[serde(skip)]
+    pub unclosed_at_eof_outer: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -264,6 +277,9 @@ pub struct AwaitBlock<'a> {
     #[serde(skip)]
     pub catch_binding_span: Option<Span>,
     pub span: Span,
+    /// See [`Element::unclosed_at_eof_outer`].
+    #[serde(skip)]
+    pub unclosed_at_eof_outer: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -273,6 +289,9 @@ pub struct KeyBlock<'a> {
     pub expression_span: Span,
     pub body: Fragment<'a>,
     pub span: Span,
+    /// See [`Element::unclosed_at_eof_outer`].
+    #[serde(skip)]
+    pub unclosed_at_eof_outer: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -288,6 +307,9 @@ pub struct SnippetBlock<'a> {
     pub params_span: Option<Span>,
     pub body: Fragment<'a>,
     pub span: Span,
+    /// See [`Element::unclosed_at_eof_outer`].
+    #[serde(skip)]
+    pub unclosed_at_eof_outer: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

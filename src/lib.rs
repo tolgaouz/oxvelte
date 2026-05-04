@@ -465,6 +465,9 @@ mod parser_fixture_tests {
     legacy_fixture_test!(legacy_loose_unclosed_block, "loose-unclosed-block");
     legacy_fixture_test!(legacy_loose_unclosed_open_tag, "loose-unclosed-open-tag");
     legacy_fixture_test!(legacy_loose_unclosed_tag, "loose-unclosed-tag");
+    // Multi-level unclosed-at-EOF: pins vendor's `-1` sentinel for outer
+    // (non-topmost) entries on the parser stack.
+    legacy_fixture_test!(legacy_loose_unclosed_nested_at_eof, "loose-unclosed-nested-at-eof");
 }
 
 #[cfg(test)]
@@ -560,4 +563,7 @@ mod modern_fixture_tests {
     modern_fixture_test!(modern_loose_invalid_expression, "loose-invalid-expression");
     modern_fixture_test!(modern_loose_unclosed_open_tag, "loose-unclosed-open-tag");
     modern_fixture_test!(modern_loose_unclosed_tag, "loose-unclosed-tag");
+    // Multi-level unclosed-at-EOF: pins vendor's `-1` sentinel for outer
+    // (non-topmost) entries on the parser stack.
+    modern_fixture_test!(modern_loose_unclosed_nested_at_eof, "loose-unclosed-nested-at-eof");
 }

@@ -1,0 +1,85 @@
+{
+  "comments": [],
+  "css": null,
+  "end": 9,
+  "fragment": {
+    "nodes": [
+      {
+        "attributes": [],
+        "end": -1,
+        "fragment": {
+          "nodes": [
+            {
+              "attributes": [],
+              "end": -1,
+              "fragment": {
+                "nodes": [
+                  {
+                    "attributes": [],
+                    "end": 9,
+                    "fragment": {
+                      "nodes": [],
+                      "type": "Fragment"
+                    },
+                    "name": "c",
+                    "name_loc": {
+                      "end": {
+                        "character": 8,
+                        "column": 8,
+                        "line": 1
+                      },
+                      "start": {
+                        "character": 7,
+                        "column": 7,
+                        "line": 1
+                      }
+                    },
+                    "start": 6,
+                    "type": "RegularElement"
+                  }
+                ],
+                "type": "Fragment"
+              },
+              "name": "b",
+              "name_loc": {
+                "end": {
+                  "character": 5,
+                  "column": 5,
+                  "line": 1
+                },
+                "start": {
+                  "character": 4,
+                  "column": 4,
+                  "line": 1
+                }
+              },
+              "start": 3,
+              "type": "RegularElement"
+            }
+          ],
+          "type": "Fragment"
+        },
+        "name": "a",
+        "name_loc": {
+          "end": {
+            "character": 2,
+            "column": 2,
+            "line": 1
+          },
+          "start": {
+            "character": 1,
+            "column": 1,
+            "line": 1
+          }
+        },
+        "start": 0,
+        "type": "RegularElement"
+      }
+    ],
+    "type": "Fragment"
+  },
+  "js": [],
+  "options": null,
+  "start": 0,
+  "type": "Root"
+}

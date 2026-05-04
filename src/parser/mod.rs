@@ -26,7 +26,13 @@ pub struct ParseResult<'a> {
 /// pre-parsed template-expression AST nodes attached to the returned
 /// `SvelteAst` — it must outlive the result.
 pub fn parse<'a>(source: &'a str, allocator: &'a Allocator) -> ParseResult<'a> {
-    let mut regions = extract_regions(source);
+    // Match Svelte's `Parser` constructor: trailing whitespace on the
+    // template is dropped before parsing. Spans are byte offsets into the
+    // trimmed view (same byte positions as the original up to the trim
+    // point); the serializer reports `Root.end` from the original
+    // `source.len()` to match vendor's `this.root.end = template.length`.
+    let trimmed = source.trim_end();
+    let mut regions = extract_regions(trimmed);
     let mut errors = std::mem::take(&mut regions.errors);
 
     let instance = regions.instance.map(|r| Script {
@@ -55,7 +61,7 @@ pub fn parse<'a>(source: &'a str, allocator: &'a Allocator) -> ParseResult<'a> {
         content_span: r.content_span,
     });
 
-    let (html, template_errors) = template::parse_fragment_with_errors(source, allocator);
+    let (html, template_errors) = template::parse_fragment_with_errors(trimmed, allocator);
     errors.extend(template_errors);
 
     ParseResult {

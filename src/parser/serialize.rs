@@ -2562,6 +2562,90 @@ fn serialize_node_modern(node: &TemplateNode, source: &str) -> Value {
     serialize_node_modern_ctx(node, source, false, false)
 }
 
+/// Translate a span end to the JSON value the modern + legacy serializers
+/// emit. Mirrors vendor Svelte's `-1` sentinel for AST nodes left on the
+/// parser's stack at EOF when they aren't the topmost open node — vendor
+/// only adjusts the topmost to `template.length`, leaving every other
+/// in-stack node's `end` at the initial `-1`.
+fn span_end_or_unclosed(end: u32, unclosed_at_eof_outer: bool) -> Value {
+    if unclosed_at_eof_outer {
+        json!(-1)
+    } else {
+        json!(end)
+    }
+}
+
+/// Serialize one slot of an `{#if} / {:else if} / {:else}` chain in modern
+/// AST shape. `chain_root_end` is the byte offset right after the chain's
+/// outermost `{/if}`; every nested `{:else if}` IfBlock node uses this as
+/// its `end` so the modern AST collapses the chain visually (vendor
+/// behavior). The `is_chain_link` flag selects `elseif: true/false` for
+/// nested `{:else if}` slots without depending on the AST's `elseif` field
+/// (which `parse_if_block` sets only on chain links).
+fn serialize_ifblock_modern_with_chain_end(
+    block: &IfBlock,
+    source: &str,
+    in_shadow_root: bool,
+    in_svelte_head: bool,
+    chain_root_end: u32,
+    is_chain_link: bool,
+) -> Value {
+    let expr_start = trimmed_span_start(block.test_span, &block.test);
+    let consequent =
+        serialize_fragment_modern_ctx(&block.consequent, source, in_shadow_root, in_svelte_head);
+    let alternate = block.alternate.as_ref().map(|alt| {
+        if let TemplateNode::IfBlock(alt_block) = alt.as_ref() {
+            if alt_block.test.is_empty() && !alt_block.elseif {
+                // Synthetic `{:else}` slot — serialized as a plain Fragment
+                // wrapping its consequent nodes (vendor's modern AST shape).
+                serialize_fragment_modern_ctx(
+                    &alt_block.consequent,
+                    source,
+                    in_shadow_root,
+                    in_svelte_head,
+                )
+            } else {
+                // Nested `{:else if}` — recurse with the same chain root end
+                // so the entire chain shares one outer `{/if}` boundary.
+                let inner = serialize_ifblock_modern_with_chain_end(
+                    alt_block,
+                    source,
+                    in_shadow_root,
+                    in_svelte_head,
+                    chain_root_end,
+                    true,
+                );
+                json!({
+                    "type": "Fragment",
+                    "nodes": [inner]
+                })
+            }
+        } else {
+            json!(null)
+        }
+    });
+    // Each chain link's `unclosed_at_eof_outer` flag (set by the parser
+    // for non-topmost stack entries at EOF) overrides the chain-root-end
+    // propagation: such links emit `-1` to match vendor's sentinel. The
+    // raw `chain_root_end` value passed down stays numeric so the
+    // *deepest* (topmost-in-vendor's-stack) link can still propagate
+    // through to `template.length`.
+    let raw_end = if is_chain_link {
+        chain_root_end
+    } else {
+        block.span.end
+    };
+    json!({
+        "type": "IfBlock",
+        "elseif": is_chain_link,
+        "start": block.span.start,
+        "end": span_end_or_unclosed(raw_end, block.unclosed_at_eof_outer),
+        "test": expression_to_estree(source, block.test.trim(), expr_start),
+        "consequent": consequent,
+        "alternate": alternate
+    })
+}
+
 fn serialize_node_modern_ctx(
     node: &TemplateNode,
     source: &str,
@@ -2609,7 +2693,7 @@ fn serialize_node_modern_ctx(
                     "Component"
                 } else if el.name.starts_with("svelte:") {
                     match el.name.as_str() {
-                        "svelte:self" => "SvelteComponent",
+                        "svelte:self" => "SvelteSelf",
                         "svelte:component" => "SvelteComponent",
                         "svelte:element" => "SvelteElement",
                         "svelte:window" => "SvelteWindow",
@@ -2631,7 +2715,7 @@ fn serialize_node_modern_ctx(
             json!({
                 "type": el_type,
                 "start": el.span.start,
-                "end": el.span.end,
+                "end": span_end_or_unclosed(el.span.end, el.unclosed_at_eof_outer),
                 "name": el.name,
                 "name_loc": loc_json_with_char(source, el.name_span.start, el.name_span.end),
                 "attributes": attributes,
@@ -2660,52 +2744,18 @@ fn serialize_node_modern_ctx(
             })
         }
         TemplateNode::IfBlock(block) => {
-            let expr_start = trimmed_span_start(block.test_span, &block.test);
-            let consequent = serialize_fragment_modern_ctx(
-                &block.consequent,
+            // The chain root (`elseif: false`, non-empty test) drives every
+            // `{:else if}` IfBlock's `end` to the chain's outermost `{/if}`,
+            // matching vendor Svelte's modern AST (which collapses the chain
+            // visually).
+            serialize_ifblock_modern_with_chain_end(
+                block,
                 source,
                 in_shadow_root,
                 in_svelte_head,
-            );
-            let alternate = block.alternate.as_ref().map(|alt| {
-                if let TemplateNode::IfBlock(alt_block) = alt.as_ref() {
-                    if alt_block.test.is_empty() && !alt_block.elseif {
-                        // {:else} block → Fragment with children
-                        serialize_fragment_modern_ctx(
-                            &alt_block.consequent,
-                            source,
-                            in_shadow_root,
-                            in_svelte_head,
-                        )
-                    } else {
-                        // {:else if} → Fragment containing IfBlock with elseif:true
-                        let mut inner = serialize_node_modern_ctx(
-                            alt.as_ref(),
-                            source,
-                            in_shadow_root,
-                            in_svelte_head,
-                        );
-                        inner["elseif"] = json!(true);
-                        // elseif IfBlock extends to the outer {/if}
-                        inner["end"] = json!(block.span.end);
-                        json!({
-                            "type": "Fragment",
-                            "nodes": [inner]
-                        })
-                    }
-                } else {
-                    json!(null)
-                }
-            });
-            json!({
-                "type": "IfBlock",
-                "elseif": false,
-                "start": block.span.start,
-                "end": block.span.end,
-                "test": expression_to_estree(source, block.test.trim(), expr_start),
-                "consequent": consequent,
-                "alternate": alternate
-            })
+                block.span.end,
+                false,
+            )
         }
         TemplateNode::EachBlock(block) => {
             let expr_start = trimmed_span_start(block.expression_span, &block.expression);
@@ -2758,7 +2808,7 @@ fn serialize_node_modern_ctx(
             let mut obj = json!({
                 "type": "EachBlock",
                 "start": block.span.start,
-                "end": block.span.end,
+                "end": span_end_or_unclosed(block.span.end, block.unclosed_at_eof_outer),
                 "expression": expression_to_estree(source, block.expression.trim(), expr_start),
                 "body": body,
                 "context": context
@@ -2783,7 +2833,7 @@ fn serialize_node_modern_ctx(
             let mut obj = json!({
                 "type": "AwaitBlock",
                 "start": block.span.start,
-                "end": block.span.end,
+                "end": span_end_or_unclosed(block.span.end, block.unclosed_at_eof_outer),
                 "expression": expression_to_estree(source, block.expression.trim(), expr_start)
             });
             // Add pending/then/catch (always present in modern format)
@@ -2849,7 +2899,7 @@ fn serialize_node_modern_ctx(
             json!({
                 "type": "KeyBlock",
                 "start": block.span.start,
-                "end": block.span.end,
+                "end": span_end_or_unclosed(block.span.end, block.unclosed_at_eof_outer),
                 "expression": expression_to_estree(source, block.expression.trim(), expr_start),
                 "fragment": body
             })
@@ -2898,7 +2948,7 @@ fn serialize_node_modern_ctx(
             let mut snippet_json = json!({
                 "type": "SnippetBlock",
                 "start": block.span.start,
-                "end": block.span.end,
+                "end": span_end_or_unclosed(block.span.end, block.unclosed_at_eof_outer),
                 "expression": {
                     "type": "Identifier",
                     "name": block.name,
@@ -3729,9 +3779,20 @@ fn serialize_fragment_legacy_root(
         .iter()
         .map(|n| serialize_node_legacy(n, source))
         .collect();
-    // Fragment end: use the last NON-whitespace child's end
-    let mut end = filtered.iter().rev()
-        .find(|n| !matches!(n, TemplateNode::Text(t) if t.data.chars().all(|c| c.is_ascii_whitespace())))
+    // Fragment end: use the last NON-whitespace child's end. Vendor's
+    // legacy converter does the same thing (`legacy.js` reads
+    // `node.fragment.nodes.at(-1).end` for the html span). When that
+    // child carries the `unclosed_at_eof_outer` flag — set by drain
+    // when an outer (non-topmost) entry is unwound at EOF — vendor
+    // reports `end: -1` (its sentinel for a never-closed node), and so
+    // do we.
+    let last_non_ws = filtered.iter().rev().find(
+        |n| !matches!(n, TemplateNode::Text(t) if t.data.chars().all(|c| c.is_ascii_whitespace())),
+    );
+    let last_unclosed = last_non_ws
+        .map(|n| node_unclosed_at_eof_outer(n))
+        .unwrap_or(false);
+    let mut end = last_non_ws
         .map(|n| node_span_end(n))
         .or_else(|| filtered.last().map(|n| node_span_end(n)))
         .unwrap_or(fragment.span.end);
@@ -3764,9 +3825,67 @@ fn serialize_fragment_legacy_root(
     json!({
         "type": "Fragment",
         "start": start,
-        "end": end,
+        "end": span_end_or_unclosed(end, last_unclosed),
         "children": children
     })
+}
+
+/// True iff the AST node is an `Element` or block kind that carries the
+/// `unclosed_at_eof_outer` flag and the flag is set. Used by serializers
+/// to decide whether to emit `-1` for the node's `end` (matching vendor
+/// Svelte's sentinel for non-topmost in-stack nodes left over at EOF).
+fn node_unclosed_at_eof_outer(node: &TemplateNode) -> bool {
+    match node {
+        TemplateNode::Element(e) => e.unclosed_at_eof_outer,
+        TemplateNode::IfBlock(b) => b.unclosed_at_eof_outer,
+        TemplateNode::EachBlock(b) => b.unclosed_at_eof_outer,
+        TemplateNode::AwaitBlock(b) => b.unclosed_at_eof_outer,
+        TemplateNode::KeyBlock(b) => b.unclosed_at_eof_outer,
+        TemplateNode::SnippetBlock(b) => b.unclosed_at_eof_outer,
+        _ => false,
+    }
+}
+
+/// Replicate vendor `legacy.js`'s `source.lastIndexOf('{', node.end - 1)`
+/// for the legacy IfBlock / ElseBlock anchor computation. Pass `-1` for
+/// `end_value` to get vendor's behavior when the IfBlock's `end` would
+/// have been the `-1` sentinel (left there by the parser stack on EOF
+/// for outer chain links and chain roots) — JS `lastIndexOf` with
+/// negative `fromIndex` coerces to `0`, returning `0` when source[0] is
+/// `{` (always true at a chain root).
+fn legacy_lastindexof_open_brace(source: &str, end_value: i64) -> u32 {
+    let from_index = end_value - 1;
+    if from_index < 0 {
+        return 0;
+    }
+    let bytes = source.as_bytes();
+    let limit = (from_index as usize).min(bytes.len().saturating_sub(1));
+    bytes[..=limit]
+        .iter()
+        .rposition(|&b| b == b'{')
+        .map(|i| i as u32)
+        .unwrap_or(0)
+}
+
+/// The byte offset vendor's modern AST uses for an IfBlock's `end`,
+/// reproducing vendor's parser-stack rules:
+/// - The chain root (`elseif: false`) keeps its own `node.end`
+///   (or vendor's `-1` sentinel when unclosed at EOF).
+/// - Chain links (`elseif: true`) collapse to the outer end via the
+///   `tag.js` close-loop on a successful `{/if}`; on EOF without a close
+///   only the topmost in vendor's stack is adjusted to `template.length`,
+///   the others keep `-1`. `unclosed_at_eof_outer` discriminates these.
+///
+/// `outer_end` is the chain root's `span.end`, used for the "closed
+/// chain collapse" branch.
+fn legacy_ifblock_effective_end(block: &IfBlock, outer_end: u32) -> i64 {
+    if block.unclosed_at_eof_outer {
+        -1
+    } else if block.elseif {
+        outer_end as i64
+    } else {
+        block.span.end as i64
+    }
 }
 
 #[allow(dead_code)]
@@ -3938,7 +4057,7 @@ fn serialize_node_legacy_ctx(node: &TemplateNode, source: &str, in_svelte_head: 
             let mut obj = json!({
                 "type": el_type,
                 "start": el.span.start,
-                "end": el.span.end,
+                "end": span_end_or_unclosed(el.span.end, el.unclosed_at_eof_outer),
                 "name": el.name,
                 "attributes": attributes,
                 "children": children
@@ -4003,43 +4122,71 @@ fn serialize_node_legacy_ctx(node: &TemplateNode, source: &str, in_svelte_head: 
             let mut obj = json!({
                 "type": "IfBlock",
                 "start": block.span.start,
-                "end": block.span.end,
+                "end": span_end_or_unclosed(block.span.end, block.unclosed_at_eof_outer),
                 "expression": expression_to_estree(source, block.test.trim(), expr_start),
                 "children": children
             });
             if let Some(alt) = &block.alternate {
                 match alt.as_ref() {
                     TemplateNode::IfBlock(alt_block) => {
+                        // Vendor's legacy converter computes the ElseBlock's
+                        // `end` via `source.lastIndexOf('{', node.end - 1)`
+                        // (where `node` is the *outer* IfBlock containing
+                        // the alternate) and its `start` via
+                        // `nodes.at(0)?.start ?? end`. The same algorithm
+                        // works for both closed chains and unclosed-at-EOF
+                        // chains — when the outer is unclosed the effective
+                        // end is `-1` and `lastIndexOf` returns `0`; when
+                        // it's closed, `lastIndexOf` finds the `{` of the
+                        // closing `{/if}`, which always matches what
+                        // `parse_if_block`'s span recorded. Replacing the
+                        // old `(alt_block.span.start, alt_block.span.end)`
+                        // shortcut with the lastIndexOf algorithm fixes the
+                        // unclosed-`{#if a}{:else}` case where the
+                        // synthetic-else's `body_start` (after the `}` of
+                        // `{:else}`) doesn't match vendor's `{` anchor.
+                        let outer_effective_end =
+                            legacy_ifblock_effective_end(block, block.span.end);
+                        let else_anchor =
+                            legacy_lastindexof_open_brace(source, outer_effective_end);
                         if alt_block.test.is_empty() && !alt_block.elseif {
-                            // {:else} block - end is at the end of the fragment (before {/if})
+                            // {:else} block
                             let (else_children, _) = serialize_filtered_children_ctx(
                                 &alt_block.consequent.nodes,
                                 source,
                                 alt_block.span.end,
                                 in_svelte_head,
                             );
+                            let else_start = alt_block
+                                .consequent
+                                .nodes
+                                .first()
+                                .map(node_span_start)
+                                .unwrap_or(else_anchor);
                             obj["else"] = json!({
                                 "type": "ElseBlock",
-                                "start": alt_block.span.start,
-                                "end": alt_block.span.end,
+                                "start": else_start,
+                                "end": else_anchor,
                                 "children": else_children
                             });
                         } else {
-                            // {:else if ...} block — wrap IfBlock in an ElseBlock
-                            let content_start = alt_block.header_span.end;
-
+                            // {:else if ...} block — wrap IfBlock in an ElseBlock.
                             let inner = serialize_elseif_block(
                                 alt_block,
                                 source,
                                 block.span.end,
                                 in_svelte_head,
                             );
-                            // ElseBlock end should be the alt IfBlock's span end (where {/if} or next {:else} starts)
-                            let else_block_end = alt_block.span.end;
+                            let else_start = alt_block
+                                .consequent
+                                .nodes
+                                .first()
+                                .map(node_span_start)
+                                .unwrap_or(else_anchor);
                             obj["else"] = json!({
                                 "type": "ElseBlock",
-                                "start": content_start,
-                                "end": else_block_end,
+                                "start": else_start,
+                                "end": else_anchor,
                                 "children": [inner]
                             });
                         }
@@ -4103,7 +4250,7 @@ fn serialize_node_legacy_ctx(node: &TemplateNode, source: &str, in_svelte_head: 
             let mut obj = json!({
                 "type": "EachBlock",
                 "start": block.span.start,
-                "end": block.span.end,
+                "end": span_end_or_unclosed(block.span.end, block.unclosed_at_eof_outer),
                 "children": children,
                 "context": context,
                 "expression": expression_to_estree(source, block.expression.trim(), expr_start)
@@ -4139,7 +4286,7 @@ fn serialize_node_legacy_ctx(node: &TemplateNode, source: &str, in_svelte_head: 
             let mut obj = json!({
                 "type": "AwaitBlock",
                 "start": block.span.start,
-                "end": block.span.end,
+                "end": span_end_or_unclosed(block.span.end, block.unclosed_at_eof_outer),
                 "expression": expression_to_estree(source, block.expression.trim(), expr_start)
             });
 
@@ -4297,7 +4444,7 @@ fn serialize_node_legacy_ctx(node: &TemplateNode, source: &str, in_svelte_head: 
             json!({
                 "type": "KeyBlock",
                 "start": block.span.start,
-                "end": block.span.end,
+                "end": span_end_or_unclosed(block.span.end, block.unclosed_at_eof_outer),
                 "expression": expression_to_estree(source, block.expression.trim(), expr_start),
                 "children": children
             })
@@ -4360,7 +4507,7 @@ fn serialize_node_legacy_ctx(node: &TemplateNode, source: &str, in_svelte_head: 
             let mut obj = json!({
                 "type": "SnippetBlock",
                 "start": block.span.start,
-                "end": block.span.end,
+                "end": span_end_or_unclosed(block.span.end, block.unclosed_at_eof_outer),
                 "expression": expression,
                 "parameters": parameters,
                 "children": children
@@ -4474,7 +4621,9 @@ fn add_character_to_locs(value: &mut Value, source: &str) {
 }
 
 /// Serialize an {:else if} IfBlock with elseif:true flag.
-/// `outer_end` is the end position of the outermost {/if} tag.
+/// `outer_end` is the chain root's `span.end` (used to mirror vendor's
+/// modern-AST chain-end collapse for closed chains; ignored when the
+/// block carries the `unclosed_at_eof_outer` flag).
 fn serialize_elseif_block(
     block: &IfBlock,
     source: &str,
@@ -4488,20 +4637,37 @@ fn serialize_elseif_block(
         in_svelte_head,
     );
     let expr_start = trimmed_span_start(block.test_span, &block.test);
-    let content_start = block.header_span.end;
+
+    // Vendor: `consequent.nodes.at(0)?.start ?? lastIndexOf('{', node.end - 1)`.
+    let block_effective_end = legacy_ifblock_effective_end(block, outer_end);
+    let content_start = block
+        .consequent
+        .nodes
+        .first()
+        .map(node_span_start)
+        .unwrap_or_else(|| legacy_lastindexof_open_brace(source, block_effective_end));
 
     let mut obj = json!({
         "type": "IfBlock",
         "start": content_start,
-        "end": outer_end,
+        "end": if block_effective_end < 0 { json!(-1) } else { json!(block_effective_end as u32) },
         "expression": expression_to_estree(source, block.test.trim(), expr_start),
         "children": children,
         "elseif": true
     });
 
-    // Handle nested alternates
+    // Handle nested alternates. The current block (`block`) is the outer
+    // for these; its effective end determines the ElseBlock anchor via
+    // vendor's `legacy.js`'s `source.lastIndexOf('{', outer.end - 1)`.
     if let Some(alt) = &block.alternate {
         if let TemplateNode::IfBlock(alt_block) = alt.as_ref() {
+            let else_anchor = legacy_lastindexof_open_brace(source, block_effective_end);
+            let else_start = alt_block
+                .consequent
+                .nodes
+                .first()
+                .map(node_span_start)
+                .unwrap_or(else_anchor);
             if alt_block.test.is_empty() && !alt_block.elseif {
                 // {:else} block
                 let (else_children, _) = serialize_filtered_children_ctx(
@@ -4512,19 +4678,17 @@ fn serialize_elseif_block(
                 );
                 obj["else"] = json!({
                     "type": "ElseBlock",
-                    "start": alt_block.span.start,
-                    "end": alt_block.span.end,
+                    "start": else_start,
+                    "end": else_anchor,
                     "children": else_children
                 });
             } else {
                 // Nested {:else if ...}
-                let nested_content_start = alt_block.header_span.end;
                 let inner = serialize_elseif_block(alt_block, source, outer_end, in_svelte_head);
-                let else_block_end = alt_block.span.end;
                 obj["else"] = json!({
                     "type": "ElseBlock",
-                    "start": nested_content_start,
-                    "end": else_block_end,
+                    "start": else_start,
+                    "end": else_anchor,
                     "children": [inner]
                 });
             }

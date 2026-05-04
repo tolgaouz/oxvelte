@@ -445,6 +445,7 @@ impl<'a> TemplateParser<'a> {
     fn finalize_top_open_element(
         &mut self,
         end_tag_span: Option<Span>,
+        unclosed_at_eof_outer: bool,
     ) -> Result<(), OxcDiagnostic> {
         let pending = match self.open_nodes.pop() {
             Some(OpenNode::Element(e)) => e,
@@ -489,6 +490,7 @@ impl<'a> TemplateParser<'a> {
             span: Span::new(span_start, end),
             start_tag_end,
             end_tag_span,
+            unclosed_at_eof_outer,
         });
         self.append(element);
         Ok(())
@@ -503,24 +505,30 @@ impl<'a> TemplateParser<'a> {
         self.eat_until(">");
         self.eat(">")?;
         let end_tag_span = Span::new(end_tag_start, self.pos as u32);
-        self.finalize_top_open_element(Some(end_tag_span))
+        self.finalize_top_open_element(Some(end_tag_span), false)
     }
 
     /// Implicit-close the topmost open element without consuming any tokens
     /// from the input.
     fn implicit_close_top_open_element(&mut self) -> Result<(), OxcDiagnostic> {
-        self.finalize_top_open_element(None)
+        self.finalize_top_open_element(None, false)
     }
 
     /// Implicit-close the topmost open element at EOF, reporting Svelte's
     /// "left open" diagnostic. Only the innermost element produces a visible
-    /// diagnostic thanks to `reported_unclosed_eof` deduplication.
-    fn implicit_close_top_open_element_at_eof(&mut self) -> Result<(), OxcDiagnostic> {
+    /// diagnostic thanks to `reported_unclosed_eof` deduplication. The
+    /// `unclosed_at_eof_outer` flag distinguishes the innermost (vendor's
+    /// topmost on its parser stack — gets `end = template.length`) from
+    /// outer unclosed entries (vendor leaves at the initial sentinel `-1`).
+    fn implicit_close_top_open_element_at_eof(
+        &mut self,
+        unclosed_at_eof_outer: bool,
+    ) -> Result<(), OxcDiagnostic> {
         if let Some(OpenNode::Element(pending)) = self.open_nodes.last() {
             let name = pending.name.clone();
             self.report_unclosed_eof(format!("`<{name}>` was left open"));
         }
-        self.finalize_top_open_element(None)
+        self.finalize_top_open_element(None, unclosed_at_eof_outer)
     }
 
     /// Build a block AST node from the topmost `OpenBlock` entry on
@@ -540,12 +548,19 @@ impl<'a> TemplateParser<'a> {
         &mut self,
         fragment_end: u32,
         closed: bool,
+        unclosed_at_eof_outer: bool,
+        chain_inner_unclosed_at_eof_outer: bool,
     ) -> Result<(), OxcDiagnostic> {
         if matches!(
             self.open_nodes.last(),
             Some(OpenNode::Block(OpenBlock::If { .. }))
         ) {
-            return self.finalize_if_chain(fragment_end, closed);
+            return self.finalize_if_chain(
+                fragment_end,
+                closed,
+                unclosed_at_eof_outer,
+                chain_inner_unclosed_at_eof_outer,
+            );
         }
         let pending = match self.open_nodes.pop() {
             Some(OpenNode::Block(b)) => b,
@@ -569,6 +584,7 @@ impl<'a> TemplateParser<'a> {
                     expression_span,
                     body,
                     span: Span::new(block_start, self.pos as u32),
+                    unclosed_at_eof_outer,
                 })
             }
             OpenBlock::Snippet {
@@ -596,6 +612,7 @@ impl<'a> TemplateParser<'a> {
                     params_span,
                     body,
                     span: Span::new(block_start, self.pos as u32),
+                    unclosed_at_eof_outer,
                 })
             }
             OpenBlock::Each {
@@ -643,6 +660,7 @@ impl<'a> TemplateParser<'a> {
                     body: body_fragment,
                     fallback: fallback_fragment,
                     span: Span::new(block_start, span_end),
+                    unclosed_at_eof_outer,
                 })
             }
             OpenBlock::If { .. } => {
@@ -683,6 +701,7 @@ impl<'a> TemplateParser<'a> {
                     catch_binding: a.catch_arm.binding,
                     catch_binding_span: a.catch_arm.binding_span,
                     span: Span::new(a.block_start, self.pos as u32),
+                    unclosed_at_eof_outer,
                 })
             }
         };
@@ -696,9 +715,34 @@ impl<'a> TemplateParser<'a> {
     /// previously-built deeper node. Only the outermost (chain root,
     /// `chained == false`) entry is appended to the parent fragment, and
     /// only that one's `svelte_self_allowed_depth` increment is undone.
-    fn finalize_if_chain(&mut self, fragment_end: u32, _closed: bool) -> Result<(), OxcDiagnostic> {
+    ///
+    /// `deepest_unclosed_at_eof_outer` stamps `unclosed_at_eof_outer` on the
+    /// deepest chain link (vendor's topmost on the parser stack — gets
+    /// `end = template.length` on EOF unwinding, so this is `false` only
+    /// for the very innermost EOF drain). Every *outer* chain link gets
+    /// `chain_inner_unclosed_at_eof_outer` (= `true` for EOF-context
+    /// finalize since vendor leaves their `end` at `-1`; `false` for
+    /// non-EOF mismatched-close finalize since those build a best-effort
+    /// AST that vendor never produces).
+    fn finalize_if_chain(
+        &mut self,
+        fragment_end: u32,
+        _closed: bool,
+        deepest_unclosed_at_eof_outer: bool,
+        chain_inner_unclosed_at_eof_outer: bool,
+    ) -> Result<(), OxcDiagnostic> {
         let mut current_alternate: Option<Box<TemplateNode<'a>>> = None;
         let mut is_deepest = true;
+        // Vendor's `{:else}` continuation does *not* push onto its parser
+        // stack — only `{#if}` and `{:else if}` do. Oxvelte pushes a
+        // synthetic-else slot anyway so the dispatch loop has something to
+        // hand exit_fragment to. When unwinding at EOF, that synthetic
+        // slot is *above* what vendor considers topmost; the actual
+        // vendor-topmost is the next chain link below it. Track whether
+        // we've assigned the topmost-only `deepest_unclosed_at_eof_outer`
+        // flag yet; skip synthetic-else slots so that flag flows to the
+        // first non-synthetic chain link.
+        let mut deepest_flag_assigned = false;
 
         loop {
             let pending = match self.open_nodes.pop() {
@@ -746,6 +790,21 @@ impl<'a> TemplateParser<'a> {
                     "ancestor If chain entry must have stored consequent before next chain push",
                 )
             };
+            let synthetic_else_slot = chained && !elseif;
+            let unclosed_at_eof_outer = if synthetic_else_slot {
+                // Synthetic-else isn't an `IfBlock` in vendor's AST (it's
+                // a Fragment in modern, an ElseBlock in legacy), so the
+                // serialized `end` of its IfBlock-shaped node is never
+                // emitted by either serializer. The flag value here is
+                // therefore unobservable; we use `false` and *don't*
+                // consume the deepest-flag slot.
+                false
+            } else if !deepest_flag_assigned {
+                deepest_flag_assigned = true;
+                deepest_unclosed_at_eof_outer
+            } else {
+                chain_inner_unclosed_at_eof_outer
+            };
             is_deepest = false;
 
             // Span starts: synthetic `{:else}` slots use `body_start`
@@ -780,6 +839,7 @@ impl<'a> TemplateParser<'a> {
                 consequent,
                 alternate: current_alternate,
                 span: Span::new(span_start, span_end),
+                unclosed_at_eof_outer,
             });
 
             if !chained {
@@ -1049,15 +1109,29 @@ impl<'a> TemplateParser<'a> {
         debug_assert!(self.looking_at("{/") && !self.looking_at("{/*"));
         let fragment_end = self.pos as u32;
         self.consume_block_close()?;
-        self.finalize_top_open_block(fragment_end, true)
+        self.finalize_top_open_block(fragment_end, true, false, false)
     }
 
     /// Implicit-close the topmost open block without consuming any tokens.
     /// Used by mismatched-close recovery (caller already reported a more
-    /// specific diagnostic) and by drain helpers.
+    /// specific diagnostic) and by non-EOF drain helpers — never sets the
+    /// `unclosed_at_eof_outer` flag because vendor errors out on these
+    /// inputs rather than producing an AST.
     fn implicit_close_top_open_block(&mut self) -> Result<(), OxcDiagnostic> {
         let fragment_end = self.pos as u32;
-        self.finalize_top_open_block(fragment_end, false)
+        self.finalize_top_open_block(fragment_end, false, false, false)
+    }
+
+    /// Implicit-close the topmost open block at EOF, propagating
+    /// `unclosed_at_eof_outer` so that the resulting block AST node — and,
+    /// for `OpenBlock::If`, every chain link except the deepest — is
+    /// stamped with the flag the serializer translates to `end: -1`.
+    fn implicit_close_top_open_block_at_eof(
+        &mut self,
+        unclosed_at_eof_outer: bool,
+    ) -> Result<(), OxcDiagnostic> {
+        let fragment_end = self.pos as u32;
+        self.finalize_top_open_block(fragment_end, false, unclosed_at_eof_outer, true)
     }
 
     /// Swap the active fragment of an `OpenBlock::Each` from body to fallback
@@ -1121,13 +1195,22 @@ impl<'a> TemplateParser<'a> {
     /// Drain helper at EOF. Mirrors `recover_block_close`'s EOF path
     /// ("Block was left open") for blocks while preserving the element-level
     /// "left open" diagnostic. Both messages funnel through
-    /// `report_unclosed_eof` so only the innermost is visible.
+    /// `report_unclosed_eof` so only the innermost is visible. The
+    /// per-iteration `is_innermost` snapshot (taken before any diagnostic
+    /// flips `reported_unclosed_eof`) drives the `unclosed_at_eof_outer`
+    /// flag on the resulting AST node: vendor's parser sets the topmost
+    /// open node's `end` to `template.length` (matching our `self.pos`
+    /// behavior) and leaves every other in-stack node's `end` at the
+    /// initial `-1` sentinel.
     fn drain_implicit_close_top_at_eof(&mut self) -> Result<(), OxcDiagnostic> {
+        let is_innermost = !self.reported_unclosed_eof;
         match self.open_nodes.last() {
-            Some(OpenNode::Element(_)) => self.implicit_close_top_open_element_at_eof(),
+            Some(OpenNode::Element(_)) => {
+                self.implicit_close_top_open_element_at_eof(!is_innermost)
+            }
             Some(OpenNode::Block(_)) => {
                 self.report_unclosed_eof("Block was left open");
-                self.implicit_close_top_open_block()
+                self.implicit_close_top_open_block_at_eof(!is_innermost)
             }
             None => Ok(()),
         }
@@ -2297,6 +2380,7 @@ impl<'a> TemplateParser<'a> {
                 span: Span::new(start, end),
                 start_tag_end,
                 end_tag_span: None,
+                unclosed_at_eof_outer: false,
             })));
         }
 
@@ -2339,6 +2423,7 @@ impl<'a> TemplateParser<'a> {
                 span: Span::new(start, end),
                 start_tag_end,
                 end_tag_span,
+                unclosed_at_eof_outer: false,
             })));
         }
 
