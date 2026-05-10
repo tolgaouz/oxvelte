@@ -136,22 +136,104 @@ fn range_is_immutable<'a>(
 fn is_known_global(name: &str) -> bool {
     const GLOBALS: &[&str] = &[
         // Standard JS globals.
-        "globalThis", "undefined", "Infinity", "NaN", "Object", "Array", "Map", "Set", "WeakMap",
-        "WeakSet", "Promise", "Date", "Math", "JSON", "Number", "String", "Boolean", "Symbol",
-        "RegExp", "Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "EvalError",
-        "URIError", "Function", "ArrayBuffer", "DataView", "Int8Array", "Uint8Array",
-        "Uint8ClampedArray", "Int16Array", "Uint16Array", "Int32Array", "Uint32Array",
-        "Float32Array", "Float64Array", "BigInt", "BigInt64Array", "BigUint64Array", "Reflect",
-        "Proxy", "parseInt", "parseFloat", "isNaN", "isFinite", "encodeURI", "decodeURI",
-        "encodeURIComponent", "decodeURIComponent",
+        "globalThis",
+        "undefined",
+        "Infinity",
+        "NaN",
+        "Object",
+        "Array",
+        "Map",
+        "Set",
+        "WeakMap",
+        "WeakSet",
+        "Promise",
+        "Date",
+        "Math",
+        "JSON",
+        "Number",
+        "String",
+        "Boolean",
+        "Symbol",
+        "RegExp",
+        "Error",
+        "TypeError",
+        "RangeError",
+        "SyntaxError",
+        "ReferenceError",
+        "EvalError",
+        "URIError",
+        "Function",
+        "ArrayBuffer",
+        "DataView",
+        "Int8Array",
+        "Uint8Array",
+        "Uint8ClampedArray",
+        "Int16Array",
+        "Uint16Array",
+        "Int32Array",
+        "Uint32Array",
+        "Float32Array",
+        "Float64Array",
+        "BigInt",
+        "BigInt64Array",
+        "BigUint64Array",
+        "Reflect",
+        "Proxy",
+        "parseInt",
+        "parseFloat",
+        "isNaN",
+        "isFinite",
+        "encodeURI",
+        "decodeURI",
+        "encodeURIComponent",
+        "decodeURIComponent",
         // Browser / runtime globals.
-        "console", "window", "document", "self", "navigator", "history", "location", "screen",
-        "localStorage", "sessionStorage", "indexedDB", "fetch", "alert", "confirm", "prompt",
-        "setTimeout", "setInterval", "clearTimeout", "clearInterval", "queueMicrotask",
-        "requestAnimationFrame", "cancelAnimationFrame", "URL", "URLSearchParams", "FormData",
-        "Blob", "File", "FileReader", "Headers", "Request", "Response", "Event", "CustomEvent",
-        "AbortController", "AbortSignal", "structuredClone", "atob", "btoa", "crypto",
-        "performance", "TextEncoder", "TextDecoder", "process", "module", "require", "Buffer",
+        "console",
+        "window",
+        "document",
+        "self",
+        "navigator",
+        "history",
+        "location",
+        "screen",
+        "localStorage",
+        "sessionStorage",
+        "indexedDB",
+        "fetch",
+        "alert",
+        "confirm",
+        "prompt",
+        "setTimeout",
+        "setInterval",
+        "clearTimeout",
+        "clearInterval",
+        "queueMicrotask",
+        "requestAnimationFrame",
+        "cancelAnimationFrame",
+        "URL",
+        "URLSearchParams",
+        "FormData",
+        "Blob",
+        "File",
+        "FileReader",
+        "Headers",
+        "Request",
+        "Response",
+        "Event",
+        "CustomEvent",
+        "AbortController",
+        "AbortSignal",
+        "structuredClone",
+        "atob",
+        "btoa",
+        "crypto",
+        "performance",
+        "TextEncoder",
+        "TextDecoder",
+        "process",
+        "module",
+        "require",
+        "Buffer",
     ];
     GLOBALS.contains(&name)
 }
@@ -225,19 +307,22 @@ fn compute_mutability<'a>(
     }
     if let Some(vd) = declaration {
         if vd.kind == VariableDeclarationKind::Const {
-            if declarator.and_then(|d| d.init.as_ref()).is_some_and(|init| {
-                matches!(
-                    init,
-                    Expression::FunctionExpression(_)
-                        | Expression::ArrowFunctionExpression(_)
-                        | Expression::StringLiteral(_)
-                        | Expression::NumericLiteral(_)
-                        | Expression::BooleanLiteral(_)
-                        | Expression::NullLiteral(_)
-                        | Expression::BigIntLiteral(_)
-                        | Expression::RegExpLiteral(_)
-                )
-            }) {
+            if declarator
+                .and_then(|d| d.init.as_ref())
+                .is_some_and(|init| {
+                    matches!(
+                        init,
+                        Expression::FunctionExpression(_)
+                            | Expression::ArrowFunctionExpression(_)
+                            | Expression::StringLiteral(_)
+                            | Expression::NumericLiteral(_)
+                            | Expression::BooleanLiteral(_)
+                            | Expression::NullLiteral(_)
+                            | Expression::BigIntLiteral(_)
+                            | Expression::RegExpLiteral(_)
+                    )
+                })
+            {
                 return false;
             }
             return has_write_anywhere(semantic, sid, template_writes);
@@ -346,10 +431,15 @@ fn collect_template_writes(html: &Fragment) -> HashSet<String> {
                 match attr {
                     Attribute::Directive {
                         kind: DirectiveKind::Binding,
+                        name,
                         value,
                         ..
                     } => {
-                        if let Some(ident) = leading_ident(attr_value_text(value).as_deref().unwrap_or("")) {
+                        let value_text = match value {
+                            crate::ast::AttributeValue::True => Some(name.clone()),
+                            _ => attr_value_text(value),
+                        };
+                        if let Some(ident) = leading_ident(value_text.as_deref().unwrap_or("")) {
                             writes.insert(ident);
                         }
                         if let Some(t) = attr_value_text(value) {
@@ -450,10 +540,7 @@ fn each_body_writes_to_context(block: &EachBlock) -> bool {
             TemplateNode::RawMustacheTag(tag) => texts.push(tag.expression.as_str()),
             _ => return,
         }
-        if texts
-            .iter()
-            .any(|t| names.iter().any(|n| writes_to(t, n)))
-        {
+        if texts.iter().any(|t| names.iter().any(|n| writes_to(t, n))) {
             hit = true;
         }
     });

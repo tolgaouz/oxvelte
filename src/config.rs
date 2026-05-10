@@ -107,10 +107,7 @@ impl OxvelteConfig {
     pub fn rule_config(&self, rule_name: &str) -> RuleConfig {
         if let Some(entry) = self.rules.get(rule_name) {
             RuleConfig {
-                options: entry
-                    .options
-                    .as_ref()
-                    .map(|o| Value::Array(vec![o.clone()])),
+                options: entry.options.clone(),
                 settings: self.settings.clone(),
             }
         } else {
@@ -153,10 +150,16 @@ impl OxvelteConfig {
         if !self.rules.is_empty() {
             let mut rules = serde_json::Map::new();
             let mut sorted_rules: Vec<_> = self.rules.iter().collect();
-            sorted_rules.sort_by_key(|(k, _)| k.clone());
+            sorted_rules.sort_by(|(a, _), (b, _)| a.cmp(b));
             for (name, entry) in sorted_rules {
                 let val = if let Some(opts) = &entry.options {
-                    Value::Array(vec![Value::String(entry.severity.clone()), opts.clone()])
+                    let mut arr = vec![Value::String(entry.severity.clone())];
+                    if let Some(opts) = opts.as_array() {
+                        arr.extend(opts.iter().cloned());
+                    } else {
+                        arr.push(opts.clone());
+                    }
+                    Value::Array(arr)
                 } else {
                     Value::String(entry.severity.clone())
                 };
@@ -189,7 +192,7 @@ fn parse_rule_entry(val: &Value) -> RuleEntry {
             },
             options: None,
         },
-        // ["error", { ...options }]
+        // ["error", option1, option2, ...]
         Value::Array(arr) => {
             let severity = arr
                 .first()
@@ -203,7 +206,11 @@ fn parse_rule_entry(val: &Value) -> RuleEntry {
                     _ => "error".to_string(),
                 })
                 .unwrap_or_else(|| "error".to_string());
-            let options = arr.get(1).cloned();
+            let options = if arr.len() > 1 {
+                Some(Value::Array(arr.iter().skip(1).cloned().collect()))
+            } else {
+                None
+            };
             RuleEntry { severity, options }
         }
         _ => RuleEntry {
@@ -274,6 +281,20 @@ mod tests {
         let entry = &config.rules["svelte/button-has-type"];
         assert_eq!(entry.severity, "warn");
         assert!(entry.options.is_some());
+        assert_eq!(
+            config.rule_config("svelte/button-has-type").options,
+            Some(serde_json::json!([{ "button": false }]))
+        );
+    }
+
+    #[test]
+    fn test_parse_preserves_multiple_options() {
+        let json = r#"{ "rules": { "svelte/example": ["error", "always", { "except": true }] } }"#;
+        let config = OxvelteConfig::parse(json).unwrap();
+        assert_eq!(
+            config.rule_config("svelte/example").options,
+            Some(serde_json::json!(["always", { "except": true }]))
+        );
     }
 
     #[test]

@@ -4,6 +4,7 @@ pub mod rules;
 
 use crate::ast::*;
 use oxc::span::Span;
+use std::path::Path;
 
 /// A lint diagnostic.
 #[derive(Debug, Clone)]
@@ -28,6 +29,24 @@ pub struct RuleConfig {
     pub options: Option<serde_json::Value>,
     /// Parsed settings
     pub settings: Option<serde_json::Value>,
+}
+
+/// Svelte package version information resolved for the file being linted.
+#[derive(Debug, Clone, Default)]
+pub struct SvelteVersionInfo {
+    dependency_ranges: Vec<String>,
+}
+
+impl SvelteVersionInfo {
+    pub fn includes_major(&self, major: u8) -> bool {
+        self.dependency_ranges
+            .iter()
+            .any(|range| npm_range_may_include_major(range, major))
+    }
+
+    pub fn is_unknown(&self) -> bool {
+        self.dependency_ranges.is_empty()
+    }
 }
 
 /// Context provided to lint rules during execution.
@@ -57,6 +76,10 @@ pub struct LintContext<'a> {
     /// is `true`. When no rune calls are found, this stays `false` — mirroring
     /// vendor's `undetermined` bucket, which runs both legacy and runes rules.
     pub is_runes: bool,
+    /// Svelte package version/range found in the nearest `package.json` that
+    /// declares a `svelte` dependency. This is the shared signal for upstream
+    /// `meta.conditions.svelteVersions` style gates.
+    pub svelte_version: SvelteVersionInfo,
     diagnostics: Vec<LintDiagnostic>,
     current_rule: &'static str,
 }
@@ -74,6 +97,7 @@ impl<'a> LintContext<'a> {
             instance_content_offset: 0,
             module_content_offset: 0,
             is_runes: false,
+            svelte_version: SvelteVersionInfo::default(),
             diagnostics: Vec::new(),
             current_rule: "",
         }
@@ -91,6 +115,7 @@ impl<'a> LintContext<'a> {
             instance_content_offset: 0,
             module_content_offset: 0,
             is_runes: false,
+            svelte_version: SvelteVersionInfo::default(),
             diagnostics: Vec::new(),
             current_rule: "",
         }
@@ -163,6 +188,20 @@ pub struct Linter {
     has_script_rules: bool,
 }
 
+enum RuleConfigSource<'a> {
+    Fixed(RuleConfig),
+    Project(&'a crate::config::OxvelteConfig),
+}
+
+impl RuleConfigSource<'_> {
+    fn for_rule(&self, rule_name: &str) -> RuleConfig {
+        match self {
+            Self::Fixed(config) => config.clone(),
+            Self::Project(config) => config.rule_config(rule_name),
+        }
+    }
+}
+
 impl Linter {
     pub fn recommended() -> Self {
         let rules = rules::recommended_rules();
@@ -202,7 +241,7 @@ impl Linter {
         self.lint_impl(
             ast,
             source,
-            RuleConfig::default(),
+            RuleConfigSource::Fixed(RuleConfig::default()),
             None,
             ScriptMode::Full,
             /*is_svelte_module*/ false,
@@ -212,43 +251,105 @@ impl Linter {
     /// Lint a plain JS/TS file. Only runs rules marked with `applies_to_scripts`.
     /// Wraps the source in a synthetic SvelteAst with the content as an instance script.
     pub fn lint_script(&self, source: &str) -> Vec<LintDiagnostic> {
-        if !self.has_script_rules {
-            return vec![];
-        }
-        use crate::ast::{Fragment, Script, SvelteAst};
-        use std::marker::PhantomData;
-        let ast = SvelteAst {
-            html: Fragment {
-                nodes: vec![],
-                span: oxc::span::Span::new(0, 0),
-                _phantom: PhantomData,
-            },
-            instance: Some(Script {
-                content: source.to_string(),
-                module: false,
-                lang: None,
-                strict_events: false,
-                span: oxc::span::Span::new(0, source.len() as u32),
-                attrs_span: oxc::span::Span::new(0, 0),
-                content_span: oxc::span::Span::new(0, source.len() as u32),
-            }),
-            module: None,
-            css: None,
-            _phantom: PhantomData,
-        };
-        self.lint_impl(
-            &ast,
+        self.lint_synthetic_script(
             source,
-            RuleConfig::default(),
+            false,
+            RuleConfigSource::Fixed(RuleConfig::default()),
             None,
             ScriptMode::ScriptOnly,
-            /*is_svelte_module*/ false,
+            false,
+        )
+    }
+
+    pub fn lint_script_with_project_config(
+        &self,
+        source: &str,
+        config: &crate::config::OxvelteConfig,
+    ) -> Vec<LintDiagnostic> {
+        self.lint_synthetic_script(
+            source,
+            false,
+            RuleConfigSource::Project(config),
+            None,
+            ScriptMode::ScriptOnly,
+            false,
+        )
+    }
+
+    pub fn lint_script_with_project_config_and_path(
+        &self,
+        source: &str,
+        config: &crate::config::OxvelteConfig,
+        file_path: &str,
+    ) -> Vec<LintDiagnostic> {
+        self.lint_synthetic_script(
+            source,
+            false,
+            RuleConfigSource::Project(config),
+            Some(file_path.to_string()),
+            ScriptMode::ScriptOnly,
+            false,
         )
     }
 
     /// Lint a `.svelte.js` or `.svelte.ts` module. Runs rules marked with
     /// `applies_to_scripts` or `applies_to_svelte_scripts`.
     pub fn lint_svelte_script(&self, source: &str, is_ts: bool) -> Vec<LintDiagnostic> {
+        self.lint_synthetic_script(
+            source,
+            is_ts,
+            RuleConfigSource::Fixed(RuleConfig::default()),
+            None,
+            ScriptMode::SvelteModule,
+            true,
+        )
+    }
+
+    pub fn lint_svelte_script_with_project_config(
+        &self,
+        source: &str,
+        is_ts: bool,
+        config: &crate::config::OxvelteConfig,
+    ) -> Vec<LintDiagnostic> {
+        self.lint_synthetic_script(
+            source,
+            is_ts,
+            RuleConfigSource::Project(config),
+            None,
+            ScriptMode::SvelteModule,
+            true,
+        )
+    }
+
+    pub fn lint_svelte_script_with_project_config_and_path(
+        &self,
+        source: &str,
+        is_ts: bool,
+        config: &crate::config::OxvelteConfig,
+        file_path: &str,
+    ) -> Vec<LintDiagnostic> {
+        self.lint_synthetic_script(
+            source,
+            is_ts,
+            RuleConfigSource::Project(config),
+            Some(file_path.to_string()),
+            ScriptMode::SvelteModule,
+            true,
+        )
+    }
+
+    fn lint_synthetic_script(
+        &self,
+        source: &str,
+        is_ts: bool,
+        config: RuleConfigSource<'_>,
+        file_path: Option<String>,
+        script_mode: ScriptMode,
+        is_svelte_module: bool,
+    ) -> Vec<LintDiagnostic> {
+        if matches!(script_mode, ScriptMode::ScriptOnly) && !self.has_script_rules {
+            return vec![];
+        }
         use std::marker::PhantomData;
         let ast = SvelteAst {
             html: Fragment {
@@ -272,10 +373,10 @@ impl Linter {
         self.lint_impl(
             &ast,
             source,
-            RuleConfig::default(),
-            None,
-            ScriptMode::SvelteModule,
-            /*is_svelte_module*/ true,
+            config,
+            file_path,
+            script_mode,
+            is_svelte_module,
         )
     }
 
@@ -285,7 +386,30 @@ impl Linter {
         source: &'a str,
         config: RuleConfig,
     ) -> Vec<LintDiagnostic> {
-        self.lint_impl(ast, source, config, None, ScriptMode::Full, false)
+        self.lint_impl(
+            ast,
+            source,
+            RuleConfigSource::Fixed(config),
+            None,
+            ScriptMode::Full,
+            false,
+        )
+    }
+
+    pub fn lint_with_project_config<'a>(
+        &self,
+        ast: &'a SvelteAst<'a>,
+        source: &'a str,
+        config: &crate::config::OxvelteConfig,
+    ) -> Vec<LintDiagnostic> {
+        self.lint_impl(
+            ast,
+            source,
+            RuleConfigSource::Project(config),
+            None,
+            ScriptMode::Full,
+            false,
+        )
     }
 
     pub fn lint_with_config_and_path<'a>(
@@ -298,7 +422,24 @@ impl Linter {
         self.lint_impl(
             ast,
             source,
-            config,
+            RuleConfigSource::Fixed(config),
+            Some(file_path.to_string()),
+            ScriptMode::Full,
+            false,
+        )
+    }
+
+    pub fn lint_with_project_config_and_path<'a>(
+        &self,
+        ast: &'a SvelteAst<'a>,
+        source: &'a str,
+        config: &crate::config::OxvelteConfig,
+        file_path: &str,
+    ) -> Vec<LintDiagnostic> {
+        self.lint_impl(
+            ast,
+            source,
+            RuleConfigSource::Project(config),
             Some(file_path.to_string()),
             ScriptMode::Full,
             false,
@@ -312,7 +453,7 @@ impl Linter {
         &self,
         ast: &'a SvelteAst<'a>,
         source: &'a str,
-        config: RuleConfig,
+        config: RuleConfigSource<'_>,
         file_path: Option<String>,
         script_mode: ScriptMode,
         is_svelte_module: bool,
@@ -385,8 +526,9 @@ impl Linter {
 
         let is_runes = instance_semantic.as_ref().is_some_and(detect_runes)
             || module_semantic.as_ref().is_some_and(detect_runes);
+        let svelte_version = svelte_version_info_for_file(file_path.as_deref());
 
-        let mut ctx = LintContext::with_config(ast, source, config);
+        let mut ctx = LintContext::with_config(ast, source, RuleConfig::default());
         ctx.file_path = file_path;
         ctx.is_svelte_module = is_svelte_module;
         ctx.instance_semantic = instance_semantic.as_ref();
@@ -394,6 +536,7 @@ impl Linter {
         ctx.instance_content_offset = instance_offset;
         ctx.module_content_offset = module_offset;
         ctx.is_runes = is_runes;
+        ctx.svelte_version = svelte_version;
 
         for rule in &self.rules {
             let include = match script_mode {
@@ -407,6 +550,7 @@ impl Linter {
                 continue;
             }
             ctx.set_rule(rule.name());
+            ctx.config = config.for_rule(rule.name());
             rule.run(&mut ctx);
         }
         filter_suppressed(ctx.into_diagnostics(), source)
@@ -468,6 +612,144 @@ fn detect_runes(semantic: &oxc::semantic::Semantic) -> bool {
         }
     }
     false
+}
+
+fn svelte_version_info_for_file(file_path: Option<&str>) -> SvelteVersionInfo {
+    let Some(file_path) = file_path else {
+        return SvelteVersionInfo::default();
+    };
+    let mut dir = Path::new(file_path).parent().map(Path::to_path_buf);
+    while let Some(current) = dir {
+        let package_path = current.join("package.json");
+        if let Ok(content) = std::fs::read_to_string(&package_path) {
+            let info = svelte_version_info_from_package_json(&content);
+            if !info.is_unknown() {
+                return info;
+            }
+        }
+        dir = current.parent().map(Path::to_path_buf);
+    }
+    SvelteVersionInfo::default()
+}
+
+fn svelte_version_info_from_package_json(content: &str) -> SvelteVersionInfo {
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(content) else {
+        return SvelteVersionInfo::default();
+    };
+    let dependency_ranges = ["dependencies", "devDependencies", "peerDependencies"]
+        .iter()
+        .filter_map(|section| json.get(section))
+        .filter_map(|section| section.get("svelte"))
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_string)
+        .collect();
+    SvelteVersionInfo { dependency_ranges }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RangeOp {
+    Any,
+    Exact,
+    Compatible,
+    GreaterThan,
+    GreaterThanOrEqual,
+    LessThan,
+    LessThanOrEqual,
+}
+
+fn npm_range_may_include_major(range: &str, major: u8) -> bool {
+    range
+        .split("||")
+        .any(|segment| npm_range_segment_may_include_major(segment, major))
+}
+
+fn npm_range_segment_may_include_major(segment: &str, major: u8) -> bool {
+    let mut saw_constraint = false;
+    let mut has_exact_or_compatible_constraint = false;
+    let mut lower_allows = true;
+    let mut upper_allows = true;
+
+    for token in segment.split(|ch: char| ch.is_whitespace() || ch == ',') {
+        let Some((op, token_major)) = parse_range_token(token) else {
+            continue;
+        };
+        saw_constraint = true;
+        match op {
+            RangeOp::Any => return true,
+            RangeOp::Exact | RangeOp::Compatible => {
+                has_exact_or_compatible_constraint = true;
+                if token_major == major {
+                    return true;
+                }
+            }
+            RangeOp::GreaterThan | RangeOp::GreaterThanOrEqual => {
+                if token_major > major {
+                    lower_allows = false;
+                }
+            }
+            RangeOp::LessThan => {
+                if token_major <= major {
+                    upper_allows = false;
+                }
+            }
+            RangeOp::LessThanOrEqual => {
+                if token_major < major {
+                    upper_allows = false;
+                }
+            }
+        }
+    }
+
+    saw_constraint && !has_exact_or_compatible_constraint && lower_allows && upper_allows
+}
+
+fn parse_range_token(token: &str) -> Option<(RangeOp, u8)> {
+    let mut token = token.trim_matches(|ch: char| {
+        matches!(
+            ch,
+            '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | ';' | ','
+        )
+    });
+    if token.is_empty() {
+        return None;
+    }
+    if token == "*" || token.eq_ignore_ascii_case("x") {
+        return Some((RangeOp::Any, 0));
+    }
+    if let Some((_, version)) = token.rsplit_once('@') {
+        token = version;
+    }
+
+    let (op, rest) = if let Some(rest) = token.strip_prefix(">=") {
+        (RangeOp::GreaterThanOrEqual, rest)
+    } else if let Some(rest) = token.strip_prefix('>') {
+        (RangeOp::GreaterThan, rest)
+    } else if let Some(rest) = token.strip_prefix("<=") {
+        (RangeOp::LessThanOrEqual, rest)
+    } else if let Some(rest) = token.strip_prefix('<') {
+        (RangeOp::LessThan, rest)
+    } else if let Some(rest) = token.strip_prefix('^') {
+        (RangeOp::Compatible, rest)
+    } else if let Some(rest) = token.strip_prefix('~') {
+        (RangeOp::Compatible, rest)
+    } else if let Some(rest) = token.strip_prefix('=') {
+        (RangeOp::Exact, rest)
+    } else {
+        (RangeOp::Exact, token)
+    };
+
+    let rest = rest.trim_start_matches('v');
+    let major = rest
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    if major.is_empty() {
+        if rest == "*" || rest.eq_ignore_ascii_case("x") {
+            return Some((RangeOp::Any, 0));
+        }
+        return None;
+    }
+    major.parse::<u8>().ok().map(|major| (op, major))
 }
 
 // ---------------------------------------------------------------------------

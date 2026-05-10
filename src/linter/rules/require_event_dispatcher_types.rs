@@ -22,7 +22,7 @@ impl Rule for RequireEventDispatcherTypes {
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         // Vendor's `meta.conditions` restricts this rule to Svelte 3/4.
-        if ctx.is_runes {
+        if ctx.is_runes || ctx.svelte_version.includes_major(5) {
             return;
         }
         let Some(script) = &ctx.ast.instance else {

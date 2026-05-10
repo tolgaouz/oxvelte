@@ -21,6 +21,9 @@ enum Command {
     Lint {
         #[arg(required = true)]
         paths: Vec<PathBuf>,
+        /// Path to an oxvelte.config.json file.
+        #[arg(long)]
+        config: Option<PathBuf>,
         /// Run all rules instead of just recommended ones.
         #[arg(long)]
         all_rules: bool,
@@ -66,17 +69,18 @@ fn main() -> ExitCode {
     match cli.command {
         Command::Lint {
             paths,
+            config,
             all_rules,
             fix: _,
             json,
             quiet,
-        } => cmd_lint(&paths, all_rules, json, quiet),
+        } => cmd_lint(&paths, config.as_ref(), all_rules, json, quiet),
         Command::Parse {
             file,
             pretty,
             format,
         } => cmd_parse(&file, pretty, &format),
-        Command::Check { paths } => cmd_lint(&paths, false, false, false),
+        Command::Check { paths } => cmd_lint(&paths, None, false, false, false),
         Command::Rules => cmd_rules(),
         Command::Migrate { file, write } => cmd_convert_config(&file, write),
     }
@@ -96,7 +100,42 @@ struct FileResult {
     diagnostics: Vec<FileDiagnostic>,
 }
 
-fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool, quiet: bool) -> ExitCode {
+fn load_lint_config(
+    search_dir: &std::path::Path,
+    config_path: Option<&PathBuf>,
+) -> Result<(oxvelte::config::OxvelteConfig, PathBuf), String> {
+    if let Some(path) = config_path {
+        let path = if path.is_absolute() {
+            path.clone()
+        } else {
+            std::env::current_dir()
+                .map_err(|e| format!("Error reading current directory: {e}"))?
+                .join(path)
+        };
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Error reading config {}: {e}", path.display()))?;
+        let config = oxvelte::config::OxvelteConfig::parse(&content)
+            .map_err(|e| format!("Error parsing config {}: {e}", path.display()))?;
+        let config_dir = path
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        return Ok((config, config_dir));
+    }
+
+    Ok((
+        oxvelte::config::OxvelteConfig::load(search_dir),
+        search_dir.to_path_buf(),
+    ))
+}
+
+fn cmd_lint(
+    paths: &[PathBuf],
+    config_path: Option<&PathBuf>,
+    all_rules: bool,
+    json_output: bool,
+    quiet: bool,
+) -> ExitCode {
     use rayon::prelude::*;
 
     // Load config (walks up from the first path, or cwd).
@@ -110,7 +149,15 @@ fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool, quiet: bool) 
             }
         })
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-    let config = oxvelte::config::OxvelteConfig::load(&config_dir);
+    let (config, config_dir) = match load_lint_config(&config_dir, config_path) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(1);
+        }
+    };
+    #[cfg(not(feature = "custom-rules"))]
+    let _ = &config_dir;
 
     #[allow(unused_mut)]
     let mut lint = if all_rules {
@@ -150,10 +197,10 @@ fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool, quiet: bool) 
                 match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let alloc = oxc::allocator::Allocator::default();
                     let result = parser::parse(&source, &alloc);
-                    lint.lint_with_config_and_path(
+                    lint.lint_with_project_config_and_path(
                         &result.ast,
                         &source,
-                        oxvelte::linter::RuleConfig::default(),
+                        &config,
                         &file_path_owned,
                     )
                 })) {
@@ -165,9 +212,14 @@ fn cmd_lint(paths: &[PathBuf], all_rules: bool, json_output: bool, quiet: bool) 
                 }
             } else if is_svelte_module {
                 let is_ts = path_str.ends_with(".ts");
-                lint.lint_svelte_script(&source, is_ts)
+                lint.lint_svelte_script_with_project_config_and_path(
+                    &source,
+                    is_ts,
+                    &config,
+                    &file_path_owned,
+                )
             } else {
-                lint.lint_script(&source)
+                lint.lint_script_with_project_config_and_path(&source, &config, &file_path_owned)
             };
             if diags.is_empty() {
                 return None;

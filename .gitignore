@@ -33,6 +33,7 @@ npm/oxvelte/README.md
 .DS_Store
 Thumbs.db
 /testbeds/
+scripts/testbeds.tsv
 
 program.md
 audit-log.md

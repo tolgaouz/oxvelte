@@ -8,6 +8,7 @@ pub mod custom_rules;
 
 #[cfg(test)]
 mod linter_fixture_tests {
+    use crate::config::OxvelteConfig;
     use crate::linter::{Linter, RuleConfig};
     use crate::parser;
 
@@ -172,6 +173,35 @@ mod linter_fixture_tests {
     fn linter_button_has_type_invalid() {
         run_linter_invalid("button-has-type");
     }
+
+    #[test]
+    fn linter_project_config_passes_rule_options() {
+        let source = r#"<button type="button">Save</button>"#;
+        let alloc = oxc::allocator::Allocator::default();
+        let result = parser::parse(source, &alloc);
+        let config = OxvelteConfig::parse(
+            r#"{
+                "rules": {
+                    "svelte/button-has-type": ["error", { "button": false }]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let diags = Linter::all().lint_with_project_config_and_path(
+            &result.ast,
+            source,
+            &config,
+            "fixture.svelte",
+        );
+
+        assert!(
+            diags.iter().any(|d| d.rule_name == "svelte/button-has-type"
+                && d.message.contains("forbidden value")),
+            "project config options should be visible to rule implementations"
+        );
+    }
+
     #[test]
     fn linter_no_target_blank_valid() {
         run_linter_valid("no-target-blank");
