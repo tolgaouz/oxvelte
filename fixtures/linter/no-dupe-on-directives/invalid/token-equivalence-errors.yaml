@@ -1,0 +1,8 @@
+- message: Duplicate on directive 'on:click'.
+  line: 5
+  column: 9
+  suggestions: null
+- message: Duplicate on directive 'on:click'.
+  line: 5
+  column: 24
+  suggestions: null

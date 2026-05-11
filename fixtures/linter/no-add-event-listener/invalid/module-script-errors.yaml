@@ -1,0 +1,4 @@
+- message: Do not use `addEventListener`. Use the `on` function from `svelte/events` instead.
+  line: 4
+  column: 9
+  suggestions: null

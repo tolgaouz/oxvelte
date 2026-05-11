@@ -1,0 +1,8 @@
+- message: Duplicate use directive 'use:foo'.
+  line: 1
+  column: 6
+  suggestions: null
+- message: Duplicate use directive 'use:foo'.
+  line: 1
+  column: 26
+  suggestions: null

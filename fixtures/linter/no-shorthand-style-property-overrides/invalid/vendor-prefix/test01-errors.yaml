@@ -1,0 +1,4 @@
+- message: Unexpected shorthand '-webkit-border-color' after '-webkit-border-top-color'.
+  line: 1
+  column: 45
+  suggestions: null

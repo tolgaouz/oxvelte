@@ -1,0 +1,4 @@
+- message: Unexpected unknown style directive property '-foo-unknown'.
+  line: 5
+  column: 12
+  suggestions: null

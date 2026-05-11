@@ -1,0 +1,4 @@
+- message: Ignoring returned value of the subscribe method is forbidden.
+  line: 2
+  column: 2
+  suggestions: null
