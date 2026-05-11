@@ -25,6 +25,10 @@ impl Rule for NoNavigationWithoutResolve {
         true
     }
 
+    fn applies_to_scripts(&self) -> bool {
+        true
+    }
+
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         let opts = ctx
             .config

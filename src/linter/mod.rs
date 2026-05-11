@@ -288,10 +288,28 @@ impl Linter {
         config: &crate::config::OxvelteConfig,
         file_path: &str,
     ) -> Vec<LintDiagnostic> {
+        let is_ts = is_ts_like_path(file_path);
         self.lint_synthetic_script(
             source,
-            false,
+            is_ts,
             RuleConfigSource::Project(config),
+            Some(file_path.to_string()),
+            ScriptMode::ScriptOnly,
+            false,
+        )
+    }
+
+    pub fn lint_script_with_config_and_path(
+        &self,
+        source: &str,
+        config: RuleConfig,
+        file_path: &str,
+    ) -> Vec<LintDiagnostic> {
+        let is_ts = is_ts_like_path(file_path);
+        self.lint_synthetic_script(
+            source,
+            is_ts,
+            RuleConfigSource::Fixed(config),
             Some(file_path.to_string()),
             ScriptMode::ScriptOnly,
             false,
@@ -338,6 +356,23 @@ impl Linter {
             source,
             is_ts,
             RuleConfigSource::Project(config),
+            Some(file_path.to_string()),
+            ScriptMode::SvelteModule,
+            true,
+        )
+    }
+
+    pub fn lint_svelte_script_with_config_and_path(
+        &self,
+        source: &str,
+        is_ts: bool,
+        config: RuleConfig,
+        file_path: &str,
+    ) -> Vec<LintDiagnostic> {
+        self.lint_synthetic_script(
+            source,
+            is_ts,
+            RuleConfigSource::Fixed(config),
             Some(file_path.to_string()),
             ScriptMode::SvelteModule,
             true,
@@ -477,7 +512,7 @@ impl Linter {
             .instance
             .as_ref()
             .map(|s| {
-                if is_svelte_module {
+                if is_svelte_module || matches!(script_mode, ScriptMode::ScriptOnly) {
                     s.span.start
                 } else {
                     script_content_offset(s, source)
@@ -587,6 +622,10 @@ enum ScriptMode {
     ScriptOnly,
     /// `.svelte.js`/`.svelte.ts` module — run `applies_to_scripts` or `applies_to_svelte_scripts`.
     SvelteModule,
+}
+
+fn is_ts_like_path(file_path: &str) -> bool {
+    file_path.ends_with(".ts") || file_path.ends_with(".mts")
 }
 
 /// Byte offset in the original source where a `<script ...>` block's content starts

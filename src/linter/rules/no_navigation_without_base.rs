@@ -39,6 +39,10 @@ impl Rule for NoNavigationWithoutBase {
         "svelte/no-navigation-without-base"
     }
 
+    fn applies_to_scripts(&self) -> bool {
+        true
+    }
+
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         let opts = ctx
             .config

@@ -9,7 +9,7 @@ pub mod custom_rules;
 #[cfg(test)]
 mod linter_fixture_tests {
     use crate::config::OxvelteConfig;
-    use crate::linter::{Linter, RuleConfig};
+    use crate::linter::{LintDiagnostic, Linter, RuleConfig};
     use crate::parser;
 
     /// Load the rule config for a specific fixture file.
@@ -82,7 +82,7 @@ mod linter_fixture_tests {
                         walk(&path, files);
                     } else {
                         let fname = path.file_name().unwrap().to_string_lossy().to_string();
-                        if fname.ends_with("-input.svelte") {
+                        if is_linter_fixture_file(&fname) {
                             files.push(path);
                         }
                     }
@@ -94,6 +94,47 @@ mod linter_fixture_tests {
         files
     }
 
+    fn is_linter_fixture_file(fname: &str) -> bool {
+        fname.ends_with("-input.svelte")
+            || fname.ends_with("-input.js")
+            || fname.ends_with("-input.ts")
+            || is_sveltekit_route_script(fname)
+    }
+
+    fn is_sveltekit_route_script(fname: &str) -> bool {
+        matches!(
+            fname,
+            "+page.js"
+                | "+page.ts"
+                | "+page.server.js"
+                | "+page.server.ts"
+                | "+layout.js"
+                | "+layout.ts"
+                | "+layout.server.js"
+                | "+layout.server.ts"
+                | "+server.js"
+                | "+server.ts"
+        )
+    }
+
+    fn lint_fixture_file(
+        lint: &Linter,
+        source: &str,
+        config: RuleConfig,
+        file_path: &str,
+    ) -> Vec<LintDiagnostic> {
+        if file_path.ends_with(".svelte") {
+            let alloc = oxc::allocator::Allocator::default();
+            let result = parser::parse(source, &alloc);
+            lint.lint_with_config_and_path(&result.ast, source, config, file_path)
+        } else if file_path.ends_with(".svelte.js") || file_path.ends_with(".svelte.ts") {
+            let is_ts = file_path.ends_with(".ts");
+            lint.lint_svelte_script_with_config_and_path(source, is_ts, config, file_path)
+        } else {
+            lint.lint_script_with_config_and_path(source, config, file_path)
+        }
+    }
+
     fn run_linter_valid(rule_name: &str) {
         let valid_dir = format!("fixtures/linter/{}/valid", rule_name);
         let lint = Linter::all();
@@ -101,13 +142,10 @@ mod linter_fixture_tests {
         for path in files {
             let fname = path.file_name().unwrap().to_string_lossy().to_string();
             let source = std::fs::read_to_string(&path).unwrap();
-            let alloc = oxc::allocator::Allocator::default();
-            let result = parser::parse(&source, &alloc);
             let parent_dir = path.parent().unwrap().to_string_lossy().to_string();
             let config = load_config(&parent_dir, &fname);
             let file_path_str = path.to_string_lossy().to_string();
-            let diags =
-                lint.lint_with_config_and_path(&result.ast, &source, config, &file_path_str);
+            let diags = lint_fixture_file(&lint, &source, config, &file_path_str);
             let rule_diags: Vec<_> = diags
                 .iter()
                 .filter(|d| d.rule_name == format!("svelte/{}", rule_name))
@@ -129,13 +167,10 @@ mod linter_fixture_tests {
         for path in files {
             let fname = path.file_name().unwrap().to_string_lossy().to_string();
             let source = std::fs::read_to_string(&path).unwrap();
-            let alloc = oxc::allocator::Allocator::default();
-            let result = parser::parse(&source, &alloc);
             let parent_dir = path.parent().unwrap().to_string_lossy().to_string();
             let config = load_config(&parent_dir, &fname);
             let file_path_str = path.to_string_lossy().to_string();
-            let diags =
-                lint.lint_with_config_and_path(&result.ast, &source, config, &file_path_str);
+            let diags = lint_fixture_file(&lint, &source, config, &file_path_str);
             let rule_diags: Vec<_> = diags
                 .iter()
                 .filter(|d| d.rule_name == format!("svelte/{}", rule_name))
@@ -152,8 +187,6 @@ mod linter_fixture_tests {
     fn run_linter_invalid_fixture(rule_name: &str, path: &str) {
         let lint = Linter::all();
         let source = std::fs::read_to_string(path).unwrap();
-        let alloc = oxc::allocator::Allocator::default();
-        let result = parser::parse(&source, &alloc);
         let parent_dir = std::path::Path::new(path)
             .parent()
             .unwrap()
@@ -165,7 +198,7 @@ mod linter_fixture_tests {
             .to_string_lossy()
             .to_string();
         let config = load_config(&parent_dir, &fname);
-        let diags = lint.lint_with_config_and_path(&result.ast, &source, config, path);
+        let diags = lint_fixture_file(&lint, &source, config, path);
         let rule_diags: Vec<_> = diags
             .iter()
             .filter(|d| d.rule_name == format!("svelte/{}", rule_name))

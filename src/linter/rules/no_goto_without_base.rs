@@ -12,6 +12,10 @@ impl Rule for NoGotoWithoutBase {
         "svelte/no-goto-without-base"
     }
 
+    fn applies_to_scripts(&self) -> bool {
+        true
+    }
+
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
         let Some(semantic) = ctx.instance_semantic else {
             return;
