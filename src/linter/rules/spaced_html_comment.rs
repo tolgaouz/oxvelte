@@ -37,27 +37,39 @@ impl Rule for SpacedHtmlComment {
             let s = comment.span;
 
             if mode_never {
-                if data.starts_with(' ') || data.starts_with('\t') {
+                let leading_len = data
+                    .chars()
+                    .take_while(|ch| matches!(ch, ' ' | '\t'))
+                    .map(char::len_utf8)
+                    .sum::<usize>();
+                if leading_len > 0 {
                     ctx.diagnostic_with_fix(
                         "Unexpected space or tab after '<!--' in comment.",
                         s,
                         Fix {
-                            span: Span::new(s.start + 4, s.start + 5),
+                            span: Span::new(s.start + 4, s.start + 4 + leading_len as u32),
                             replacement: String::new(),
                         },
                     );
                 }
-                let trailing = (data.ends_with(' ') || data.ends_with('\t'))
-                    && !data
-                        .rfind('\n')
-                        .map(|p| data[p + 1..].chars().all(|c| c == ' ' || c == '\t'))
-                        .unwrap_or(false);
-                if trailing {
+                let trailing_len = data
+                    .chars()
+                    .rev()
+                    .take_while(|ch| matches!(ch, ' ' | '\t'))
+                    .map(char::len_utf8)
+                    .sum::<usize>();
+                let trailing_start = data.len().saturating_sub(trailing_len);
+                let trailing_is_after_content = trailing_len > 0
+                    && data[..trailing_start]
+                        .chars()
+                        .last()
+                        .is_some_and(|ch| !ch.is_whitespace());
+                if trailing_is_after_content {
                     ctx.diagnostic_with_fix(
                         "Unexpected space or tab before '-->' in comment.",
                         s,
                         Fix {
-                            span: Span::new(s.end - 4, s.end - 3),
+                            span: Span::new(s.end - 3 - trailing_len as u32, s.end - 3),
                             replacement: String::new(),
                         },
                     );

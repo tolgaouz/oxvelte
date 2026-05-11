@@ -114,7 +114,9 @@ fn populate_attribute_expression_asts<'a>(
             match node {
                 TemplateNode::Element(el) => {
                     for (idx, attr) in el.attributes.iter().enumerate() {
-                        let Some(meta) = el.attribute_meta.get_mut(idx) else { continue };
+                        let Some(meta) = el.attribute_meta.get_mut(idx) else {
+                            continue;
+                        };
                         let expr_text = match attr {
                             Attribute::NormalAttribute {
                                 value: AttributeValue::Expression(s),

@@ -32,8 +32,20 @@ pub struct SvelteAst<'a> {
 pub struct Fragment<'a> {
     pub nodes: Vec<TemplateNode<'a>>,
     pub span: Span,
+    /// Template block/control tag spans (`{#if ...}`, `{:else}`, `{/if}`, …)
+    /// collected by the parser. These are skipped from serialization because
+    /// they are linter metadata, not part of the public Svelte AST shape.
+    #[serde(skip)]
+    pub template_tag_spans: Vec<TemplateTagSpan>,
     #[serde(skip)]
     pub _phantom: PhantomData<&'a ()>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TemplateTagSpan {
+    pub span: Span,
+    pub has_expression: bool,
+    pub check_closing: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -250,11 +262,24 @@ pub enum AttributeValuePart {
     Expression(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttributeQuote {
+    Double,
+    Single,
+}
+
 #[derive(Debug, Clone)]
 pub struct AttributeMeta<'a> {
     pub name_span: Span,
     pub directive_subject_span: Option<Span>,
     pub value_span: Option<Span>,
+    /// Full value token span, including surrounding quotes for quoted values
+    /// and surrounding braces for single mustache expression values.
+    pub value_full_span: Option<Span>,
+    pub quote: Option<AttributeQuote>,
+    /// Span from the end of the attribute/directive key through the first
+    /// byte of the value token. For `foo = "bar"`, this covers ` = `.
+    pub equals_span: Option<Span>,
     pub expression_span: Option<Span>,
     pub mustache_span: Option<Span>,
     /// Typed AST for the attribute's expression value. Populated when the

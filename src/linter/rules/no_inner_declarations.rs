@@ -97,7 +97,13 @@ impl Rule for NoInnerDeclarations {
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first())
             .and_then(|v| v.as_str())
-            .map(|s| if s == "both" { Mode::Both } else { Mode::Functions })
+            .map(|s| {
+                if s == "both" {
+                    Mode::Both
+                } else {
+                    Mode::Functions
+                }
+            })
             .unwrap_or(Mode::Functions);
 
         // We collect (message, span) before reporting because `ctx.diagnostic`
@@ -106,7 +112,8 @@ impl Rule for NoInnerDeclarations {
         let mut findings: Vec<(String, Span)> = Vec::new();
 
         for (semantic, content_offset) in [
-            ctx.instance_semantic.map(|s| (s, ctx.instance_content_offset)),
+            ctx.instance_semantic
+                .map(|s| (s, ctx.instance_content_offset)),
             ctx.module_semantic.map(|s| (s, ctx.module_content_offset)),
         ]
         .into_iter()

@@ -32,7 +32,9 @@ impl Rule for NoNotFunctionHandler {
                         kind: DirectiveKind::EventHandler,
                         ..
                     } => {
-                        let Some(expr) = el.attribute_expression_ast(idx) else { continue };
+                        let Some(expr) = el.attribute_expression_ast(idx) else {
+                            continue;
+                        };
                         check_handler(expr, ctx, &mut findings, attr_value_span(attr));
                     }
                     // `onclick={…}` Svelte-5 / HTML on-attribute. Restricted to
@@ -40,7 +42,9 @@ impl Rule for NoNotFunctionHandler {
                     Attribute::NormalAttribute { name, value, .. } if is_event_name(name) => {
                         match value {
                             AttributeValue::Expression(_) => {
-                                let Some(expr) = el.attribute_expression_ast(idx) else { continue };
+                                let Some(expr) = el.attribute_expression_ast(idx) else {
+                                    continue;
+                                };
                                 check_handler(expr, ctx, &mut findings, attr_value_span(attr));
                             }
                             AttributeValue::Concat(parts) => {
@@ -75,21 +79,128 @@ impl Rule for NoNotFunctionHandler {
     }
 }
 
-/// True for any HTML event-handler attribute name. Mirrors the shape of
-/// vendor's `EVENT_NAMES` table without enumerating the full ~370-entry
-/// list: matches `on[lowercase][a-z0-9]*`. `oncology` (a non-event
-/// camelCase noun) doesn't survive because the `[2..]` portion has to be
-/// purely alphanumeric *and* start with a lowercase ASCII letter — covers
-/// the real event surface tightly enough for a linter.
+const EVENT_BASE_NAMES: &[&str] = &[
+    "abort",
+    "animationend",
+    "animationiteration",
+    "animationstart",
+    "auxclick",
+    "beforeinput",
+    "beforematch",
+    "beforetoggle",
+    "blur",
+    "cancel",
+    "canplay",
+    "canplaythrough",
+    "change",
+    "click",
+    "close",
+    "compositionend",
+    "compositionstart",
+    "compositionupdate",
+    "contentvisibilityautostatechange",
+    "contextmenu",
+    "copy",
+    "cuechange",
+    "cut",
+    "dblclick",
+    "drag",
+    "dragend",
+    "dragenter",
+    "dragexit",
+    "dragleave",
+    "dragover",
+    "dragstart",
+    "drop",
+    "durationchange",
+    "emptied",
+    "encrypted",
+    "ended",
+    "error",
+    "focus",
+    "focusin",
+    "focusout",
+    "formdata",
+    "fullscreenchange",
+    "fullscreenerror",
+    "gamepadconnected",
+    "gamepaddisconnected",
+    "gotpointer",
+    "gotpointercapture",
+    "input",
+    "introend",
+    "introstart",
+    "invalid",
+    "keydown",
+    "keypress",
+    "keyup",
+    "load",
+    "loadeddata",
+    "loadedmetadata",
+    "loadstart",
+    "lostpointer",
+    "lostpointercapture",
+    "message",
+    "messageerror",
+    "mousedown",
+    "mouseenter",
+    "mouseleave",
+    "mousemove",
+    "mouseout",
+    "mouseover",
+    "mouseup",
+    "outroend",
+    "outrostart",
+    "paste",
+    "pause",
+    "play",
+    "playing",
+    "pointercancel",
+    "pointerdown",
+    "pointerenter",
+    "pointerleave",
+    "pointermove",
+    "pointerout",
+    "pointerover",
+    "pointerup",
+    "progress",
+    "ratechange",
+    "reset",
+    "resize",
+    "scroll",
+    "scrollend",
+    "seeked",
+    "seeking",
+    "select",
+    "selectionchange",
+    "selectstart",
+    "stalled",
+    "submit",
+    "suspend",
+    "timeupdate",
+    "toggle",
+    "touchcancel",
+    "touchend",
+    "touchmove",
+    "touchstart",
+    "transitioncancel",
+    "transitionend",
+    "transitionrun",
+    "transitionstart",
+    "visibilitychange",
+    "volumechange",
+    "waiting",
+    "wheel",
+];
+
+/// True for Svelte 5 event-handler attributes from vendor's `EVENT_NAMES`
+/// table: `on${event}` and `on${event}capture`.
 fn is_event_name(name: &str) -> bool {
-    let bytes = name.as_bytes();
-    if bytes.len() < 3 || &bytes[..2] != b"on" {
+    let Some(rest) = name.strip_prefix("on") else {
         return false;
-    }
-    if !bytes[2].is_ascii_lowercase() {
-        return false;
-    }
-    bytes[2..].iter().all(|b| b.is_ascii_alphanumeric())
+    };
+    let base = rest.strip_suffix("capture").unwrap_or(rest);
+    EVENT_BASE_NAMES.contains(&base)
 }
 
 fn attr_value_span(attr: &Attribute) -> Span {

@@ -76,6 +76,10 @@ pub struct LintContext<'a> {
     /// is `true`. When no rune calls are found, this stays `false` — mirroring
     /// vendor's `undetermined` bucket, which runs both legacy and runes rules.
     pub is_runes: bool,
+    /// True when the root `<svelte:options>` explicitly sets `runes={false}`.
+    /// This is distinct from the undetermined state, because some vendor rules
+    /// run for `runes: [true, 'undetermined']` but not explicit false.
+    pub runes_explicit_false: bool,
     /// Svelte package version/range found in the nearest `package.json` that
     /// declares a `svelte` dependency. This is the shared signal for upstream
     /// `meta.conditions.svelteVersions` style gates.
@@ -97,6 +101,7 @@ impl<'a> LintContext<'a> {
             instance_content_offset: 0,
             module_content_offset: 0,
             is_runes: false,
+            runes_explicit_false: false,
             svelte_version: SvelteVersionInfo::default(),
             diagnostics: Vec::new(),
             current_rule: "",
@@ -115,6 +120,7 @@ impl<'a> LintContext<'a> {
             instance_content_offset: 0,
             module_content_offset: 0,
             is_runes: false,
+            runes_explicit_false: false,
             svelte_version: SvelteVersionInfo::default(),
             diagnostics: Vec::new(),
             current_rule: "",
@@ -355,6 +361,7 @@ impl Linter {
             html: Fragment {
                 nodes: vec![],
                 span: oxc::span::Span::new(0, 0),
+                template_tag_spans: Vec::new(),
                 _phantom: PhantomData,
             },
             instance: Some(Script {
@@ -524,7 +531,9 @@ impl Linter {
             .as_ref()
             .map(|p| SemanticBuilder::new().build(&p.program).semantic);
 
-        let is_runes = instance_semantic.as_ref().is_some_and(detect_runes)
+        let runes_option = detect_runes_option(&ast.html);
+        let is_runes = runes_option == Some(true)
+            || instance_semantic.as_ref().is_some_and(detect_runes)
             || module_semantic.as_ref().is_some_and(detect_runes);
         let svelte_version = svelte_version_info_for_file(file_path.as_deref());
 
@@ -536,8 +545,11 @@ impl Linter {
         ctx.instance_content_offset = instance_offset;
         ctx.module_content_offset = module_offset;
         ctx.is_runes = is_runes;
+        ctx.runes_explicit_false = runes_option == Some(false);
         ctx.svelte_version = svelte_version;
 
+        let mut report_unused_svelte_ignore = false;
+        let mut active_rule_names = Vec::new();
         for rule in &self.rules {
             let include = match script_mode {
                 ScriptMode::Full => true,
@@ -549,11 +561,20 @@ impl Linter {
             if !include {
                 continue;
             }
+            if rule.name() == "svelte/no-unused-svelte-ignore" {
+                report_unused_svelte_ignore = true;
+            }
+            active_rule_names.push(rule.name());
             ctx.set_rule(rule.name());
             ctx.config = config.for_rule(rule.name());
             rule.run(&mut ctx);
         }
-        filter_suppressed(ctx.into_diagnostics(), source)
+        filter_suppressed(
+            ctx.into_diagnostics(),
+            source,
+            report_unused_svelte_ignore,
+            &active_rule_names,
+        )
     }
 }
 
@@ -612,6 +633,53 @@ fn detect_runes(semantic: &oxc::semantic::Semantic) -> bool {
         }
     }
     false
+}
+
+fn detect_runes_option(fragment: &Fragment<'_>) -> Option<bool> {
+    let mut found = None;
+    walk_template_nodes(fragment, &mut |node| {
+        if found.is_some() {
+            return;
+        }
+        let TemplateNode::Element(el) = node else {
+            return;
+        };
+        if el.kind() != ElementKind::SvelteSpecial(SvelteSpecial::Options) {
+            return;
+        }
+        for attr in &el.attributes {
+            let Attribute::NormalAttribute { name, value, .. } = attr else {
+                continue;
+            };
+            if name == "runes" {
+                found = attribute_bool_value(value);
+                return;
+            }
+        }
+    });
+
+    found
+}
+
+fn attribute_bool_value(value: &AttributeValue) -> Option<bool> {
+    match value {
+        AttributeValue::True => Some(true),
+        AttributeValue::Static(value) | AttributeValue::Expression(value) => {
+            bool_literal_value(value.trim())
+        }
+        AttributeValue::Concat(parts) => match parts.as_slice() {
+            [AttributeValuePart::Expression(value)] => bool_literal_value(value.trim()),
+            _ => None,
+        },
+    }
+}
+
+fn bool_literal_value(value: &str) -> Option<bool> {
+    match value {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
 }
 
 fn svelte_version_info_for_file(file_path: Option<&str>) -> SvelteVersionInfo {
@@ -787,7 +855,12 @@ enum Directive {
     /// Re-enable rules.
     EnableBlock { line: usize, rules: Vec<String> },
     /// Disable rules on the next line only.
-    DisableNextLine { line: usize, rules: Vec<String> },
+    DisableNextLine {
+        line: usize,
+        rules: Vec<String>,
+        span: Span,
+        svelte_ignore: bool,
+    },
     /// Disable rules on this line only.
     DisableLine { line: usize, rules: Vec<String> },
 }
@@ -795,9 +868,14 @@ enum Directive {
 /// Parse all ignore directives from source text.
 fn parse_directives(source: &str) -> Vec<Directive> {
     let mut directives = Vec::new();
+    let mut line_start = 0usize;
 
     for (line_idx, line) in source.lines().enumerate() {
         let trimmed = line.trim();
+        let trimmed_start = line.len() - line.trim_start().len();
+        let trimmed_abs_start = line_start + trimmed_start;
+        let trimmed_abs_end = trimmed_abs_start + trimmed.len();
+        let trimmed_span = Span::new(trimmed_abs_start as u32, trimmed_abs_end as u32);
 
         // --- HTML comments: <!-- svelte-ignore ... --> or <!-- eslint-disable-next-line ... -->
         if let Some(inner) = extract_html_comment(trimmed) {
@@ -810,8 +888,11 @@ fn parse_directives(source: &str) -> Vec<Directive> {
                     directives.push(Directive::DisableNextLine {
                         line: line_idx,
                         rules,
+                        span: trimmed_span,
+                        svelte_ignore: true,
                     });
                 }
+                line_start += line.len() + 1;
                 continue;
             }
 
@@ -828,6 +909,8 @@ fn parse_directives(source: &str) -> Vec<Directive> {
                     directives.push(Directive::DisableNextLine {
                         line: line_idx,
                         rules,
+                        span: trimmed_span,
+                        svelte_ignore: false,
                     });
                 }
             }
@@ -861,11 +944,12 @@ fn parse_directives(source: &str) -> Vec<Directive> {
                     }
                 }
             }
+            line_start += line.len() + 1;
             continue;
         }
 
         // --- JS line comments: // eslint-disable-next-line ...
-        if let Some(comment) = extract_js_line_comment(line) {
+        if let Some((comment, comment_span)) = extract_js_line_comment(line, line_start) {
             let comment = comment.trim();
 
             // // svelte-ignore rule1 rule2
@@ -875,8 +959,11 @@ fn parse_directives(source: &str) -> Vec<Directive> {
                     directives.push(Directive::DisableNextLine {
                         line: line_idx,
                         rules,
+                        span: comment_span,
+                        svelte_ignore: true,
                     });
                 }
+                line_start += line.len() + 1;
                 continue;
             }
 
@@ -889,6 +976,8 @@ fn parse_directives(source: &str) -> Vec<Directive> {
                     directives.push(Directive::DisableNextLine {
                         line: line_idx,
                         rules,
+                        span: comment_span,
+                        svelte_ignore: false,
                     });
                 } else if let Some(rest) = comment.strip_prefix(dl.as_str()) {
                     let rules = parse_rule_list(rest.trim());
@@ -931,6 +1020,7 @@ fn parse_directives(source: &str) -> Vec<Directive> {
                 }
             }
         }
+        line_start += line.len() + 1;
     }
 
     directives
@@ -944,10 +1034,11 @@ fn extract_html_comment(s: &str) -> Option<&str> {
 }
 
 /// Extract content from `// ...` (the first `//` in the line).
-fn extract_js_line_comment(line: &str) -> Option<&str> {
+fn extract_js_line_comment(line: &str, line_start: usize) -> Option<(&str, Span)> {
     // Find // that's not inside a string — simplified: just find the first //
     let pos = line.find("//")?;
-    Some(&line[pos + 2..])
+    let span = Span::new((line_start + pos) as u32, (line_start + line.len()) as u32);
+    Some((&line[pos + 2..], span))
 }
 
 /// Extract content from `/* ... */`.
@@ -1016,8 +1107,13 @@ fn rule_matches(rule_name: &str, directive_rules: &[String]) -> bool {
 }
 
 /// Filter diagnostics by removing any suppressed by ignore comments.
-fn filter_suppressed(diagnostics: Vec<LintDiagnostic>, source: &str) -> Vec<LintDiagnostic> {
-    if diagnostics.is_empty() {
+fn filter_suppressed(
+    diagnostics: Vec<LintDiagnostic>,
+    source: &str,
+    report_unused_svelte_ignore: bool,
+    active_rule_names: &[&'static str],
+) -> Vec<LintDiagnostic> {
+    if diagnostics.is_empty() && !report_unused_svelte_ignore {
         return diagnostics;
     }
 
@@ -1043,51 +1139,98 @@ fn filter_suppressed(diagnostics: Vec<LintDiagnostic>, source: &str) -> Vec<Lint
             .saturating_sub(1)
     };
 
-    diagnostics
-        .into_iter()
-        .filter(|diag| {
-            let diag_line = span_to_line(diag.span.start);
+    let mut used_directives = vec![false; directives.len()];
+    let mut kept = Vec::new();
 
-            for dir in &directives {
-                match dir {
-                    Directive::DisableNextLine { line, rules } => {
-                        if diag_line == line + 1 && rule_matches(diag.rule_name, rules) {
-                            return false;
-                        }
+    for diag in diagnostics {
+        let diag_line = span_to_line(diag.span.start);
+        let mut suppressed_by: Option<usize> = None;
+
+        for (idx, dir) in directives.iter().enumerate() {
+            match dir {
+                Directive::DisableNextLine { line, rules, .. } => {
+                    if diag_line == line + 1 && rule_matches(diag.rule_name, rules) {
+                        suppressed_by = Some(idx);
+                        break;
                     }
-                    Directive::DisableLine { line, rules } => {
-                        if diag_line == *line && rule_matches(diag.rule_name, rules) {
-                            return false;
-                        }
-                    }
-                    Directive::DisableBlock { line, rules } => {
-                        if diag_line >= *line && rule_matches(diag.rule_name, rules) {
-                            // Check if re-enabled before this diagnostic
-                            let re_enabled = directives.iter().any(|d| {
-                                if let Directive::EnableBlock {
-                                    line: enable_line,
-                                    rules: enable_rules,
-                                } = d
-                                {
-                                    *enable_line > *line
-                                        && *enable_line <= diag_line
-                                        && (enable_rules.is_empty()
-                                            || rules.iter().all(|r| enable_rules.contains(r)))
-                                } else {
-                                    false
-                                }
-                            });
-                            if !re_enabled {
-                                return false;
-                            }
-                        }
-                    }
-                    Directive::EnableBlock { .. } => {} // handled inside DisableBlock
                 }
+                Directive::DisableLine { line, rules, .. } => {
+                    if diag_line == *line && rule_matches(diag.rule_name, rules) {
+                        suppressed_by = Some(idx);
+                        break;
+                    }
+                }
+                Directive::DisableBlock { line, rules, .. } => {
+                    if diag_line >= *line && rule_matches(diag.rule_name, rules) {
+                        // Check if re-enabled before this diagnostic
+                        let re_enabled = directives.iter().any(|d| {
+                            if let Directive::EnableBlock {
+                                line: enable_line,
+                                rules: enable_rules,
+                            } = d
+                            {
+                                *enable_line > *line
+                                    && *enable_line <= diag_line
+                                    && (enable_rules.is_empty()
+                                        || rules.iter().all(|r| enable_rules.contains(r)))
+                            } else {
+                                false
+                            }
+                        });
+                        if !re_enabled {
+                            suppressed_by = Some(idx);
+                            break;
+                        }
+                    }
+                }
+                Directive::EnableBlock { .. } => {} // handled inside DisableBlock
             }
-            true
-        })
-        .collect()
+        }
+
+        if let Some(idx) = suppressed_by {
+            used_directives[idx] = true;
+        } else {
+            kept.push(diag);
+        }
+    }
+
+    if report_unused_svelte_ignore {
+        for (idx, dir) in directives.iter().enumerate() {
+            if used_directives[idx] {
+                continue;
+            }
+            let Directive::DisableNextLine {
+                span,
+                rules,
+                svelte_ignore: true,
+                ..
+            } = dir
+            else {
+                continue;
+            };
+            if !directive_targets_active_rule(rules, active_rule_names) {
+                continue;
+            }
+            kept.push(LintDiagnostic {
+                rule_name: "svelte/no-unused-svelte-ignore",
+                message: "svelte-ignore comment is used, but not warned".to_string(),
+                span: *span,
+                fix: None,
+            });
+        }
+    }
+
+    kept
+}
+
+fn directive_targets_active_rule(
+    directive_rules: &[String],
+    active_rule_names: &[&'static str],
+) -> bool {
+    !directive_rules.is_empty()
+        && active_rule_names
+            .iter()
+            .any(|rule_name| rule_matches(rule_name, directive_rules))
 }
 
 /// Walk all template nodes recursively, calling visitor on each.

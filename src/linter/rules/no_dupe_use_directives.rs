@@ -2,6 +2,7 @@
 //! ⭐ Recommended
 
 use crate::ast::{Attribute, DirectiveKind, TemplateNode};
+use crate::linter::rules::directive_expression_key;
 use crate::linter::{walk_template_nodes, LintContext, Rule};
 
 pub struct NoDupeUseDirectives;
@@ -26,15 +27,12 @@ impl Rule for NoDupeUseDirectives {
                 if let Attribute::Directive {
                     kind: DirectiveKind::Use,
                     name,
+                    value,
                     span,
                     ..
                 } = attr
                 {
-                    let text = &ctx.source[span.start as usize..span.end as usize];
-                    let expr = text
-                        .find('=')
-                        .map(|p| text[p + 1..].trim().to_string())
-                        .unwrap_or_default();
+                    let expr = directive_expression_key(value);
                     groups.entry(name.clone()).or_default().push((expr, *span));
                 }
             }

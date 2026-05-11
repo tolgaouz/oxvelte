@@ -65,8 +65,7 @@ fn class_is_in_iteration_or_component(html: &[TemplateNode], class_name: &str) -
                     Attribute::NormalAttribute { name, value: AttributeValue::Static(val), .. }
                     if name == "class" && val.split_whitespace().any(|c| c == cn))
                 });
-                (has && iter)
-                    || check(&el.children, cn, iter || el.kind().is_component())
+                (has && iter) || check(&el.children, cn, iter || el.kind().is_component())
             }
             TemplateNode::EachBlock(each) => {
                 check(&each.body.nodes, cn, true)

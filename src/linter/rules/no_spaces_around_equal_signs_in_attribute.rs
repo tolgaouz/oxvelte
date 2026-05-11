@@ -2,7 +2,7 @@
 //! 🔧 Fixable
 
 use crate::ast::{Attribute, TemplateNode};
-use crate::linter::{walk_template_nodes, LintContext, Rule};
+use crate::linter::{walk_template_nodes, Fix, LintContext, Rule};
 
 pub struct NoSpacesAroundEqualSignsInAttribute;
 
@@ -19,20 +19,23 @@ impl Rule for NoSpacesAroundEqualSignsInAttribute {
             let TemplateNode::Element(el) = node else {
                 return;
             };
-            for attr in &el.attributes {
-                let span = match attr {
-                    Attribute::NormalAttribute { span, .. } | Attribute::Directive { span, .. } => {
-                        *span
-                    }
+            for (attr, meta) in el.attributes.iter().zip(&el.attribute_meta) {
+                match attr {
+                    Attribute::NormalAttribute { .. } | Attribute::Directive { .. } => {}
                     Attribute::Spread { .. } => continue,
+                }
+                let Some(eq_span) = meta.equals_span else {
+                    continue;
                 };
-                let text = &ctx.source[span.start as usize..span.end as usize];
-                if let Some(eq) = text.find('=') {
-                    if text[..eq].ends_with(|c: char| c.is_whitespace())
-                        || text[eq + 1..].starts_with(|c: char| c.is_whitespace())
-                    {
-                        ctx.diagnostic("Unexpected spaces found around equal signs.", span);
-                    }
+                if eq_span.end.saturating_sub(eq_span.start) > 1 {
+                    ctx.diagnostic_with_fix(
+                        "Unexpected spaces found around equal signs.",
+                        eq_span,
+                        Fix {
+                            span: eq_span,
+                            replacement: "=".to_string(),
+                        },
+                    );
                 }
             }
         });

@@ -3,6 +3,62 @@
 
 use crate::ast::{Attribute, DirectiveKind, TemplateNode};
 use crate::linter::{walk_template_nodes, LintContext, Rule};
+use regex::{Regex, RegexBuilder};
+use rustc_hash::FxHashSet;
+use std::sync::OnceLock;
+
+enum IgnorePattern {
+    Exact(String),
+    Regex(Regex),
+}
+
+impl IgnorePattern {
+    fn from_config(value: &str) -> Self {
+        if let Some((pattern, flags)) = parse_regex_literal(value) {
+            let mut builder = RegexBuilder::new(pattern);
+            builder.case_insensitive(flags.contains('i'));
+            builder.multi_line(flags.contains('m'));
+            builder.dot_matches_new_line(flags.contains('s'));
+            if let Ok(regex) = builder.build() {
+                return Self::Regex(regex);
+            }
+        }
+        Self::Exact(value.to_string())
+    }
+
+    fn is_match(&self, prop: &str) -> bool {
+        match self {
+            Self::Exact(expected) => prop == expected,
+            Self::Regex(regex) => regex.is_match(prop),
+        }
+    }
+}
+
+fn parse_regex_literal(value: &str) -> Option<(&str, &str)> {
+    if !value.starts_with('/') {
+        return None;
+    }
+    let end = value.rfind('/')?;
+    if end == 0 {
+        return None;
+    }
+    Some((&value[1..end], &value[end + 1..]))
+}
+
+#[derive(serde::Deserialize)]
+struct KnownCssProperties {
+    properties: Vec<String>,
+}
+
+fn known_css_properties() -> &'static FxHashSet<String> {
+    static PROPERTIES: OnceLock<FxHashSet<String>> = OnceLock::new();
+    PROPERTIES.get_or_init(|| {
+        let data: KnownCssProperties =
+            serde_json::from_str(include_str!("known_css_properties_0_37_0.json"))
+                .expect("known-css-properties 0.37.0 data should be valid JSON");
+        data.properties.into_iter().collect()
+    })
+}
 
 const KNOWN_CSS_PROPERTIES: &[&str] = &[
     "accent-color",
@@ -343,20 +399,37 @@ const KNOWN_CSS_PROPERTIES: &[&str] = &[
     "zoom",
 ];
 
-fn is_property_ignored(prop: &str, ignore_list: &[String]) -> bool {
-    ignore_list.iter().any(|pat| {
-        if let Some(re) = pat.strip_prefix('/').and_then(|s| s.strip_suffix('/')) {
-            if let Some(p) = re.strip_prefix('^') {
-                p.strip_suffix('$')
-                    .map_or_else(|| prop.starts_with(p), |exact| prop == exact)
-            } else {
-                re.strip_suffix('$')
-                    .map_or_else(|| prop.contains(re), |s| prop.ends_with(s))
-            }
-        } else {
-            prop == pat
-        }
-    })
+fn is_property_ignored(prop: &str, ignore_list: &[IgnorePattern]) -> bool {
+    ignore_list.iter().any(|pat| pat.is_match(prop))
+}
+
+fn vendor_prefix(prop: &str) -> Option<&str> {
+    let bytes = prop.as_bytes();
+    if bytes.first() != Some(&b'-') {
+        return None;
+    }
+    let mut end = 1;
+    while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+        end += 1;
+    }
+    if end > 1 && bytes.get(end) == Some(&b'-') {
+        Some(&prop[..=end])
+    } else {
+        None
+    }
+}
+
+fn known_property(prop: &str) -> bool {
+    if known_css_properties().contains(prop) || KNOWN_CSS_PROPERTIES.contains(&prop) {
+        return true;
+    }
+    let Some(prefix) = vendor_prefix(prop) else {
+        return false;
+    };
+    let unprefixed = &prop[prefix.len()..];
+    matches!(prefix, "-moz-" | "-webkit-" | "-ms-" | "-o-")
+        && (known_css_properties().contains(unprefixed)
+            || KNOWN_CSS_PROPERTIES.contains(&unprefixed))
 }
 
 pub struct NoUnknownStyleDirectiveProperty;
@@ -371,20 +444,26 @@ impl Rule for NoUnknownStyleDirectiveProperty {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let ignore_properties: Vec<String> = ctx
+        let option = ctx
             .config
             .options
             .as_ref()
             .and_then(|v| v.as_array())
-            .and_then(|arr| arr.first())
+            .and_then(|arr| arr.first());
+
+        let ignore_properties: Vec<IgnorePattern> = option
             .and_then(|v| v.get("ignoreProperties"))
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .filter_map(|v| v.as_str().map(IgnorePattern::from_config))
                     .collect()
             })
             .unwrap_or_default();
+        let ignore_prefixed = option
+            .and_then(|v| v.get("ignorePrefixed"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
 
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             if let TemplateNode::Element(el) = node {
@@ -396,17 +475,16 @@ impl Rule for NoUnknownStyleDirectiveProperty {
                         ..
                     } = attr
                     {
-                        if name.starts_with("--")
-                            || ["-moz-", "-webkit-", "-ms-", "-o-"]
-                                .iter()
-                                .any(|p| name.starts_with(p))
-                        {
+                        if name.starts_with("--") {
                             continue;
                         }
                         if is_property_ignored(name, &ignore_properties) {
                             continue;
                         }
-                        if !KNOWN_CSS_PROPERTIES.contains(&name.as_str()) {
+                        if ignore_prefixed && vendor_prefix(name).is_some() {
+                            continue;
+                        }
+                        if !known_property(name) {
                             ctx.diagnostic(
                                 format!("Unexpected unknown style directive property '{}'.", name),
                                 *span,

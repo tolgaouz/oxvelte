@@ -35,6 +35,7 @@ pub fn parse_fragment_with_errors<'a>(
                 Fragment {
                     nodes: Vec::new(),
                     span: Span::new(0, source.len() as u32),
+                    template_tag_spans: Vec::new(),
                     _phantom: PhantomData,
                 },
                 parser.errors,
@@ -70,6 +71,7 @@ struct TemplateParser<'a> {
     shadowroot_template_depth: usize,
     reported_unclosed_eof: bool,
     last_auto_closed_tag: Option<AutoClosedTag>,
+    template_tag_spans: Vec<TemplateTagSpan>,
 }
 
 enum FragmentStep<'a> {
@@ -333,6 +335,7 @@ impl<'a> TemplateParser<'a> {
             shadowroot_template_depth: 0,
             reported_unclosed_eof: false,
             last_auto_closed_tag: None,
+            template_tag_spans: Vec::new(),
         }
     }
 
@@ -431,9 +434,18 @@ impl<'a> TemplateParser<'a> {
 
     /// Parse the root template fragment.
     fn parse_root_fragment(&mut self) -> Result<Fragment<'a>, OxcDiagnostic> {
-        let fragment = self.parse_fragment_frame(FragmentFrame::root())?;
+        let mut fragment = self.parse_fragment_frame(FragmentFrame::root())?;
+        fragment.template_tag_spans = std::mem::take(&mut self.template_tag_spans);
         self.report_post_parse_diagnostics(&fragment.nodes);
         Ok(fragment)
+    }
+
+    fn record_template_tag(&mut self, span: Span, has_expression: bool, check_closing: bool) {
+        self.template_tag_spans.push(TemplateTagSpan {
+            span,
+            has_expression,
+            check_closing,
+        });
     }
 
     /// Build an `Element` from the topmost entry on `open_nodes` and append
@@ -578,6 +590,7 @@ impl<'a> TemplateParser<'a> {
                     _phantom: PhantomData,
                     nodes: fragment_nodes,
                     span: Span::new(body_start, fragment_end),
+                    template_tag_spans: Vec::new(),
                 };
                 TemplateNode::KeyBlock(KeyBlock {
                     expression,
@@ -602,6 +615,7 @@ impl<'a> TemplateParser<'a> {
                     _phantom: PhantomData,
                     nodes: fragment_nodes,
                     span: Span::new(body_start, fragment_end),
+                    template_tag_spans: Vec::new(),
                 };
                 TemplateNode::SnippetBlock(SnippetBlock {
                     name,
@@ -634,6 +648,7 @@ impl<'a> TemplateParser<'a> {
                     _phantom: PhantomData,
                     nodes: fragment_nodes,
                     span: Span::new(active_fragment_start, fragment_end),
+                    template_tag_spans: Vec::new(),
                 };
                 let (body_fragment, fallback_fragment) = match body {
                     Some(captured_body) => (captured_body, Some(active_fragment)),
@@ -672,6 +687,7 @@ impl<'a> TemplateParser<'a> {
                     _phantom: PhantomData,
                     nodes: fragment_nodes,
                     span: Span::new(a.active_fragment_start, fragment_end),
+                    template_tag_spans: Vec::new(),
                 };
                 match a.active {
                     AwaitArmKind::Pending => {
@@ -784,6 +800,7 @@ impl<'a> TemplateParser<'a> {
                     _phantom: PhantomData,
                     nodes,
                     span: Span::new(body_start, fragment_end),
+                    template_tag_spans: Vec::new(),
                 }
             } else {
                 stored_consequent.expect(
@@ -891,6 +908,7 @@ impl<'a> TemplateParser<'a> {
                     _phantom: PhantomData,
                     nodes: fragment_nodes,
                     span: Span::new(body_start, fragment_end),
+                    template_tag_spans: Vec::new(),
                 });
             }
         }
@@ -903,6 +921,7 @@ impl<'a> TemplateParser<'a> {
         let test_span = Span::new(test_start, self.pos as u32);
         self.eat("}")?;
         let header_span = Span::new(block_start, self.pos as u32);
+        self.record_template_tag(header_span, true, true);
         let body_start = self.pos as u32;
 
         self.open_nodes.push(OpenNode::Block(OpenBlock::If {
@@ -932,6 +951,7 @@ impl<'a> TemplateParser<'a> {
                 _phantom: PhantomData,
                 nodes: fragment_nodes,
                 span: Span::new(a.active_fragment_start, fragment_end),
+                template_tag_spans: Vec::new(),
             };
             match a.active {
                 AwaitArmKind::Pending => {
@@ -979,6 +999,11 @@ impl<'a> TemplateParser<'a> {
         }
         self.report_reserved_binding_identifier_diagnostic(&binding);
         self.eat("}")?;
+        self.record_template_tag(
+            Span::new(then_tag_start, self.pos as u32),
+            !binding.is_empty(),
+            !binding.is_empty(),
+        );
 
         let already_set = matches!(
             self.open_nodes.last(),
@@ -1022,6 +1047,11 @@ impl<'a> TemplateParser<'a> {
         }
         self.report_reserved_binding_identifier_diagnostic(&binding);
         self.eat("}")?;
+        self.record_template_tag(
+            Span::new(catch_tag_start, self.pos as u32),
+            !binding.is_empty(),
+            !binding.is_empty(),
+        );
 
         let already_set = matches!(
             self.open_nodes.last(),
@@ -1075,6 +1105,7 @@ impl<'a> TemplateParser<'a> {
                     _phantom: PhantomData,
                     nodes: fragment_nodes,
                     span: Span::new(body_start, fragment_end),
+                    template_tag_spans: Vec::new(),
                 });
             }
         }
@@ -1087,6 +1118,7 @@ impl<'a> TemplateParser<'a> {
         }
         let body_start = self.pos as u32;
         let header_span = Span::new(else_start, body_start);
+        self.record_template_tag(header_span, false, true);
 
         self.open_nodes.push(OpenNode::Block(OpenBlock::If {
             block_start: else_start,
@@ -1108,7 +1140,8 @@ impl<'a> TemplateParser<'a> {
         debug_assert!(matches!(self.open_nodes.last(), Some(OpenNode::Block(_))));
         debug_assert!(self.looking_at("{/") && !self.looking_at("{/*"));
         let fragment_end = self.pos as u32;
-        self.consume_block_close()?;
+        let close_span = self.consume_block_close()?;
+        self.record_template_tag(close_span, false, true);
         self.finalize_top_open_block(fragment_end, true, false, false)
     }
 
@@ -1147,12 +1180,14 @@ impl<'a> TemplateParser<'a> {
         let fragment_end = self.pos as u32;
         let fragment_nodes = self.exit_fragment();
 
+        let else_start = self.pos as u32;
         self.eat("{:else")?;
         self.skip_whitespace();
         if self.looking_at("}") {
             self.eat("}")?;
         }
         let new_fragment_start = self.pos as u32;
+        self.record_template_tag(Span::new(else_start, new_fragment_start), false, true);
 
         if let Some(OpenNode::Block(OpenBlock::Each {
             active_fragment_start,
@@ -1165,6 +1200,7 @@ impl<'a> TemplateParser<'a> {
                     _phantom: PhantomData,
                     nodes: fragment_nodes,
                     span: Span::new(*active_fragment_start, fragment_end),
+                    template_tag_spans: Vec::new(),
                 });
             }
             *active_fragment_start = new_fragment_start;
@@ -1260,6 +1296,7 @@ impl<'a> TemplateParser<'a> {
             _phantom: PhantomData,
             nodes,
             span: Span::new(start, self.pos as u32),
+            template_tag_spans: Vec::new(),
         })
     }
 
@@ -1706,13 +1743,14 @@ impl<'a> TemplateParser<'a> {
         Ok(())
     }
 
-    fn consume_block_close(&mut self) -> Result<(), OxcDiagnostic> {
+    fn consume_block_close(&mut self) -> Result<Span, OxcDiagnostic> {
+        let start = self.pos as u32;
         self.eat("{/")?;
         self.eat_until("}");
         if self.looking_at("}") {
             self.eat("}")?;
         }
-        Ok(())
+        Ok(Span::new(start, self.pos as u32))
     }
 
     fn consume_html_close(&mut self) -> Result<(), OxcDiagnostic> {
@@ -2215,11 +2253,17 @@ impl<'a> TemplateParser<'a> {
         let expression = self.read_expression()?;
         let expression_span = Span::new(expression_start, self.pos as u32);
         self.eat("}")?;
+        let span = Span::new(start, self.pos as u32);
+        if let Some((has_expression, check_closing)) =
+            template_tag_metadata_from_mustache_expression(&expression)
+        {
+            self.record_template_tag(span, has_expression, check_closing);
+        }
         let expression_ast = parse_expr_into(self.allocator, &expression);
         Ok(TemplateNode::MustacheTag(MustacheTag {
             expression,
             expression_ast,
-            span: Span::new(start, self.pos as u32),
+            span,
             expression_span,
             _phantom: PhantomData,
         }))
@@ -3839,6 +3883,9 @@ impl<'a> TemplateParser<'a> {
                     name_span: Span::new(start, start),
                     directive_subject_span: None,
                     value_span: None,
+                    value_full_span: Some(Span::new(start, self.pos as u32)),
+                    quote: None,
+                    equals_span: None,
                     expression_span: Some(expression_span),
                     mustache_span: Some(Span::new(start, self.pos as u32)),
                     expression_ast: None,
@@ -3867,6 +3914,9 @@ impl<'a> TemplateParser<'a> {
                     name_span: Span::new(start + 2, start + 9),
                     directive_subject_span: None,
                     value_span: Some(expression_span),
+                    value_full_span: Some(Span::new(start, self.pos as u32)),
+                    quote: None,
+                    equals_span: None,
                     expression_span: Some(expression_span),
                     mustache_span: Some(Span::new(start, self.pos as u32)),
                     expression_ast: None,
@@ -3895,6 +3945,9 @@ impl<'a> TemplateParser<'a> {
                     name_span: expression_span,
                     directive_subject_span: None,
                     value_span: Some(expression_span),
+                    value_full_span: Some(Span::new(start, self.pos as u32)),
+                    quote: None,
+                    equals_span: None,
                     expression_span: Some(expression_span),
                     mustache_span: Some(Span::new(start, self.pos as u32)),
                     expression_ast: None,
@@ -3951,7 +4004,14 @@ impl<'a> TemplateParser<'a> {
                 if self.looking_at("=") {
                     self.eat("=")?;
                     self.skip_whitespace();
-                    let parsed = self.parse_attribute_value()?;
+                    let mut parsed = self.parse_attribute_value()?;
+                    parsed.meta.equals_span = Some(Span::new(
+                        name_span.end,
+                        parsed
+                            .meta
+                            .value_full_span
+                            .map_or(self.pos as u32, |span| span.start),
+                    ));
                     if directive_value_is_invalid(&directive.0, &parsed.value) {
                         self.report_error(
                             "Directive value must be a JavaScript expression enclosed in curly braces",
@@ -3982,6 +4042,9 @@ impl<'a> TemplateParser<'a> {
                         name_span,
                         directive_subject_span,
                         value_span: None,
+                        value_full_span: None,
+                        quote: None,
+                        equals_span: None,
                         expression_span: None,
                         mustache_span: None,
                         expression_ast: None,
@@ -3996,7 +4059,14 @@ impl<'a> TemplateParser<'a> {
             let (value, mut meta) = if self.looking_at("=") {
                 self.eat("=")?;
                 self.skip_whitespace();
-                let parsed = self.parse_attribute_value()?;
+                let mut parsed = self.parse_attribute_value()?;
+                parsed.meta.equals_span = Some(Span::new(
+                    name_end as u32,
+                    parsed
+                        .meta
+                        .value_full_span
+                        .map_or(self.pos as u32, |span| span.start),
+                ));
                 (parsed.value, parsed.meta)
             } else {
                 (
@@ -4005,6 +4075,9 @@ impl<'a> TemplateParser<'a> {
                         name_span: Span::new(attr_name_start as u32, name_end as u32),
                         directive_subject_span: None,
                         value_span: None,
+                        value_full_span: None,
+                        quote: None,
+                        equals_span: None,
                         expression_span: None,
                         mustache_span: None,
                         expression_ast: None,
@@ -4039,67 +4112,71 @@ impl<'a> TemplateParser<'a> {
         }
     }
 
-    fn parse_attribute_value<'b>(
-        &'b mut self,
-    ) -> Result<ParsedAttributeValue<'a>, OxcDiagnostic>
+    fn parse_attribute_value<'b>(&'b mut self) -> Result<ParsedAttributeValue<'a>, OxcDiagnostic>
     where
         'a: 'b,
     {
         if self.looking_at("\"") {
+            let full_start = self.pos as u32;
             self.eat("\"")?;
             let value_start = self.pos as u32;
             let value = self.eat_quoted_attr_value(b'"');
             let value_span = Span::new(value_start, self.pos as u32);
             self.eat("\"")?;
+            let full_span = Span::new(full_start, self.pos as u32);
             // Check for embedded expressions
-            if value.contains('{') {
-                Ok(parse_concat_value(
-                    &value,
-                    value_start,
-                    self.allocator,
-                    &mut self.errors,
-                ))
+            let mut parsed = if value.contains('{') {
+                parse_concat_value(&value, value_start, self.allocator, &mut self.errors)
             } else {
-                Ok(ParsedAttributeValue::new(
+                ParsedAttributeValue::new(
                     AttributeValue::Static(value.to_string()),
                     AttributeMeta {
                         name_span: Span::new(0, 0),
                         directive_subject_span: None,
                         value_span: Some(value_span),
+                        value_full_span: None,
+                        quote: None,
+                        equals_span: None,
                         expression_span: None,
                         mustache_span: None,
                         expression_ast: None,
                         parts: Vec::new(),
                     },
-                ))
-            }
+                )
+            };
+            parsed.meta.value_full_span = Some(full_span);
+            parsed.meta.quote = Some(AttributeQuote::Double);
+            Ok(parsed)
         } else if self.looking_at("'") {
+            let full_start = self.pos as u32;
             self.eat("'")?;
             let value_start = self.pos as u32;
             let value = self.eat_quoted_attr_value(b'\'');
             let value_span = Span::new(value_start, self.pos as u32);
             self.eat("'")?;
-            if value.contains('{') {
-                Ok(parse_concat_value(
-                    &value,
-                    value_start,
-                    self.allocator,
-                    &mut self.errors,
-                ))
+            let full_span = Span::new(full_start, self.pos as u32);
+            let mut parsed = if value.contains('{') {
+                parse_concat_value(&value, value_start, self.allocator, &mut self.errors)
             } else {
-                Ok(ParsedAttributeValue::new(
+                ParsedAttributeValue::new(
                     AttributeValue::Static(value.to_string()),
                     AttributeMeta {
                         name_span: Span::new(0, 0),
                         directive_subject_span: None,
                         value_span: Some(value_span),
+                        value_full_span: None,
+                        quote: None,
+                        equals_span: None,
                         expression_span: None,
                         mustache_span: None,
                         expression_ast: None,
                         parts: Vec::new(),
                     },
-                ))
-            }
+                )
+            };
+            parsed.meta.value_full_span = Some(full_span);
+            parsed.meta.quote = Some(AttributeQuote::Single);
+            Ok(parsed)
         } else {
             self.parse_unquoted_attribute_value()
         }
@@ -4168,6 +4245,9 @@ impl<'a> TemplateParser<'a> {
                     name_span: Span::new(0, 0),
                     directive_subject_span: None,
                     value_span: Some(Span::new(value_start as u32, value_start as u32)),
+                    value_full_span: Some(Span::new(value_start as u32, value_start as u32)),
+                    quote: None,
+                    equals_span: None,
                     expression_span: None,
                     mustache_span: None,
                     expression_ast: None,
@@ -4195,6 +4275,9 @@ impl<'a> TemplateParser<'a> {
                     name_span: Span::new(0, 0),
                     directive_subject_span: None,
                     value_span: Some(Span::new(value_start as u32, self.pos as u32)),
+                    value_full_span: Some(Span::new(value_start as u32, self.pos as u32)),
+                    quote: None,
+                    equals_span: None,
                     expression_span: None,
                     mustache_span: None,
                     expression_ast: None,
@@ -4213,6 +4296,9 @@ impl<'a> TemplateParser<'a> {
                             name_span: Span::new(0, 0),
                             directive_subject_span: None,
                             value_span: Some(meta.span),
+                            value_full_span: Some(meta.span),
+                            quote: None,
+                            equals_span: None,
                             expression_span: None,
                             mustache_span: None,
                             expression_ast: None,
@@ -4228,6 +4314,9 @@ impl<'a> TemplateParser<'a> {
                             name_span: Span::new(0, 0),
                             directive_subject_span: None,
                             value_span: Some(expression_span),
+                            value_full_span: meta.mustache_span.or(Some(expression_span)),
+                            quote: None,
+                            equals_span: None,
                             expression_span: Some(expression_span),
                             mustache_span: meta.mustache_span,
                             expression_ast: None,
@@ -4244,6 +4333,9 @@ impl<'a> TemplateParser<'a> {
                 name_span: Span::new(0, 0),
                 directive_subject_span: None,
                 value_span: Some(Span::new(value_start as u32, self.pos as u32)),
+                value_full_span: Some(Span::new(value_start as u32, self.pos as u32)),
+                quote: None,
+                equals_span: None,
                 expression_span: None,
                 mustache_span: None,
                 expression_ast: None,
@@ -4285,6 +4377,7 @@ impl<'a> TemplateParser<'a> {
         let test_span = Span::new(test_start, self.pos as u32);
         self.eat("}")?;
         let header_span = Span::new(start, self.pos as u32);
+        self.record_template_tag(header_span, true, true);
 
         // `{#if}` is a valid `<svelte:self>` ancestor position. The depth is
         // decremented in `finalize_if_chain` when the chain root is popped.
@@ -4313,6 +4406,7 @@ impl<'a> TemplateParser<'a> {
         let header = self.read_block_header();
         let header_span = Span::new(header_start, self.pos as u32);
         self.eat("}")?;
+        self.record_template_tag(Span::new(start, self.pos as u32), true, true);
 
         let each_header = parse_each_header(header_span, header);
         if each_header_has_as_clause(header) && each_header.context.is_empty() {
@@ -4360,6 +4454,7 @@ impl<'a> TemplateParser<'a> {
         let header_span = Span::new(header_start, self.pos as u32);
         let header = raw_header.trim().to_string();
         self.eat("}")?;
+        self.record_template_tag(Span::new(start, self.pos as u32), true, true);
         let body_start = self.pos as u32;
 
         // Detect the shorthand forms `{#await expr then x}` and
@@ -4416,6 +4511,7 @@ impl<'a> TemplateParser<'a> {
         let expression = self.read_expression()?;
         let expression_span = Span::new(expression_start, self.pos as u32);
         self.eat("}")?;
+        self.record_template_tag(Span::new(start, self.pos as u32), true, true);
         let body_start = self.pos as u32;
         self.open_nodes.push(OpenNode::Block(OpenBlock::Key {
             block_start: start,
@@ -4436,6 +4532,7 @@ impl<'a> TemplateParser<'a> {
         let header = self.read_block_header();
         let header_span = Span::new(header_start, self.pos as u32);
         self.eat("}")?;
+        self.record_template_tag(Span::new(start, self.pos as u32), true, true);
 
         let snippet_header = parse_snippet_header(header_span, header);
         if snippet_header.name.is_empty() {
@@ -4513,6 +4610,50 @@ struct SnippetHeaderParts {
     type_params_span: Option<Span>,
     params: String,
     params_span: Option<Span>,
+}
+
+fn template_tag_metadata_from_mustache_expression(expression: &str) -> Option<(bool, bool)> {
+    let inner = expression.trim();
+    if tag_keyword_after_marker(inner, '#', &["if", "each", "await", "key", "snippet"]).is_some() {
+        return Some((true, true));
+    }
+    if tag_keyword_after_marker(inner, '/', &["if", "each", "await", "key", "snippet"]).is_some() {
+        return Some((false, true));
+    }
+    if let Some(rest) = tag_keyword_after_marker(inner, ':', &["else"]) {
+        let has_expression = tag_keyword(rest.trim_start(), "if")
+            .is_some_and(|after_if| !after_if.trim().is_empty());
+        return Some((has_expression, true));
+    }
+    for keyword in ["then", "catch"] {
+        if let Some(rest) = tag_keyword_after_marker(inner, ':', &[keyword]) {
+            let has_expression = !rest.trim().is_empty();
+            return Some((has_expression, has_expression));
+        }
+    }
+    if tag_keyword_after_marker(inner, '@', &["html", "debug", "render"]).is_some() {
+        return Some((true, true));
+    }
+    None
+}
+
+fn tag_keyword_after_marker<'a>(text: &'a str, marker: char, keywords: &[&str]) -> Option<&'a str> {
+    let rest = text.strip_prefix(marker)?;
+    keywords
+        .iter()
+        .find_map(|keyword| tag_keyword(rest, keyword))
+}
+
+fn tag_keyword<'a>(text: &'a str, keyword: &str) -> Option<&'a str> {
+    let rest = text.strip_prefix(keyword)?;
+    if rest
+        .chars()
+        .next()
+        .is_some_and(|ch| ch == '_' || ch == '$' || ch.is_ascii_alphanumeric())
+    {
+        return None;
+    }
+    Some(rest)
 }
 
 fn parse_snippet_header(header_span: Span, header: &str) -> SnippetHeaderParts {
@@ -5145,6 +5286,9 @@ fn parse_concat_value<'a>(
             name_span: Span::new(0, 0),
             directive_subject_span: None,
             value_span: Some(Span::new(value_start, value_start + value.len() as u32)),
+            value_full_span: Some(Span::new(value_start, value_start + value.len() as u32)),
+            quote: None,
+            equals_span: None,
             expression_span: None,
             mustache_span: None,
             expression_ast: None,

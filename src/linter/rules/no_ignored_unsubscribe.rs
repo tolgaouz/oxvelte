@@ -13,36 +13,41 @@ impl Rule for NoIgnoredUnsubscribe {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
-        let Some(semantic) = ctx.instance_semantic else {
-            return;
-        };
-        let content_offset = ctx.instance_content_offset;
-        let nodes = semantic.nodes();
+        for (semantic, content_offset) in [
+            ctx.instance_semantic
+                .map(|s| (s, ctx.instance_content_offset)),
+            ctx.module_semantic.map(|s| (s, ctx.module_content_offset)),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let nodes = semantic.nodes();
 
-        for node in nodes.iter() {
-            let AstKind::CallExpression(ce) = node.kind() else {
-                continue;
-            };
-            let Expression::StaticMemberExpression(mem) = &ce.callee else {
-                continue;
-            };
-            if mem.property.name != "subscribe" {
-                continue;
+            for node in nodes.iter() {
+                let AstKind::CallExpression(ce) = node.kind() else {
+                    continue;
+                };
+                let Expression::StaticMemberExpression(mem) = &ce.callee else {
+                    continue;
+                };
+                if mem.property.name != "subscribe" {
+                    continue;
+                }
+                // Report only when the call's value is ignored — i.e. its parent is
+                // an `ExpressionStatement` directly. Assignments, declarations,
+                // returns, or being passed as arguments all keep the unsubscribe
+                // function reachable.
+                let parent_kind = nodes.parent_kind(node.id());
+                if !matches!(parent_kind, AstKind::ExpressionStatement(_)) {
+                    continue;
+                }
+                let s = content_offset + ce.span.start;
+                let e = content_offset + ce.span.end;
+                ctx.diagnostic(
+                    "Ignoring returned value of the subscribe method is forbidden.",
+                    Span::new(s, e),
+                );
             }
-            // Report only when the call's value is ignored — i.e. its parent is
-            // an `ExpressionStatement` directly. Assignments, declarations,
-            // returns, or being passed as arguments all keep the unsubscribe
-            // function reachable.
-            let parent_kind = nodes.parent_kind(node.id());
-            if !matches!(parent_kind, AstKind::ExpressionStatement(_)) {
-                continue;
-            }
-            let s = content_offset + ce.span.start;
-            let e = content_offset + ce.span.end;
-            ctx.diagnostic(
-                "Store subscribe() return value (unsubscribe function) is being ignored.",
-                Span::new(s, e),
-            );
         }
     }
 }

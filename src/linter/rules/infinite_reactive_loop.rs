@@ -672,10 +672,7 @@ impl<'a, 'ctx> Visit<'a> for MicrotaskVisitor<'a, 'ctx> {
         }
 
         // Note: we deliberately do NOT push a new function frame on entry into
-        // inline function expressions. The vendor walks the reactive-statement
-        // body with a single `isSameMicroTask` flag that persists across inline
-        // function boundaries (so an `await` inside an inline arrow still marks
-        // subsequent sibling statements as microtask-different). We only push a
+        // inline function expressions. We only push a
         // fresh frame when we *recurse* into an externally-called function body
         // via `recurse_into_function`.
 

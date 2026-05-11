@@ -3,6 +3,7 @@
 
 use crate::linter::{LintContext, Rule};
 use oxc::ast::ast::{Expression, Statement};
+use oxc::ast::AstKind;
 use oxc::span::Span;
 
 pub struct NoSvelteInternal;
@@ -47,22 +48,6 @@ impl Rule for NoSvelteInternal {
                             None
                         }
                     }),
-                    // `await import('svelte/internal')` etc.
-                    Statement::ExpressionStatement(es) => {
-                        if let Expression::ImportExpression(ie) = &es.expression {
-                            if let Expression::StringLiteral(lit) = &ie.source {
-                                if is_svelte_internal(lit.value.as_str()) {
-                                    Some(lit.span)
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    }
                     _ => None,
                 };
                 if let Some(span) = source_span {
@@ -74,6 +59,24 @@ impl Rule for NoSvelteInternal {
                         Span::new(s, e),
                     );
                 }
+            }
+
+            for node in sem.nodes().iter() {
+                let AstKind::ImportExpression(import_expr) = node.kind() else {
+                    continue;
+                };
+                let Expression::StringLiteral(lit) = &import_expr.source else {
+                    continue;
+                };
+                if !is_svelte_internal(lit.value.as_str()) {
+                    continue;
+                }
+                let s = offset + lit.span.start + 1;
+                let e = offset + lit.span.end - 1;
+                ctx.diagnostic(
+                    "Using svelte/internal is prohibited. This will be removed in Svelte 6.",
+                    Span::new(s, e),
+                );
             }
         }
     }

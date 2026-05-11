@@ -149,6 +149,35 @@ mod linter_fixture_tests {
         }
     }
 
+    fn run_linter_invalid_fixture(rule_name: &str, path: &str) {
+        let lint = Linter::all();
+        let source = std::fs::read_to_string(path).unwrap();
+        let alloc = oxc::allocator::Allocator::default();
+        let result = parser::parse(&source, &alloc);
+        let parent_dir = std::path::Path::new(path)
+            .parent()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let fname = std::path::Path::new(path)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let config = load_config(&parent_dir, &fname);
+        let diags = lint.lint_with_config_and_path(&result.ast, &source, config, path);
+        let rule_diags: Vec<_> = diags
+            .iter()
+            .filter(|d| d.rule_name == format!("svelte/{}", rule_name))
+            .collect();
+        assert!(
+            !rule_diags.is_empty(),
+            "Rule {} should fire on invalid file {}",
+            rule_name,
+            path
+        );
+    }
+
     #[test]
     fn linter_no_at_html_tags_valid() {
         run_linter_valid("no-at-html-tags");
@@ -306,6 +335,13 @@ mod linter_fixture_tests {
     }
     // no-unused-svelte-ignore invalid requires cross-rule diagnostic checking
     // #[test] fn linter_no_unused_svelte_ignore_invalid() { run_linter_invalid("no-unused-svelte-ignore"); }
+    #[test]
+    fn linter_no_unused_svelte_ignore_invalid_local_rule() {
+        run_linter_invalid_fixture(
+            "no-unused-svelte-ignore",
+            "fixtures/linter/no-unused-svelte-ignore/invalid/local-rule-unused-input.svelte",
+        );
+    }
     #[test]
     fn linter_shorthand_attribute_valid() {
         run_linter_valid("shorthand-attribute");

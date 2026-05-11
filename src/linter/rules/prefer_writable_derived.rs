@@ -19,6 +19,11 @@ impl Rule for PreferWritableDerived {
     }
 
     fn run<'a>(&self, ctx: &mut LintContext<'a>) {
+        if ctx.runes_explicit_false
+            || (!ctx.svelte_version.is_unknown() && !ctx.svelte_version.includes_major(5))
+        {
+            return;
+        }
         let Some(semantic) = ctx.instance_semantic else {
             return;
         };

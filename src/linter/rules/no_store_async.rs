@@ -13,13 +13,18 @@ use oxc::span::Span;
 
 pub struct NoStoreAsync;
 
-/// `import { writable, readable as r, derived } from 'svelte/store'` →
-/// returns the set of local binding names that resolve to one of the three
-/// store factories. Renamed imports are accepted (`r` → `readable`); a default
-/// import is ignored (vendor's `ReferenceTracker.iterateEsmReferences` only
-/// yields ESM named imports).
-fn collect_store_factory_locals<'a>(semantic: &Semantic<'a>) -> Vec<String> {
-    let mut locals = Vec::new();
+struct StoreFactoryLocals {
+    named: Vec<String>,
+    namespaces: Vec<String>,
+}
+
+/// `import { writable, readable as r, derived } from 'svelte/store'` and
+/// `import * as stores from 'svelte/store'` → returns local bindings that can
+/// resolve to one of the three store factories. Renamed imports are accepted
+/// (`r` → `readable`); default imports are ignored.
+fn collect_store_factory_locals<'a>(semantic: &Semantic<'a>) -> StoreFactoryLocals {
+    let mut named = Vec::new();
+    let mut namespaces = Vec::new();
     let program = semantic.nodes().program();
     for stmt in &program.body {
         let Statement::ImportDeclaration(imp) = stmt else {
@@ -32,20 +37,25 @@ fn collect_store_factory_locals<'a>(semantic: &Semantic<'a>) -> Vec<String> {
             continue;
         };
         for spec in specifiers {
-            let ImportDeclarationSpecifier::ImportSpecifier(s) = spec else {
-                continue;
-            };
-            let imported = match &s.imported {
-                ModuleExportName::IdentifierName(n) => n.name.as_str(),
-                ModuleExportName::IdentifierReference(n) => n.name.as_str(),
-                ModuleExportName::StringLiteral(l) => l.value.as_str(),
-            };
-            if matches!(imported, "writable" | "readable" | "derived") {
-                locals.push(s.local.name.to_string());
+            match spec {
+                ImportDeclarationSpecifier::ImportSpecifier(s) => {
+                    let imported = match &s.imported {
+                        ModuleExportName::IdentifierName(n) => n.name.as_str(),
+                        ModuleExportName::IdentifierReference(n) => n.name.as_str(),
+                        ModuleExportName::StringLiteral(l) => l.value.as_str(),
+                    };
+                    if is_store_factory_name(imported) {
+                        named.push(s.local.name.to_string());
+                    }
+                }
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => {
+                    namespaces.push(s.local.name.to_string());
+                }
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(_) => {}
             }
         }
     }
-    locals
+    StoreFactoryLocals { named, namespaces }
 }
 
 /// If `arg` is an async arrow- or function-expression, return its span.
@@ -63,17 +73,14 @@ fn check_semantic<'a>(
     findings: &mut Vec<(String, Span)>,
 ) {
     let factory_locals = collect_store_factory_locals(semantic);
-    if factory_locals.is_empty() {
+    if factory_locals.named.is_empty() && factory_locals.namespaces.is_empty() {
         return;
     }
     for node in semantic.nodes().iter() {
         let AstKind::CallExpression(ce) = node.kind() else {
             continue;
         };
-        let Expression::Identifier(callee) = &ce.callee else {
-            continue;
-        };
-        if !factory_locals.iter().any(|l| l == callee.name.as_str()) {
+        if !is_store_factory_call(&ce.callee, &factory_locals) {
             continue;
         }
         // Vendor inspects the 2nd argument: `writable(value, start?)`,
@@ -94,6 +101,27 @@ fn check_semantic<'a>(
             "Do not pass async functions to svelte stores.".to_string(),
             Span::new(s, e),
         ));
+    }
+}
+
+fn is_store_factory_name(name: &str) -> bool {
+    matches!(name, "writable" | "readable" | "derived")
+}
+
+fn is_store_factory_call(callee: &Expression<'_>, locals: &StoreFactoryLocals) -> bool {
+    match callee {
+        Expression::Identifier(callee) => locals.named.iter().any(|l| l == callee.name.as_str()),
+        Expression::StaticMemberExpression(member) => {
+            let Expression::Identifier(namespace) = &member.object else {
+                return false;
+            };
+            locals
+                .namespaces
+                .iter()
+                .any(|l| l == namespace.name.as_str())
+                && is_store_factory_name(member.property.name.as_str())
+        }
+        _ => false,
     }
 }
 

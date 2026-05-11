@@ -3,7 +3,7 @@
 
 use crate::ast::{Attribute, AttributeValue, AttributeValuePart, DirectiveKind, TemplateNode};
 use crate::linter::{walk_template_nodes, LintContext, Rule};
-use oxc::ast::ast::{AssignmentTarget, Expression, MemberExpression, SimpleAssignmentTarget};
+use oxc::ast::ast::{AssignmentTarget, Expression};
 use oxc::ast::AstKind;
 use oxc::semantic::SymbolId;
 use oxc::span::Span;
@@ -53,18 +53,12 @@ impl Rule for NoDomManipulating {
             let TemplateNode::Element(el) = node else {
                 return;
             };
-            // "Native" = anything that renders a real DOM element. Rules out
-            // user components and `<svelte:component>` / `<svelte:self>`
-            // (which render arbitrary components, not native DOM nodes).
-            // Other `<svelte:*>` (head, body, element, …) are treated as
-            // native — they bind to actual DOM nodes.
             let is_native = match el.kind() {
                 crate::ast::ElementKind::Html => true,
                 crate::ast::ElementKind::Component => false,
-                crate::ast::ElementKind::SvelteSpecial(s) => !matches!(
-                    s,
-                    crate::ast::SvelteSpecial::Component | crate::ast::SvelteSpecial::Self_
-                ),
+                crate::ast::ElementKind::SvelteSpecial(s) => {
+                    matches!(s, crate::ast::SvelteSpecial::Element)
+                }
             };
             if !is_native {
                 return;
@@ -213,19 +207,28 @@ fn strip_wrappers<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
 /// flagged since the method is called on an intermediate object, not on
 /// the bound element itself.
 fn base_symbol_and_tail<'a>(
-    callee: &Expression<'a>,
+    callee: &'a Expression<'a>,
     scoping: &oxc::semantic::Scoping,
     semantic: &'a oxc::semantic::Semantic<'a>,
 ) -> Option<(SymbolId, &'a str, Span)> {
     let (mem_obj, prop, end) = match callee {
         Expression::StaticMemberExpression(m) => (&m.object, m.property.name.as_str(), m.span),
+        Expression::ComputedMemberExpression(m) => {
+            (&m.object, computed_property_name(&m.expression)?, m.span)
+        }
         Expression::ChainExpression(c) => match &c.expression {
             oxc::ast::ast::ChainElement::StaticMemberExpression(m) => {
                 (&m.object, m.property.name.as_str(), m.span)
             }
+            oxc::ast::ast::ChainElement::ComputedMemberExpression(m) => {
+                (&m.object, computed_property_name(&m.expression)?, m.span)
+            }
             oxc::ast::ast::ChainElement::CallExpression(ce) => match &ce.callee {
                 Expression::StaticMemberExpression(m) => {
                     (&m.object, m.property.name.as_str(), m.span)
+                }
+                Expression::ComputedMemberExpression(m) => {
+                    (&m.object, computed_property_name(&m.expression)?, m.span)
                 }
                 _ => return None,
             },
@@ -246,23 +249,31 @@ fn base_symbol_and_tail<'a>(
 
 /// Same single-hop constraint for assignment targets.
 fn assignment_target_tail<'a>(
-    target: &AssignmentTarget<'a>,
+    target: &'a AssignmentTarget<'a>,
     scoping: &oxc::semantic::Scoping,
     semantic: &'a oxc::semantic::Semantic<'a>,
 ) -> Option<(SymbolId, &'a str, Span)> {
-    let AssignmentTarget::StaticMemberExpression(m) = target else {
-        return None;
+    let (object, prop, span) = match target {
+        AssignmentTarget::StaticMemberExpression(m) => {
+            (&m.object, m.property.name.as_str(), m.span)
+        }
+        AssignmentTarget::ComputedMemberExpression(m) => {
+            (&m.object, computed_property_name(&m.expression)?, m.span)
+        }
+        _ => return None,
     };
-    let base_id = match &m.object {
+    let base_id = match object {
         Expression::Identifier(id) => id,
         _ => return None,
     };
     let sid = scoping.get_reference(base_id.reference_id()).symbol_id()?;
     let _ = semantic;
-    Some((sid, m.property.name.as_str(), m.span))
+    Some((sid, prop, span))
 }
 
-// Keep `MemberExpression` / `SimpleAssignmentTarget` imports alive in case we
-// later need to match patterns that use them directly.
-#[allow(dead_code)]
-fn _unused(_: MemberExpression<'_>, _: SimpleAssignmentTarget<'_>) {}
+fn computed_property_name<'a>(expr: &'a Expression<'a>) -> Option<&'a str> {
+    match expr {
+        Expression::StringLiteral(lit) => Some(lit.value.as_str()),
+        _ => None,
+    }
+}

@@ -2,7 +2,7 @@
 //! 🔧 Fixable
 
 use crate::ast::{Attribute, TemplateNode};
-use crate::linter::{walk_template_nodes, LintContext, Rule};
+use crate::linter::{walk_template_nodes, Fix, LintContext, Rule};
 
 pub struct FirstAttributeLinebreak;
 
@@ -38,6 +38,7 @@ impl Rule for FirstAttributeLinebreak {
         let multiline_mode = get_mode("multiline", "below");
         let singleline_mode = get_mode("singleline", "beside");
         let src = ctx.source;
+        let line_starts = build_line_starts(src);
 
         walk_template_nodes(&ctx.ast.html, &mut |node| {
             let TemplateNode::Element(el) = node else {
@@ -50,23 +51,56 @@ impl Rule for FirstAttributeLinebreak {
             let first_start = attr_span(el.attributes.first().unwrap()).start as usize;
             let last_end = attr_span(el.attributes.last().unwrap()).end as usize;
             let is_single =
-                src[..first_start].matches('\n').count() == src[..last_end].matches('\n').count();
+                line_number_at(&line_starts, first_start) == line_number_at(&line_starts, last_end);
             let mode = if is_single {
                 &singleline_mode
             } else {
                 &multiline_mode
             };
 
-            let tag_src = &src[el.span.start as usize..];
-            if let Some(name_end) = tag_src.find(|c: char| c.is_whitespace()) {
-                let after_name = &tag_src[name_end..];
-                let on_new_line = after_name.starts_with('\n') || after_name.starts_with("\r\n");
-                if mode == "below" && !on_new_line && !after_name.trim_start().is_empty() {
-                    ctx.diagnostic("Expected a linebreak before this attribute.", el.span);
-                } else if mode == "beside" && on_new_line {
-                    ctx.diagnostic("Expected no linebreak before this attribute.", el.span);
-                }
+            let first_attr = el.attributes.first().unwrap();
+            let first_span = attr_span(first_attr);
+            let name_end = el.name_span.end as usize;
+            let on_new_line =
+                line_number_at(&line_starts, name_end) != line_number_at(&line_starts, first_start);
+
+            if mode == "below" && !on_new_line {
+                ctx.diagnostic_with_fix(
+                    "Expected a linebreak before this attribute.",
+                    first_span,
+                    Fix {
+                        span: oxc::span::Span::new(el.name_span.end, first_span.start),
+                        replacement: "\n".to_string(),
+                    },
+                );
+            } else if mode == "beside" && on_new_line {
+                ctx.diagnostic_with_fix(
+                    "Expected no linebreak before this attribute.",
+                    first_span,
+                    Fix {
+                        span: oxc::span::Span::new(el.name_span.end, first_span.start),
+                        replacement: " ".to_string(),
+                    },
+                );
             }
         });
     }
+}
+
+fn build_line_starts(source: &str) -> Vec<usize> {
+    std::iter::once(0)
+        .chain(
+            source
+                .bytes()
+                .enumerate()
+                .filter(|(_, byte)| *byte == b'\n')
+                .map(|(idx, _)| idx + 1),
+        )
+        .collect()
+}
+
+fn line_number_at(line_starts: &[usize], offset: usize) -> usize {
+    line_starts
+        .partition_point(|&start| start <= offset)
+        .saturating_sub(1)
 }

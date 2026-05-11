@@ -87,6 +87,89 @@ mod valid_prop_names_in_kit_pages;
 mod valid_style_parse;
 
 use super::Rule;
+use crate::ast::{AttributeValue, AttributeValuePart};
+
+pub(super) fn directive_expression_key(value: &AttributeValue) -> String {
+    match value {
+        AttributeValue::True => String::new(),
+        AttributeValue::Expression(expr) => canonical_js_expression(expr),
+        AttributeValue::Static(value) => format!("static:{value}"),
+        AttributeValue::Concat(parts) => {
+            let mut key = String::new();
+            for part in parts {
+                match part {
+                    AttributeValuePart::Static(value) => {
+                        key.push_str("static:");
+                        key.push_str(value);
+                    }
+                    AttributeValuePart::Expression(expr) => {
+                        key.push_str("expr:");
+                        key.push_str(&canonical_js_expression(expr));
+                    }
+                }
+                key.push('\0');
+            }
+            key
+        }
+    }
+}
+
+fn canonical_js_expression(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut out = String::with_capacity(source.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\'' | b'"' | b'`' => copy_quoted(source, &mut i, &mut out),
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
+                i += 2;
+                while i < bytes.len() && !matches!(bytes[i], b'\n' | b'\r') {
+                    i += 1;
+                }
+            }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
+                i += 2;
+                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                i = (i + 2).min(bytes.len());
+            }
+            b if b.is_ascii_whitespace() => i += 1,
+            _ => {
+                let ch = source[i..].chars().next().expect("valid char boundary");
+                out.push(ch);
+                i += ch.len_utf8();
+            }
+        }
+    }
+
+    out
+}
+
+fn copy_quoted(source: &str, i: &mut usize, out: &mut String) {
+    let bytes = source.as_bytes();
+    let quote = bytes[*i];
+
+    while *i < bytes.len() {
+        let ch = source[*i..].chars().next().expect("valid char boundary");
+        out.push(ch);
+        *i += ch.len_utf8();
+
+        if ch == '\\' {
+            if *i < bytes.len() {
+                let escaped = source[*i..].chars().next().expect("valid char boundary");
+                out.push(escaped);
+                *i += escaped.len_utf8();
+            }
+            continue;
+        }
+
+        if ch.len_utf8() == 1 && ch as u8 == quote {
+            break;
+        }
+    }
+}
 
 /// Return all implemented lint rules.
 pub fn all_rules() -> Vec<Box<dyn Rule>> {

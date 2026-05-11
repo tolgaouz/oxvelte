@@ -58,9 +58,7 @@ impl Rule for NoUnusedClassName {
                 // `<svelte:element>`.
                 match el.kind() {
                     crate::ast::ElementKind::Html => {}
-                    crate::ast::ElementKind::SvelteSpecial(
-                        crate::ast::SvelteSpecial::Element,
-                    ) => {}
+                    crate::ast::ElementKind::SvelteSpecial(crate::ast::SvelteSpecial::Element) => {}
                     _ => return,
                 }
                 let mut element_classes = Vec::new();
