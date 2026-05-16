@@ -1,0 +1,14 @@
+# name	url	pin	package_root	eslint_root	status	reason
+adventurelog	https://github.com/seanmorley15/AdventureLog.git	-	.	.	no-eslint-config	no eslint config discoverable from the package root
+appwrite-console	https://github.com/appwrite/console.git	e5b241c56379cb77eb8a445b1e419f258f33f1d7	.	.	eslint-print-config-unserializable	ESLint --print-config fails because config contains a function at preprocess.markup
+carbon	https://github.com/carbon-design-system/carbon-components-svelte.git	-	.	.	no-eslint-config	no eslint config discoverable from the package root
+cobalt	https://github.com/imputnet/cobalt.git	-	.	.	eslint-print-config-invalid	ESLint --print-config returns undefined for the selected Svelte file
+dbgate	https://github.com/dbgate/dbgate.git	-	.	.	no-eslint-config	no eslint config discoverable from the package root
+huly	https://github.com/hcengineering/platform.git	cc16352be93223dbaaf35efd9548a5d75d79ef62	.	.	no-root-eslint-binary	configs are nested but no usable ESLint binary exists at the package/config root for this harness
+immich	https://github.com/immich-app/immich.git	00dae6ac3896f2528a3edac8f489877bd58ceb52	.	.	eslint-oom	ESLint aborts with JavaScript heap out of memory while linting the Svelte file set
+kener	https://github.com/rajnandan1/kener.git	-	.	.	no-eslint-config	no eslint config discoverable from the package root
+open-webui	https://github.com/open-webui/open-webui.git	e4e69a10ec08a725bf2ab3db499ef664f2bd7570	.	.	unsupported-node-engine	install/runtime is constrained to Node <=22.x while the local sweep uses newer Node
+shadcn-svelte	https://github.com/huntabyte/shadcn-svelte.git	28c320ccaa2ef225e1eb830c5b964593a6eff4c4	.	.	eslint-runtime-crash	ESLint crashes with scopeManager.addGlobals is not a function
+skeleton	https://github.com/skeletonlabs/skeleton.git	-	.	.	no-eslint-config	no eslint config discoverable from the package root
+smui	https://github.com/hperrin/svelte-material-ui.git	-	.	.	no-eslint-config	no eslint config discoverable from the package root
+windmill	https://github.com/windmill-labs/windmill.git	ef1757f5d747e513d201eb6fa48918dba8248abe	.	.	invalid-eslint-config	frontend ESLint config has invalid no-console severity "log"

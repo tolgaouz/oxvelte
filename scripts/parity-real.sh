@@ -12,6 +12,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MANIFEST_FILE="$ROOT/scripts/testbeds.tsv"
+SKIPPED_MANIFEST_FILE="$ROOT/scripts/testbeds-skipped.tsv"
 
 NAME="${1:-}"
 [ -n "$NAME" ] || { echo "usage: $0 <testbed> [--skip-install]" >&2; exit 2; }
@@ -44,7 +45,17 @@ while IFS=$'\t' read -r manifest_name url pin package_root eslint_root; do
     break
   fi
 done < "$MANIFEST_FILE"
-[ -n "$URL" ] || { echo "unknown testbed in $MANIFEST_FILE: $NAME" >&2; exit 1; }
+if [ -z "$URL" ]; then
+  while IFS=$'\t' read -r skipped_name skipped_url skipped_pin skipped_package_root skipped_eslint_root skipped_status skipped_reason; do
+    case "$skipped_name" in ''|\#*) continue ;; esac
+    if [ "$skipped_name" = "$NAME" ]; then
+      echo "testbed is skipped: $NAME ($skipped_status) $skipped_reason" >&2
+      exit 1
+    fi
+  done < "$SKIPPED_MANIFEST_FILE"
+  echo "unknown testbed in $MANIFEST_FILE: $NAME" >&2
+  exit 1
+fi
 
 join_rel() {
   if [ -z "$2" ] || [ "$2" = "." ]; then
@@ -128,6 +139,89 @@ ES_CFG_JSON="$OUT_DIR/$NAME-eslint-config.json"
 OX_CFG_JSON="$OUT_DIR/$NAME-oxvelte.config.json"
 METADATA_JSON="$OUT_DIR/$NAME-metadata.json"
 
+classify_eslint_failure() {
+  local stderr_file="$1"
+  local output_file="${2:-}"
+  if [ -f "$stderr_file" ] && grep -Eiq 'heap out of memory|Allocation failed - JavaScript heap out of memory|Ineffective mark-compacts|Abort trap' "$stderr_file"; then
+    printf 'eslint-oom\tESLint exhausted the Node heap while producing the parity baseline.\n'
+    return 0
+  fi
+  if [ -f "$stderr_file" ] && grep -Fq 'scopeManager.addGlobals is not a function' "$stderr_file"; then
+    printf 'eslint-runtime-crash\tESLint crashed before producing a usable JSON baseline.\n'
+    return 0
+  fi
+  if [ -f "$stderr_file" ] && grep -Eiq 'serialize configuration data|preprocess\.markup' "$stderr_file"; then
+    printf 'eslint-print-config-unserializable\tESLint --print-config cannot serialize the project config.\n'
+    return 0
+  fi
+  if [ -f "$stderr_file" ] && grep -Eiq 'Configuration for rule .* is invalid|Severity should be one of|no-console.*log' "$stderr_file"; then
+    printf 'invalid-eslint-config\tThe project ESLint config is invalid for this ESLint run.\n'
+    return 0
+  fi
+  if [ -n "$output_file" ] && [ -s "$output_file" ] && grep -qx 'undefined' "$output_file"; then
+    printf 'eslint-print-config-invalid\tESLint --print-config returned undefined instead of JSON.\n'
+    return 0
+  fi
+  printf 'eslint-setup-failure\tESLint did not produce a usable parity baseline.\n'
+}
+
+write_setup_failure_metadata() {
+  local stage="$1"
+  local status="$2"
+  local category="$3"
+  local reason="$4"
+  local output_file="${5:-}"
+  local stderr_file="${6:-}"
+  python3 - "$METADATA_JSON" "$NAME" "$URL" "$TB" "$PACKAGE_ROOT" "$ESLINT_ROOT" "$stage" "$status" "$category" "$reason" "$output_file" "$stderr_file" <<'PYEOF'
+import json
+import os
+import sys
+
+(
+    metadata_path,
+    name,
+    url,
+    tb,
+    package_root,
+    eslint_root,
+    stage,
+    status,
+    category,
+    reason,
+    output_file,
+    stderr_file,
+) = sys.argv[1:]
+
+def rel(path):
+    return os.path.relpath(path, tb) if path else ""
+
+def tail(path, limit=4000):
+    if not path or not os.path.exists(path):
+        return ""
+    with open(path, errors="replace") as f:
+        text = f.read()
+    return text[-limit:]
+
+metadata = {
+    "name": name,
+    "url": url,
+    "status": "setup-failed",
+    "stage": stage,
+    "category": category,
+    "reason": reason,
+    "eslintStatus": int(status) if str(status).lstrip("-").isdigit() else status,
+    "eslintRoot": rel(eslint_root),
+    "packageRoot": rel(package_root),
+    "outputBytes": os.path.getsize(output_file) if output_file and os.path.exists(output_file) else 0,
+    "stderrTail": tail(stderr_file),
+}
+with open(metadata_path, "w") as f:
+    json.dump(metadata, f, indent=2)
+    f.write("\n")
+PYEOF
+  echo "  wrote $METADATA_JSON"
+}
+
 # --- run testbed's own eslint -------------------------------------------------
 ESLINT_BIN=""
 for candidate in \
@@ -140,7 +234,12 @@ do
     break
   fi
 done
-[ -x "$ESLINT_BIN" ] || { echo "no eslint binary under $PACKAGE_ROOT/node_modules/.bin or $ESLINT_ROOT/node_modules/.bin" >&2; exit 1; }
+if [ ! -x "$ESLINT_BIN" ]; then
+  msg="no eslint binary under $PACKAGE_ROOT/node_modules/.bin or $ESLINT_ROOT/node_modules/.bin"
+  echo "$msg" >&2
+  write_setup_failure_metadata "eslint-binary" 127 "no-eslint-binary" "$msg" "" ""
+  exit 1
+fi
 echo "==> eslint: $ESLINT_BIN"
 
 DISABLE_RULES=(
@@ -167,10 +266,21 @@ for f in "${FILES[@]}"; do
 done
 echo "==> print-config: ${PRINT_CONFIG_FILE#$ROOT/}"
 
+set +e
 ( cd "$ESLINT_ROOT" && "$ESLINT_BIN" "${RULE_ARGS[@]}" --print-config "$PRINT_CONFIG_FILE" \
 ) > "$ES_CFG_JSON" 2>"$OUT_DIR/$NAME-eslint.stderr"
+print_config_status=$?
+set -e
+if [ "$print_config_status" -ne 0 ]; then
+  failure="$(classify_eslint_failure "$OUT_DIR/$NAME-eslint.stderr" "$ES_CFG_JSON")"
+  category="${failure%%$'\t'*}"
+  reason="${failure#*$'\t'}"
+  echo "eslint setup failed during --print-config: $category" >&2
+  write_setup_failure_metadata "eslint-print-config" "$print_config_status" "$category" "$reason" "$ES_CFG_JSON" "$OUT_DIR/$NAME-eslint.stderr"
+  exit 1
+fi
 
-python3 - "$ES_CFG_JSON" "$OX_CFG_JSON" <<'PYEOF'
+if ! python3 - "$ES_CFG_JSON" "$OX_CFG_JSON" <<'PYEOF'
 import json
 import sys
 
@@ -191,6 +301,14 @@ with open(oxvelte_config_path, "w") as f:
     json.dump(out, f, indent=2, sort_keys=True)
     f.write("\n")
 PYEOF
+then
+  failure="$(classify_eslint_failure "$OUT_DIR/$NAME-eslint.stderr" "$ES_CFG_JSON")"
+  category="${failure%%$'\t'*}"
+  reason="${failure#*$'\t'}"
+  echo "eslint setup failed: $category" >&2
+  write_setup_failure_metadata "eslint-print-config-json" "$print_config_status" "$category" "$reason" "$ES_CFG_JSON" "$OUT_DIR/$NAME-eslint.stderr"
+  exit 1
+fi
 
 echo "==> running testbed's eslint"
 es_start=$(date +%s)
@@ -202,7 +320,7 @@ eslint_status=$?
 set -e
 es_dur=$(( $(date +%s) - es_start ))
 
-python3 - "$ES_JSON" <<'PYEOF'
+if ! python3 - "$ES_JSON" <<'PYEOF'
 import json
 import sys
 
@@ -215,6 +333,14 @@ value = json.loads(text)
 if not isinstance(value, list):
     raise SystemExit("eslint JSON output is not a result list")
 PYEOF
+then
+  failure="$(classify_eslint_failure "$OUT_DIR/$NAME-eslint.stderr" "$ES_JSON")"
+  category="${failure%%$'\t'*}"
+  reason="${failure#*$'\t'}"
+  echo "eslint setup failed during lint: $category" >&2
+  write_setup_failure_metadata "eslint-lint-json" "$eslint_status" "$category" "$reason" "$ES_JSON" "$OUT_DIR/$NAME-eslint.stderr"
+  exit 1
+fi
 echo "   eslint: ${es_dur}s status=$eslint_status -> $(wc -c < "$ES_JSON") bytes"
 
 # --- run oxvelte with the resolved ESLint-derived config ----------------------

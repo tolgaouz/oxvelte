@@ -1,19 +1,6 @@
 # name	url	pin	package_root	eslint_root
-adventurelog	https://github.com/seanmorley15/AdventureLog.git	-	.	.
-appwrite-console	https://github.com/appwrite/console.git	e5b241c56379cb77eb8a445b1e419f258f33f1d7	.	.
 bits-ui	https://github.com/huntabyte/bits-ui.git	f4fc53225721afa9a798eb21501c9f40bf2e375b	.	.
-carbon	https://github.com/carbon-design-system/carbon-components-svelte.git	-	.	.
-cobalt	https://github.com/imputnet/cobalt.git	-	.	.
-dbgate	https://github.com/dbgate/dbgate.git	-	.	.
 flowbite-svelte	https://github.com/themesberg/flowbite-svelte.git	2c1d2e0a84604374dd1d3e6b7bc8d6c775011be4	.	.
-huly	https://github.com/hcengineering/platform.git	cc16352be93223dbaaf35efd9548a5d75d79ef62	.	.
-immich	https://github.com/immich-app/immich.git	00dae6ac3896f2528a3edac8f489877bd58ceb52	.	.
-kener	https://github.com/rajnandan1/kener.git	-	.	.
 kit	https://github.com/sveltejs/kit.git	b31efce05cbc5929101643da80b837c270c63fd8	.	.
-open-webui	https://github.com/open-webui/open-webui.git	e4e69a10ec08a725bf2ab3db499ef664f2bd7570	.	.
-shadcn-svelte	https://github.com/huntabyte/shadcn-svelte.git	28c320ccaa2ef225e1eb830c5b964593a6eff4c4	.	.
-skeleton	https://github.com/skeletonlabs/skeleton.git	-	.	.
-smui	https://github.com/hperrin/svelte-material-ui.git	-	.	.
 sveltekit-superforms	https://github.com/ciscoheat/sveltekit-superforms.git	b54f69f8ccdfad2ac62d9f7383663c9723f42469	.	.
 threlte	https://github.com/threlte/threlte.git	-	.	.
-windmill	https://github.com/windmill-labs/windmill.git	ef1757f5d747e513d201eb6fa48918dba8248abe	.	.
