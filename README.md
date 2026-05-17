@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="assets/oxvelte.png" alt="oxvelte logo" width="200">
-</p>
-
 # oxvelte
 
 A Svelte linter written in Rust. Drop-in replacement for [eslint-plugin-svelte](https://github.com/sveltejs/eslint-plugin-svelte) — same rules, same diagnostics, **50-1000x faster**.
@@ -18,10 +14,10 @@ The fastest way to lint a SvelteKit project is **oxlint + oxvelte** together. Th
 
 | Tool | What it lints | File types |
 |------|--------------|------------|
-| [oxlint](https://oxc.rs/docs/guide/usage/linter) | General JS/TS rules (`no-unused-vars`, `no-console`, type checks, imports, etc.) | `.js`, `.ts`, `.svelte` (script blocks) |
+| [oxlint](https://oxc.rs/docs/guide/usage/linter) | General JS/TS rules (`no-unused-vars`, `no-console`, type checks, imports, etc.) | `.js`, `.ts`, `.svelte` (`<script>` blocks only) |
 | **oxvelte** | Svelte-specific rules (`infinite-reactive-loop`, `no-at-html-tags`, template issues, etc.) | `.svelte` |
 
-oxlint already extracts and lints `<script>` blocks from `.svelte` files. oxvelte adds the Svelte-specific rules that oxlint doesn't have — reactive patterns, template structure, style scoping, component conventions.
+oxlint can lint the JavaScript/TypeScript inside `.svelte` `<script>` blocks, but it does not lint Svelte templates, styles, or Svelte-specific component semantics. oxvelte covers that Svelte-specific layer: reactive patterns, template structure, style-related checks, and component conventions.
 
 ### Quick setup
 
