@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/oxvelte.svg" alt="oxvelte logo" width="200">
+</p>
+
 # oxvelte
 
 A Svelte linter written in Rust. Drop-in replacement for [eslint-plugin-svelte](https://github.com/sveltejs/eslint-plugin-svelte) — same rules, same diagnostics, **50-1000x faster**.
