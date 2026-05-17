@@ -1,22 +1,26 @@
 ---
 name: migrate-to-oxvelte
 description: >
-  Migrate a Svelte project from eslint-plugin-svelte to oxvelte, or fully
-  replace the ESLint Svelte stack with oxlint plus oxvelte. Detects the current
-  ESLint config, converts svelte rules to oxvelte.config.json, updates
-  package.json scripts, removes obsolete dependencies, and verifies the
+  Migrate a Svelte project from ESLint/eslint-plugin-svelte to the default
+  oxc stack: oxlint plus oxvelte. Detects the current ESLint config, converts
+  svelte rules to oxvelte.config.json, ports local custom rules when possible,
+  updates package.json scripts, removes obsolete dependencies, and verifies the
   migration. Use when a user wants to switch from eslint-plugin-svelte to
-  oxvelte, drop ESLint for Svelte files, or move completely to an oxc/oxlint +
-  oxvelte lint stack.
+  oxvelte, drop ESLint for Svelte files, or move to an oxc/oxlint + oxvelte lint
+  stack.
 license: MIT
 metadata:
   author: tolgaouz
-  version: "1.1"
+  version: "1.2"
 ---
 
-# Migrate from eslint-plugin-svelte to oxvelte
+# Migrate from ESLint to oxlint + oxvelte
 
-You are helping the user migrate their Svelte project from `eslint-plugin-svelte` (ESLint-based) to **oxvelte** — a drop-in replacement Svelte linter written in Rust that is 4-25x faster. Same rule names, same options, same diagnostics.
+You are helping the user migrate their Svelte project from ESLint and
+`eslint-plugin-svelte` to the default oxc linting stack:
+
+- `oxlint` for JS/TS/import/general rules
+- `oxvelte` for Svelte-specific `svelte/*` rules
 
 When the user says "oxc + oxvelte", interpret that as the practical stack
 `oxlint + oxvelte`: `oxlint` handles general JS/TS/import rules, and `oxvelte`
@@ -26,12 +30,13 @@ Follow these steps in order. After each major step, briefly report what you did.
 
 ## Step 0: Choose the migration mode
 
-Pick one mode before editing files.
+Default to Mode B. Pick Mode A only when the user explicitly asks to keep ESLint
+or when a custom rule cannot be safely ported in the current turn.
 
 ### Mode A: Svelte-only migration
 
-Use this when the user asks to migrate only `eslint-plugin-svelte`, keep ESLint
-for non-Svelte rules, or is ambiguous about replacing ESLint.
+Use this only when the user asks to migrate only `eslint-plugin-svelte`, keep
+ESLint for non-Svelte rules, or pause before fully replacing ESLint.
 
 Outcome:
 - Keep ESLint for JS/TS/general rules.
@@ -41,7 +46,7 @@ Outcome:
 
 ### Mode B: Full oxlint + oxvelte migration
 
-Use this automatically when the user asks to:
+Use this by default, and always when the user asks to:
 - "completely switch"
 - "drop ESLint"
 - "replace ESLint"
@@ -54,10 +59,13 @@ Outcome:
 - Replace `eslint-plugin-svelte` with `oxvelte`.
 - Remove ESLint config and obsolete ESLint dependencies when no longer needed.
 - Update package scripts to run `oxlint` and `oxvelte`.
+- Port local custom rules to oxvelte custom rules or oxlint plugins when
+  possible.
 
-If the user asks for full migration but the project has ESLint plugins that
-oxlint does not clearly replace, list those plugins before removing them and
-preserve them unless the user explicitly accepts losing those rules.
+Do not leave ESLint behind just because custom rules exist. First classify and
+port them. Preserve a minimal ESLint path only for custom rules that rely on
+unsupported behavior such as type-checker services, cross-file state, async I/O,
+or rule APIs that cannot be mapped safely.
 
 ## Step 1: Detect the current ESLint setup
 
@@ -75,6 +83,12 @@ Read the config file and `package.json`. Identify:
 5. Existing lint scripts in `package.json`
 6. Whether the user request implies Mode A or Mode B
 7. Which ESLint plugins map cleanly to oxlint, and which do not
+8. Local/custom ESLint rules and plugins, including:
+   - flat-config inline plugins: `plugins: { local: { rules: ... } }`
+   - local plugin packages such as `eslint-plugin-local` or workspace packages
+   - direct local imports from paths like `./eslint-rules/*`
+   - legacy `--rulesdir` usage in scripts
+   - rule IDs in project/private namespaces that are not standard packages
 
 Report a summary of what you found.
 
@@ -110,7 +124,35 @@ If the eslint config enables `valid-compile` or `no-unused-svelte-ignore`, note 
 
 See `references/RULES.md` for the complete list of supported rules.
 
-## Step 3: Update package.json
+## Step 3: Migrate custom rules
+
+If no local/custom rules are present, say so and continue.
+
+If local/custom rules are present, load `references/CUSTOM_RULES.md` and port
+them before deleting ESLint:
+
+- Template/Svelte rules become oxvelte custom rules and are added to
+  `oxvelte.config.json` via `customRules`.
+- JS/TS-only rules become oxlint plugins when the rule can be mapped to oxlint's
+  plugin API.
+- Mixed template + script rules should be split: the template part goes to
+  oxvelte and the JS/TS part goes to oxlint.
+- Keep the same rule IDs and severities when possible. If a rename is necessary,
+  update all config entries and disable comments.
+- Preserve options from ESLint rule tuples as oxvelte `ctx.options` or the
+  equivalent oxlint plugin configuration.
+- Add a short migration note only when a rule cannot be ported safely.
+
+For oxvelte custom rules, install/build oxvelte with custom-rule support:
+
+```bash
+cargo install --git https://github.com/tolgaouz/oxvelte.git --features custom-rules
+```
+
+Do not silently drop a custom rule. If a rule cannot be ported, leave ESLint in
+place only for that rule and report the blocker clearly.
+
+## Step 4: Update package.json
 
 Remove from `devDependencies` in both modes:
 - `eslint-plugin-svelte`
@@ -170,7 +212,7 @@ Preserve project-specific lint path globs when possible. For example, if the
 existing script lints `src routes packages`, keep equivalent paths for
 `oxvelte lint`.
 
-## Step 4: Clean up ESLint config
+## Step 5: Clean up ESLint config
 
 Mode B cleanup:
 - Delete the ESLint config file
@@ -189,7 +231,7 @@ Mode A cleanup:
 For Mode B, do not leave a dead ESLint config behind unless unresolved ESLint
 plugins still need a follow-up decision.
 
-## Step 5: Comment directives
+## Step 6: Comment directives
 
 Tell the user: existing `eslint-disable` comments for Svelte rules will continue to work with oxvelte. No find-and-replace needed.
 
@@ -200,7 +242,9 @@ Supported formats:
 - `<!-- svelte-ignore rule-name -->`
 - `/* oxvelte-disable */` (oxvelte-native format)
 
-## Step 6: Install oxvelte
+When custom rule IDs change, update affected disable comments in source files.
+
+## Step 7: Install tools
 
 For Mode B, install `oxlint` with the project's package manager:
 
@@ -215,6 +259,12 @@ that is the project's package manager.
 cargo install --git https://github.com/tolgaouz/oxvelte.git
 ```
 
+If custom oxvelte rules were generated, use:
+
+```bash
+cargo install --git https://github.com/tolgaouz/oxvelte.git --features custom-rules
+```
+
 Or from source:
 
 ```bash
@@ -222,7 +272,7 @@ git clone https://github.com/tolgaouz/oxvelte.git
 cd oxvelte && cargo build --release
 ```
 
-## Step 7: Verify
+## Step 8: Verify
 
 Run oxvelte on the project:
 
@@ -237,6 +287,10 @@ oxlint --tsconfig tsconfig.json
 ```
 
 Omit `--tsconfig tsconfig.json` when the project has no `tsconfig.json`.
+
+If custom rules were ported, verify them against at least one fixture or source
+file that should trigger the rule and one that should not. Compare old ESLint
+output when possible before removing ESLint.
 
 If there are issues, help the user adjust the config. If the user had an ESLint config file, mention they can also use the built-in converter:
 
