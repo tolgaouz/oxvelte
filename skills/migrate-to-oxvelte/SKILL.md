@@ -3,15 +3,16 @@ name: migrate-to-oxvelte
 description: >
   Migrate a Svelte project from ESLint/eslint-plugin-svelte to the default
   oxc stack: oxlint plus oxvelte. Detects the current ESLint config, converts
-  svelte rules to oxvelte.config.json, ports local custom rules when possible,
-  updates package.json scripts, removes obsolete dependencies, and verifies the
-  migration. Use when a user wants to switch from eslint-plugin-svelte to
-  oxvelte, drop ESLint for Svelte files, or move to an oxc/oxlint + oxvelte lint
-  stack.
+  general rules to .oxlintrc.json, converts svelte rules to
+  oxvelte.config.json, ports local custom rules when possible, updates
+  package.json scripts, removes obsolete dependencies, and verifies the
+  migration. Use when a user wants to switch from ESLint/eslint-plugin-svelte to
+  oxlint plus oxvelte, drop ESLint for Svelte files, or move to an oxc/oxlint +
+  oxvelte lint stack.
 license: MIT
 metadata:
   author: tolgaouz
-  version: "1.2"
+  version: "1.3"
 ---
 
 # Migrate from ESLint to oxlint + oxvelte
@@ -30,8 +31,17 @@ Follow these steps in order. After each major step, briefly report what you did.
 
 ## Step 0: Choose the migration mode
 
-Default to Mode B. Pick Mode A only when the user explicitly asks to keep ESLint
-or when a custom rule cannot be safely ported in the current turn.
+First determine whether this is a Svelte repo with ESLint installed:
+
+- Treat it as a Svelte repo when `package.json` contains `svelte` or
+  `@sveltejs/kit`, a `svelte.config.*` file exists, or the repo contains
+  `.svelte` files.
+- Treat ESLint as installed when an ESLint config exists, `package.json`
+  depends on `eslint`, or a lint script invokes `eslint`.
+
+If both are true, default to Mode B even when the user request is ambiguous.
+Pick Mode A only when the user explicitly asks to keep ESLint, to migrate only
+`eslint-plugin-svelte`, or to pause before replacing the general ESLint stack.
 
 ### Mode A: Svelte-only migration
 
@@ -76,14 +86,15 @@ Find the ESLint config file. Check for (in priority order):
 
 Read the config file and `package.json`. Identify:
 
-1. Which `svelte/*` rules are explicitly configured (enabled, disabled, or with options)
-2. Which non-Svelte ESLint plugins are in use (`@eslint/js`, `typescript-eslint`, `eslint-plugin-import`, etc.)
-3. Whether `eslint-plugin-svelte` is in `devDependencies`
-4. Any svelte-related settings (e.g. `settings.svelte.kit.files.routes`)
-5. Existing lint scripts in `package.json`
-6. Whether the user request implies Mode A or Mode B
-7. Which ESLint plugins map cleanly to oxlint, and which do not
-8. Local/custom ESLint rules and plugins, including:
+1. Whether the repo is a Svelte repo and whether ESLint is installed
+2. Which `svelte/*` rules are explicitly configured (enabled, disabled, or with options)
+3. Which non-Svelte ESLint plugins are in use (`@eslint/js`, `typescript-eslint`, `eslint-plugin-import`, etc.)
+4. Whether `eslint-plugin-svelte` is in `devDependencies`
+5. Any svelte-related settings (e.g. `settings.svelte.kit.files.routes`)
+6. Existing lint scripts in `package.json`
+7. Whether the user request implies Mode A or Mode B
+8. Which ESLint plugins map cleanly to oxlint, and which do not
+9. Local/custom ESLint rules and plugins, including:
    - flat-config inline plugins: `plugins: { local: { rules: ... } }`
    - local plugin packages such as `eslint-plugin-local` or workspace packages
    - direct local imports from paths like `./eslint-rules/*`
@@ -92,7 +103,70 @@ Read the config file and `package.json`. Identify:
 
 Report a summary of what you found.
 
-## Step 2: Generate oxvelte.config.json
+## Step 2: Generate .oxlintrc.json
+
+In Mode B, if ESLint is installed in a Svelte repo, generate or update
+`.oxlintrc.json` as the oxlint half of the migration pair. Do this even when
+the ESLint config is small; the result should make the general-rule migration
+explicit instead of relying only on an `oxlint` script.
+
+Config format:
+
+```json
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "ignorePatterns": ["build", ".svelte-kit"],
+  "env": {
+    "browser": true,
+    "node": true
+  },
+  "globals": {
+    "$state": "readonly"
+  },
+  "rules": {
+    "no-undef": "warn",
+    "no-eval": "error"
+  },
+  "overrides": [
+    {
+      "files": ["**/*.test.ts"],
+      "rules": {
+        "no-console": "off"
+      }
+    }
+  ],
+  "jsPlugins": [
+    {
+      "name": "local",
+      "specifier": "./custom-eslint-rules/plugin.js"
+    }
+  ]
+}
+```
+
+Conversion rules:
+- Do not include `svelte/*` rules in `.oxlintrc.json`; they belong in
+  `oxvelte.config.json`.
+- Preserve ESLint `ignores` and `.eslintignore` entries as `ignorePatterns`
+  unless the pattern is obsolete after deleting ESLint-only files.
+- Preserve `globals`, `env`, and supported overrides.
+- Convert supported core, TypeScript, import, node, unicorn, and security rules
+  to oxlint rule IDs with the same severity and options.
+- Preserve disabled rule entries when they disable an oxlint default or document
+  an intentional parity choice.
+- For local JS/TS-only custom rules, keep the rule namespace and expose the
+  plugin through `jsPlugins` when the rule can run through oxlint's JS plugin
+  API.
+- For unsupported plugin rules, either replace them with an oxlint equivalent,
+  port them as custom rules, or leave a minimal ESLint fallback for only those
+  rules with a clear blocker. Never silently drop them.
+- If there are no explicit general rules, still write a minimal
+  `.oxlintrc.json` with `$schema`, `ignorePatterns`, `globals`, `env`, and
+  `jsPlugins` as applicable. If truly nothing exists to preserve, create
+  `.oxlintrc.json` with `$schema` and an empty `rules` object so the pair is
+  explicit.
+
+## Step 3: Generate oxvelte.config.json
 
 If the user has explicit `svelte/*` rule overrides beyond the recommended set, create `oxvelte.config.json`. If they only use the recommended preset with no overrides, skip this — oxvelte defaults match eslint-plugin-svelte's `flat/recommended`.
 
@@ -124,7 +198,7 @@ If the eslint config enables `valid-compile` or `no-unused-svelte-ignore`, note 
 
 See `references/RULES.md` for the complete list of supported rules.
 
-## Step 3: Migrate custom rules
+## Step 4: Migrate custom rules
 
 If no local/custom rules are present, say so and continue.
 
@@ -134,7 +208,7 @@ them before deleting ESLint:
 - Template/Svelte rules become oxvelte custom rules and are added to
   `oxvelte.config.json` via `customRules`.
 - JS/TS-only rules become oxlint plugins when the rule can be mapped to oxlint's
-  plugin API.
+  plugin API, then are registered in `.oxlintrc.json` through `jsPlugins`.
 - Mixed template + script rules should be split: the template part goes to
   oxvelte and the JS/TS part goes to oxlint.
 - Keep the same rule IDs and severities when possible. If a rename is necessary,
@@ -152,7 +226,7 @@ cargo install --git https://github.com/tolgaouz/oxvelte.git --features custom-ru
 Do not silently drop a custom rule. If a rule cannot be ported, leave ESLint in
 place only for that rule and report the blocker clearly.
 
-## Step 4: Update package.json
+## Step 5: Update package.json
 
 Remove from `devDependencies` in both modes:
 - `eslint-plugin-svelte`
@@ -181,8 +255,8 @@ Mode B recommended setup:
 ```json
 {
   "scripts": {
-    "lint": "oxlint && oxvelte lint src/",
-    "lint:fix": "oxlint --fix && oxvelte lint --fix src/"
+    "lint": "oxlint --config .oxlintrc.json && oxvelte lint src/",
+    "lint:fix": "oxlint --config .oxlintrc.json --fix && oxvelte lint --fix src/"
   }
 }
 ```
@@ -192,8 +266,8 @@ Mode B with TypeScript (if `tsconfig.json` exists):
 ```json
 {
   "scripts": {
-    "lint": "oxlint --tsconfig tsconfig.json && oxvelte lint src/",
-    "lint:fix": "oxlint --fix --tsconfig tsconfig.json && oxvelte lint --fix src/"
+    "lint": "oxlint --config .oxlintrc.json --tsconfig tsconfig.json && oxvelte lint src/",
+    "lint:fix": "oxlint --config .oxlintrc.json --fix --tsconfig tsconfig.json && oxvelte lint --fix src/"
   }
 }
 ```
@@ -212,10 +286,11 @@ Preserve project-specific lint path globs when possible. For example, if the
 existing script lints `src routes packages`, keep equivalent paths for
 `oxvelte lint`.
 
-## Step 5: Clean up ESLint config
+## Step 6: Clean up ESLint config
 
 Mode B cleanup:
-- Delete the ESLint config file
+- Delete the ESLint config file only after `.oxlintrc.json`,
+  `oxvelte.config.json`, and any ported custom rules cover the old behavior
 - Remove all ESLint devDependencies (`eslint`, `@eslint/js`, `typescript-eslint`, etc.)
 - Delete `.eslintignore` if it exists
 - If the project has ignore patterns that still matter, move them to the
@@ -231,7 +306,7 @@ Mode A cleanup:
 For Mode B, do not leave a dead ESLint config behind unless unresolved ESLint
 plugins still need a follow-up decision.
 
-## Step 6: Comment directives
+## Step 7: Comment directives
 
 Tell the user: existing `eslint-disable` comments for Svelte rules will continue to work with oxvelte. No find-and-replace needed.
 
@@ -244,7 +319,7 @@ Supported formats:
 
 When custom rule IDs change, update affected disable comments in source files.
 
-## Step 7: Install tools
+## Step 8: Install tools
 
 For Mode B, install `oxlint` with the project's package manager:
 
@@ -272,7 +347,7 @@ git clone https://github.com/tolgaouz/oxvelte.git
 cd oxvelte && cargo build --release
 ```
 
-## Step 8: Verify
+## Step 9: Verify
 
 Run oxvelte on the project:
 
@@ -283,10 +358,15 @@ oxvelte lint src/
 For Mode B, also run oxlint:
 
 ```bash
-oxlint --tsconfig tsconfig.json
+oxlint --config .oxlintrc.json --tsconfig tsconfig.json
 ```
 
 Omit `--tsconfig tsconfig.json` when the project has no `tsconfig.json`.
+Before the full lint run, validate that oxlint can load the generated config:
+
+```bash
+oxlint --config .oxlintrc.json --print-config
+```
 
 If custom rules were ported, verify them against at least one fixture or source
 file that should trigger the rule and one that should not. Compare old ESLint
