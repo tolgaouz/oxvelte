@@ -12,17 +12,6 @@ A Svelte linter written in Rust. Drop-in replacement for [eslint-plugin-svelte](
 
 > **This codebase was written mainly with LLM assistance.**
 
-## Results
-
-Tested against 4 real-world Svelte codebases (3,466 files total), each installed with its own production eslint config and plugin chain:
-
-| Repo | Files | eslint-plugin-svelte | oxvelte | Speedup | Parity |
-|------|------:|---------------------:|--------:|--------:|--------|
-| [shadcn-svelte](https://github.com/huntabyte/shadcn-svelte) | 1,641 | 2,385ms | **44ms** | **54x** | 0/0 exact |
-| [open-webui](https://github.com/open-webui/open-webui) | 549 | 11,297ms | **60ms** | **188x** | 7/9 rules exact (compile related rules excluded) |
-| [immich](https://github.com/immich-app/immich) | 400 | 32,138ms | **32ms** | **1,004x** | 0/0 exact |
-| [sveltejs/kit](https://github.com/sveltejs/kit) | 876 | 16,772ms | **30ms** | **559x** | 3/3 rules exact |
-
 ## Using with oxlint (recommended setup)
 
 The fastest way to lint a SvelteKit project is **oxlint + oxvelte** together. They handle different concerns with zero overlap:
@@ -53,6 +42,59 @@ cargo install --git https://github.com/tolgaouz/oxvelte.git
 ```
 
 That's it. Both tools work out of the box with zero config and sensible defaults.
+
+### Replacing eslint-plugin-svelte + ESLint
+
+If you're migrating from the ESLint setup (`eslint-plugin-svelte` + `@eslint/js` + `typescript-eslint`), here's how the tools map:
+
+| ESLint stack | Replacement |
+|-------------|-------------|
+| `@eslint/js` (core JS rules) | `oxlint` |
+| `typescript-eslint` | `oxlint --tsconfig` |
+| `eslint-plugin-svelte` | **`oxvelte`** |
+| `eslint-plugin-import` | `oxlint` (built-in `--import-plugin`) |
+
+```bash
+# Before (ESLint, ~3-10 seconds)
+eslint src/
+
+# After (oxlint + oxvelte, ~200-400ms)
+oxlint && oxvelte lint src/
+```
+
+If you have an existing eslint-plugin-svelte config, oxvelte can convert it:
+
+```bash
+oxvelte migrate eslint.config.js --write
+```
+
+### Agent-assisted migration
+
+This repo also includes a `migrate-to-oxvelte` skill for the [skills](https://github.com/vercel-labs/skills) CLI. It guides agents through migrating from ESLint to the default `oxlint + oxvelte` stack, including custom-rule migration where possible.
+
+Install the skill from this repository:
+
+```bash
+npx skills add tolgaouz/oxvelte --skill migrate-to-oxvelte
+```
+
+For Codex:
+
+```bash
+npx skills add tolgaouz/oxvelte --skill migrate-to-oxvelte -a codex -g
+```
+
+To inspect available skills before installing:
+
+```bash
+npx skills add tolgaouz/oxvelte --list
+```
+
+Once the public skills registry indexes it, it can also be discovered with:
+
+```bash
+npx skills find oxvelte
+```
 
 ### Full SvelteKit example
 
@@ -105,59 +147,6 @@ Running them as separate binaries is actually fine:
 - **No rule conflicts** — oxlint handles JS/TS rules, oxvelte handles `svelte/*` rules
 - **Independent config** — each tool has its own config file, no complex merging
 - **Combined time is still fast** — oxlint + oxvelte together lint a 2,500-file project in under 300ms
-
-### Replacing eslint-plugin-svelte + ESLint
-
-If you're migrating from the ESLint setup (`eslint-plugin-svelte` + `@eslint/js` + `typescript-eslint`), here's how the tools map:
-
-| ESLint stack | Replacement |
-|-------------|-------------|
-| `@eslint/js` (core JS rules) | `oxlint` |
-| `typescript-eslint` | `oxlint --tsconfig` |
-| `eslint-plugin-svelte` | **`oxvelte`** |
-| `eslint-plugin-import` | `oxlint` (built-in `--import-plugin`) |
-
-```bash
-# Before (ESLint, ~3-10 seconds)
-eslint src/
-
-# After (oxlint + oxvelte, ~200-400ms)
-oxlint && oxvelte lint src/
-```
-
-If you have an existing eslint-plugin-svelte config, oxvelte can convert it:
-
-```bash
-oxvelte migrate eslint.config.js --write
-```
-
-### Agent-assisted migration
-
-This repo also includes a `migrate-to-oxvelte` skill for the [skills](https://github.com/vercel-labs/skills) CLI. It guides agents through migrating from `eslint-plugin-svelte` to oxvelte, including the full `oxlint + oxvelte` stack when you want to drop ESLint entirely.
-
-Install the skill from this repository:
-
-```bash
-npx skills add tolgaouz/oxvelte --skill migrate-to-oxvelte
-```
-
-For Codex:
-
-```bash
-npx skills add tolgaouz/oxvelte --skill migrate-to-oxvelte -a codex -g
-```
-
-To inspect available skills before installing:
-
-```bash
-npx skills add tolgaouz/oxvelte --list
-```
-
-Once the public skills registry indexes it, it can also be discovered with:
-
-```bash
-npx skills find oxvelte
-```
 
 ### CI integration
 
