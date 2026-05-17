@@ -138,16 +138,6 @@ For a typical SvelteKit project with TypeScript:
 }
 ```
 
-### Why not a plugin?
-
-oxlint doesn't have a third-party Rust plugin system — all plugins are compiled into the binary. There's a JS plugin API in alpha, but it doesn't fully support `.svelte` files yet and would lose the performance advantage of native Rust.
-
-Running them as separate binaries is actually fine:
-- **No startup penalty** — both are native binaries, not Node.js
-- **No rule conflicts** — oxlint handles JS/TS rules, oxvelte handles `svelte/*` rules
-- **Independent config** — each tool has its own config file, no complex merging
-- **Combined time is still fast** — oxlint + oxvelte together lint a 2,500-file project in under 300ms
-
 ### CI integration
 
 Both tools return non-zero exit codes on errors, so they work naturally in CI:
