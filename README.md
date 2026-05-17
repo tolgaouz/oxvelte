@@ -43,31 +43,6 @@ cargo install --git https://github.com/tolgaouz/oxvelte.git
 
 That's it. Both tools work out of the box with zero config and sensible defaults.
 
-### Replacing eslint-plugin-svelte + ESLint
-
-If you're migrating from the ESLint setup (`eslint-plugin-svelte` + `@eslint/js` + `typescript-eslint`), here's how the tools map:
-
-| ESLint stack | Replacement |
-|-------------|-------------|
-| `@eslint/js` (core JS rules) | `oxlint` |
-| `typescript-eslint` | `oxlint --tsconfig` |
-| `eslint-plugin-svelte` | **`oxvelte`** |
-| `eslint-plugin-import` | `oxlint` (built-in `--import-plugin`) |
-
-```bash
-# Before (ESLint, ~3-10 seconds)
-eslint src/
-
-# After (oxlint + oxvelte, ~200-400ms)
-oxlint && oxvelte lint src/
-```
-
-If you have an existing eslint-plugin-svelte config, oxvelte can convert it:
-
-```bash
-oxvelte migrate eslint.config.js --write
-```
-
 ### Agent-assisted migration
 
 This repo also includes a `migrate-to-oxvelte` skill for the [skills](https://github.com/vercel-labs/skills) CLI. It guides agents through migrating from ESLint to the default `oxlint + oxvelte` stack, including custom-rule migration where possible.
@@ -94,6 +69,31 @@ Once the public skills registry indexes it, it can also be discovered with:
 
 ```bash
 npx skills find oxvelte
+```
+
+### Replacing eslint-plugin-svelte + ESLint
+
+If you're migrating from the ESLint setup (`eslint-plugin-svelte` + `@eslint/js` + `typescript-eslint`), here's how the tools map:
+
+| ESLint stack | Replacement |
+|-------------|-------------|
+| `@eslint/js` (core JS rules) | `oxlint` |
+| `typescript-eslint` | `oxlint --tsconfig` |
+| `eslint-plugin-svelte` | **`oxvelte`** |
+| `eslint-plugin-import` | `oxlint` (built-in `--import-plugin`) |
+
+```bash
+# Before (ESLint, ~3-10 seconds)
+eslint src/
+
+# After (oxlint + oxvelte, ~200-400ms)
+oxlint && oxvelte lint src/
+```
+
+If you have an existing eslint-plugin-svelte config, oxvelte can convert it:
+
+```bash
+oxvelte migrate eslint.config.js --write
 ```
 
 ### Full SvelteKit example
