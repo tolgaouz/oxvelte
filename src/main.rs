@@ -93,11 +93,27 @@ struct FileDiagnostic {
     end_col: usize,
     message: String,
     rule_name: &'static str,
+    severity: DiagnosticSeverity,
 }
 
 struct FileResult {
     path: String,
     diagnostics: Vec<FileDiagnostic>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DiagnosticSeverity {
+    Warning,
+    Error,
+}
+
+impl DiagnosticSeverity {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Warning => "warning",
+            Self::Error => "error",
+        }
+    }
 }
 
 fn load_lint_config(
@@ -238,6 +254,7 @@ fn cmd_lint(
                         end_col,
                         message: d.message.clone(),
                         rule_name: d.rule_name,
+                        severity: diagnostic_severity(&config, d.rule_name),
                     }
                 })
                 .collect();
@@ -252,99 +269,170 @@ fn cmd_lint(
 
     let total_diags: usize = file_results.iter().map(|f| f.diagnostics.len()).sum();
     let files_with_diags = file_results.len();
+    let error_count: usize = file_results
+        .iter()
+        .flat_map(|f| f.diagnostics.iter())
+        .filter(|d| d.severity == DiagnosticSeverity::Error)
+        .count();
+    let warning_count = total_diags.saturating_sub(error_count);
 
-    if !quiet {
-        if json_output {
-            let json_results: Vec<serde_json::Value> = file_results
-                .iter()
-                .flat_map(|f| {
-                    f.diagnostics.iter().map(|d| {
-                        serde_json::json!({
-                            "file": &f.path,
-                            "rule": d.rule_name,
-                            "message": &d.message,
-                            "line": d.line,
-                            "column": d.col,
-                            "endLine": d.end_line,
-                            "endColumn": d.end_col,
-                        })
-                    })
+    if json_output {
+        let json_results: Vec<serde_json::Value> = visible_file_diagnostics(&file_results, quiet)
+            .into_iter()
+            .map(|(f, d)| {
+                serde_json::json!({
+                    "file": &f.path,
+                    "rule": d.rule_name,
+                    "severity": d.severity.as_str(),
+                    "message": &d.message,
+                    "line": d.line,
+                    "column": d.col,
+                    "endLine": d.end_line,
+                    "endColumn": d.end_col,
                 })
-                .collect();
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json_results).unwrap_or_default()
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json_results).unwrap_or_default()
+        );
+    } else if !quiet {
+        print_diagnostics(&file_results, use_color);
+
+        if total_diags > 0 {
+            print_summary(
+                total_diags,
+                warning_count,
+                error_count,
+                files_with_diags,
+                use_color,
             );
-        } else {
-            for file_result in &file_results {
-                // File header — underlined, clickable in VS Code
-                if use_color {
-                    eprintln!("\n\x1b[4m{}\x1b[0m", file_result.path);
-                } else {
-                    eprintln!("\n{}", file_result.path);
-                }
-
-                // Find max widths for alignment
-                let max_loc_width = file_result
-                    .diagnostics
-                    .iter()
-                    .map(|d| format!("{}:{}", d.line, d.col).len())
-                    .max()
-                    .unwrap_or(0);
-
-                for d in &file_result.diagnostics {
-                    let loc = format!("{}:{}", d.line, d.col);
-                    if use_color {
-                        eprintln!(
-                            "  \x1b[2m{:<width$}\x1b[0m  \x1b[33mwarning\x1b[0m  {}  \x1b[2m{}\x1b[0m",
-                            loc, d.message, d.rule_name, width = max_loc_width
-                        );
-                    } else {
-                        eprintln!(
-                            "  {:<width$}  warning  {}  {}",
-                            loc,
-                            d.message,
-                            d.rule_name,
-                            width = max_loc_width
-                        );
-                    }
-                }
-            }
-
-            if total_diags > 0 {
-                if use_color {
-                    eprintln!(
-                        "\n\x1b[1;31m\u{2716} {} problem(s) in {} file(s).\x1b[0m",
-                        total_diags, files_with_diags
-                    );
-                } else {
-                    eprintln!(
-                        "\n{} problem(s) in {} file(s).",
-                        total_diags, files_with_diags
-                    );
-                }
-            }
         }
     }
     if quiet {
         let elapsed = start.elapsed();
         if use_color {
-            if total_diags > 0 {
-                eprintln!("\x1b[1m{}\x1b[0m file(s) scanned in \x1b[1m{:.0?}\x1b[0m, \x1b[1;31m{} problem(s)\x1b[0m found.", file_count, elapsed, total_diags);
+            if error_count > 0 {
+                eprintln!("\x1b[1m{}\x1b[0m file(s) scanned in \x1b[1m{:.0?}\x1b[0m, \x1b[1;31m{} error(s)\x1b[0m and \x1b[1m{} warning(s)\x1b[0m found.", file_count, elapsed, error_count, warning_count);
             } else {
-                eprintln!("\x1b[1m{}\x1b[0m file(s) scanned in \x1b[1m{:.0?}\x1b[0m, \x1b[1;32m0 problems\x1b[0m found.", file_count, elapsed);
+                eprintln!("\x1b[1m{}\x1b[0m file(s) scanned in \x1b[1m{:.0?}\x1b[0m, \x1b[1;32m0 errors\x1b[0m and \x1b[1m{} warning(s)\x1b[0m found.", file_count, elapsed, warning_count);
             }
         } else {
             eprintln!(
-                "{} file(s) scanned in {:.0?}, {} problem(s) found.",
-                file_count, elapsed, total_diags
+                "{} file(s) scanned in {:.0?}, {} error(s) and {} warning(s) found.",
+                file_count, elapsed, error_count, warning_count
             );
         }
     }
-    if total_diags > 0 {
+    if error_count > 0 {
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+fn diagnostic_severity(
+    config: &oxvelte::config::OxvelteConfig,
+    rule_name: &str,
+) -> DiagnosticSeverity {
+    let Some(entry) = config.rules.get(rule_name) else {
+        return DiagnosticSeverity::Warning;
+    };
+
+    if entry.severity == "error" || entry.severity == "2" {
+        DiagnosticSeverity::Error
+    } else {
+        DiagnosticSeverity::Warning
+    }
+}
+
+fn visible_file_diagnostics<'a>(
+    file_results: &'a [FileResult],
+    quiet: bool,
+) -> Vec<(&'a FileResult, &'a FileDiagnostic)> {
+    file_results
+        .iter()
+        .flat_map(|f| {
+            f.diagnostics.iter().filter_map(move |d| {
+                if quiet && d.severity == DiagnosticSeverity::Warning {
+                    None
+                } else {
+                    Some((f, d))
+                }
+            })
+        })
+        .collect()
+}
+
+fn print_diagnostics(file_results: &[FileResult], use_color: bool) {
+    for file_result in file_results {
+        // File header — underlined, clickable in VS Code
+        if use_color {
+            eprintln!("\n\x1b[4m{}\x1b[0m", file_result.path);
+        } else {
+            eprintln!("\n{}", file_result.path);
+        }
+
+        // Find max widths for alignment
+        let max_loc_width = file_result
+            .diagnostics
+            .iter()
+            .map(|d| format!("{}:{}", d.line, d.col).len())
+            .max()
+            .unwrap_or(0);
+
+        for d in &file_result.diagnostics {
+            let loc = format!("{}:{}", d.line, d.col);
+            if use_color {
+                let color = match d.severity {
+                    DiagnosticSeverity::Warning => "\x1b[33m",
+                    DiagnosticSeverity::Error => "\x1b[31m",
+                };
+                eprintln!(
+                    "  \x1b[2m{:<width$}\x1b[0m  {}{}\x1b[0m  {}  \x1b[2m{}\x1b[0m",
+                    loc,
+                    color,
+                    d.severity.as_str(),
+                    d.message,
+                    d.rule_name,
+                    width = max_loc_width
+                );
+            } else {
+                eprintln!(
+                    "  {:<width$}  {}  {}  {}",
+                    loc,
+                    d.severity.as_str(),
+                    d.message,
+                    d.rule_name,
+                    width = max_loc_width
+                );
+            }
+        }
+    }
+}
+
+fn print_summary(
+    total_diags: usize,
+    warning_count: usize,
+    error_count: usize,
+    files_with_diags: usize,
+    use_color: bool,
+) {
+    if use_color {
+        let color = if error_count > 0 {
+            "\x1b[1;31m"
+        } else {
+            "\x1b[1;33m"
+        };
+        eprintln!(
+            "\n{}{} problem(s) in {} file(s): {} error(s), {} warning(s).\x1b[0m",
+            color, total_diags, files_with_diags, error_count, warning_count
+        );
+    } else {
+        eprintln!(
+            "\n{} problem(s) in {} file(s): {} error(s), {} warning(s).",
+            total_diags, files_with_diags, error_count, warning_count
+        );
     }
 }
 
