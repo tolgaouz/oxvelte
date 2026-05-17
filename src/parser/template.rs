@@ -50,13 +50,13 @@ struct TemplateParser<'a> {
     pos: usize,
     allocator: &'a Allocator,
     errors: Vec<OxcDiagnostic>,
-    /// Stack of in-progress fragment node lists, mirroring vendor Svelte's
+    /// Stack of in-progress fragment node lists, mirroring svelte's
     /// `Parser.fragments`. The innermost frame is `last_mut()`; node-producing
     /// parse steps push through `append()` instead of returning nodes via
     /// stack-allocated `Vec`s.
     fragments: Vec<Vec<TemplateNode<'a>>>,
     /// Mixed stack of pending open nodes (regular elements with children and
-    /// flat blocks). Mirrors vendor Svelte's `Parser.stack`. Each entry pairs
+    /// flat blocks). Mirrors Svelte's `Parser.stack`. Each entry pairs
     /// with at least one fragment frame on `fragments`.
     open_nodes: Vec<OpenNode<'a>>,
     /// `open_nodes.len()` snapshots taken at each `parse_fragment_frame`
@@ -156,7 +156,7 @@ struct AutoClosedTag {
 }
 
 /// Snapshot of per-element parser context captured on element entry and
-/// restored on element exit. Mirrors the implicit "stack frame" vendor Svelte
+/// restored on element exit. Mirrors the implicit "stack frame" Svelte
 /// keeps on `parser.stack` for each open element.
 struct ElementContext {
     previous_head_context: bool,
@@ -167,7 +167,7 @@ struct ElementContext {
 /// Pending element waiting for its closing tag. Pushed onto
 /// `TemplateParser::open_nodes` (wrapped in `OpenNode::Element`) when a regular
 /// element with children opens, popped when the element finishes (explicit
-/// close, implicit close, or EOF). Mirrors entries on vendor Svelte's
+/// close, implicit close, or EOF). Mirrors entries on Svelte's
 /// `parser.stack` for `RegularElement` and related node types.
 struct OpenElement<'a> {
     name: String,
@@ -346,15 +346,13 @@ impl<'a> TemplateParser<'a> {
     }
 
     /// Pop the innermost fragment node list off the stack and return it.
-    /// Mirrors vendor Svelte's `parser.fragments.pop()`.
     fn exit_fragment(&mut self) -> Vec<TemplateNode<'a>> {
         self.fragments
             .pop()
             .expect("exit_fragment called with no active fragment frame")
     }
 
-    /// Append a node to the innermost fragment. Mirrors vendor Svelte's
-    /// `parser.append(node)`.
+    /// Append a node to the innermost fragment.
     fn append(&mut self, node: TemplateNode<'a>) {
         self.fragments
             .last_mut()

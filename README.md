@@ -10,7 +10,7 @@ A Svelte linter written in Rust. Drop-in replacement for [eslint-plugin-svelte](
   <img src="assets/compare.gif" alt="Side-by-side benchmark linting shadcn-svelte (1,603 files): eslint-plugin-svelte takes ~15s while oxvelte completes the same lint hundreds of times in the same window" width="900">
 </p>
 
-> **This entire codebase was written by an LLM.** A coding agent ([Claude Code](https://docs.anthropic.com/en/docs/claude-code)) ran in an autonomous loop against real-world benchmarks — fixing lint rule parity, eliminating false positives, and optimizing hot paths — until the numbers converged. The human wrote `program.md` (the spec); the machine wrote everything in `src/`.
+> **This codebase was written mainly with LLM assistance.**
 
 ## Results
 
@@ -129,6 +129,34 @@ If you have an existing eslint-plugin-svelte config, oxvelte can convert it:
 
 ```bash
 oxvelte migrate eslint.config.js --write
+```
+
+### Agent-assisted migration
+
+This repo also includes a `migrate-to-oxvelte` skill for the [skills](https://github.com/vercel-labs/skills) CLI. It guides agents through migrating from `eslint-plugin-svelte` to oxvelte, including the full `oxlint + oxvelte` stack when you want to drop ESLint entirely.
+
+Install the skill from this repository:
+
+```bash
+npx skills add tolgaouz/oxvelte --skill migrate-to-oxvelte
+```
+
+For Codex:
+
+```bash
+npx skills add tolgaouz/oxvelte --skill migrate-to-oxvelte -a codex -g
+```
+
+To inspect available skills before installing:
+
+```bash
+npx skills add tolgaouz/oxvelte --list
+```
+
+Once the public skills registry indexes it, it can also be discovered with:
+
+```bash
+npx skills find oxvelte
 ```
 
 ### CI integration
